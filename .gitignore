@@ -1,0 +1,174 @@
+# Tracked by yadm. This file lives at $HOME and is read by yadm when it
+# stages changes to the dotfiles repo. Do not `git init` directly in $HOME.
+
+# Deny by default at $HOME root.
+# Nothing at the top level is tracked unless explicitly allowlisted below.
+# This fails closed: a new top-level dotfile or dir (shell history, token,
+# or app state) cannot be added by accident without an entry here. Nested
+# trees re-included below (.config, .claude, .opencode, .gemini) keep their
+# own deny plus allowlist blocks further down; this rule governs only the
+# top level.
+/*
+!/.aliases
+!/.bashrc
+!/.bash_logout
+!/.editorconfig
+!/.exports
+!/.functions
+!/.gitconfig
+!/.gitignore
+!/.inputrc
+!/.profile
+!/.tmux-cheatsheet.md
+!/.tmux.conf
+!/.vimrc
+!/README.md
+!/.claude
+!/.config
+!/.gemini
+!/.github
+!/.local
+!/.opencode
+!/bin
+
+# Backups produced by the install / link-files routine
+*_BAK
+*.bak
+
+# Editor and OS noise
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Machine-local markdown (NOTES.local.md, environment.local.md, ...).
+# Also excluded by the global gitignore; repeated here so the guarantee
+# travels with the repo.
+*.local.md
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# IDE settings
+.idea/
+.vscode/
+
+# Anything that looks remotely like a secret. Belt and braces: secrets
+# are supposed to live outside this repo, but these patterns prevent an
+# accidental `yadm add` from publishing keys or tokens.
+**/.env
+**/.env.*
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/id_rsa
+**/id_rsa.*
+**/id_ed25519
+**/id_ed25519.*
+**/id_ecdsa
+**/id_ecdsa.*
+**/known_hosts
+**/authorized_keys
+**/credentials
+**/.netrc
+**/.pgpass
+**/gpg-agent.conf
+**/private-keys-v1.d/
+
+# ~/.claude tree: allowlist what we explicitly track, ignore everything
+# else. Prevents Claude Code's volatile state (projects/, file-history/,
+# plugins/, caches, .credentials.json, history.jsonl, etc.) from ever
+# sneaking into commits via a stray `yadm add ~/.claude/.`.
+.claude/*
+!.claude/CLAUDE.md
+!.claude/settings.json
+!.claude/mcp.json
+!.claude/statusline.sh
+!.claude/rules
+.claude/rules/environment.md
+.claude/rules/environment.private.md
+!.claude/agents
+!.claude/commands
+!.claude/skills
+.claude/skills/app-audit-server
+.claude/skills/app-investigate-incident
+!.claude/hooks
+# scripts: the /later engine plus the worktree orchestrator and its tests
+!.claude/scripts
+.claude/scripts/*
+!.claude/scripts/later.sh
+!.claude/scripts/worktree.sh
+!.claude/scripts/tests
+
+# ~/.opencode tree: nothing is tracked. opencode.json carries machine
+# hostnames, so it lives in the private repository and is linked into
+# place by its link script; everything else (140MB binary, node_modules,
+# state files) is noise.
+.opencode/*
+
+# ~/.gemini tree: allowlist settings.json only. Excludes oauth_creds.json
+# (OAuth tokens, mode 600), history/, tmp/, antigravity/, projects.json,
+# state.json, installation_id, trustedFolders.json, google_accounts.json.
+.gemini/*
+!.gemini/settings.json
+
+# ~/.local tree: only user-level OpenSpec schemas are tracked. Everything
+# else under .local is app state; yadm's own bare repo lives at
+# .local/share/yadm and must never be tracked.
+.local/*
+!.local/share
+.local/share/*
+!.local/share/openspec
+.local/share/openspec/*
+!.local/share/openspec/schemas
+
+# ~/.config tree: most subdirs are app state, not config. Allowlist
+# specific subdirs and explicitly exclude known secret-bearing files.
+.config/composer/auth.json
+.config/composer/.htaccess
+.config/composer/vendor/
+.config/composer/keys.*.pub
+.config/fastfetch/.claude/
+.config/*
+!.config/bat
+!.config/composer
+!.config/fastfetch
+!.config/yadm
+!.config/git
+!.config/starship.toml
+!.config/htop
+!.config/zed
+
+# htop writes a temp file next to htoprc on exit; never track it.
+.config/htop/*.tmp.*
+
+# Zed: track settings + keymap + the one custom theme; skip the stock
+# themes (Dracula, Tokyo Night, VSCode Dark, ...) that Zed re-downloads.
+.config/zed/themes/*
+!.config/zed/themes/Longish Dark.json
+
+# Sublime Text: the entire config now lives in the private dotfiles repo
+# (~/.dotfiles-private/home/.config/sublime-text/) and is symlinked into
+# place by its link.sh, so nothing under it is tracked in the public repo.
+# (.config/* already denies it now that the allowlist entry above is gone.)
+# The License.sublime_license paid key and all Sublime state were never
+# tracked and remain local-only.
+
+# ~/bin: allowlist the public utility scripts by name. Private scripts
+# appear in ~/bin only as symlinks created by the private repository's
+# link script and are never tracked (not even the symlinks).
+bin/*
+!bin/disable-kvm
+!bin/elk-start
+!bin/elk-stop
+!bin/empty-trash
+!bin/gnome-terminal-tokyonight.sh
+!bin/gsettings-iterate-all
+!bin/later
+!bin/listppa
+!bin/power-consumption
+!bin/power-input
+!bin/worktree

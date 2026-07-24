@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# worktree — thin front-end over the engine at ~/.claude/scripts/worktree.sh.
+ENGINE="$HOME/.claude/scripts/worktree.sh"
+if [ ! -x "$ENGINE" ]; then
+    echo "worktree: engine not found or not executable at $ENGINE" >&2
+    exit 1
+fi
+exec "$ENGINE" "$@"

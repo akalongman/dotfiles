@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{TITLE}}</title>
+<style>
+    @page { margin: 2cm 1.8cm; }
+    body {
+        font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+        font-size: 11px;
+        color: #1f2430;
+        line-height: 1.55;
+        margin: 0;
+    }
+    h1 { font-size: 21px; margin: 0 0 2px 0; color: #24303f; }
+    .subtitle { color: #5d6b7a; font-size: 11.5px; margin-bottom: 18px; }
+    h2 {
+        font-size: 15px;
+        color: #24303f;
+        border-bottom: 2px solid #8294a5;
+        padding-bottom: 4px;
+        margin-top: 26px;
+    }
+    h3 { font-size: 12.5px; color: #24303f; margin-top: 18px; }
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 10px 0 14px 0;
+        font-size: 10.5px;
+    }
+    th, td {
+        border: 1px solid #c6cfd8;
+        padding: 6px 9px;
+        text-align: left;
+        vertical-align: top;
+    }
+    th { background: #eff2f5; color: #24303f; font-weight: 600; }
+    code, pre {
+        font-family: 'JetBrains Mono', Consolas, monospace;
+        font-size: 10px;
+        background: #f3f5f7;
+        border-radius: 3px;
+    }
+    code { padding: 1px 4px; }
+    pre {
+        padding: 10px 12px;
+        border: 1px solid #dbe1e7;
+        overflow-x: auto;
+        line-height: 1.5;
+    }
+    .note {
+        background: #f6f3ea;
+        border-left: 4px solid #b09a55;
+        padding: 8px 12px;
+        margin: 12px 0;
+    }
+    .footer {
+        margin-top: 30px;
+        padding-top: 8px;
+        border-top: 1px solid #c6cfd8;
+        color: #8a96a3;
+        font-size: 9.5px;
+    }
+    ul, ol { margin: 6px 0; padding-left: 20px; }
+</style>
+</head>
+<body>
+
+<h1>{{TITLE}}</h1>
+<div class="subtitle">{{META}}</div>
+
+{{BODY}}
+
+<div class="footer">{{DOC_NAME}} &middot; Generated {{DATE}}</div>
+
+</body>
+</html>
+<!--
+Placeholders:
+  {{TITLE}}    Document title, e.g. "Payments API Contract"
+  {{META}}     Subtitle line: project/product, audience, date, status.
+               e.g. "Billing Platform &middot; For Acme developers &middot; June 13, 2026 &middot; Draft for confirmation"
+  {{BODY}}     Sections as h2/h3, tables, pre/code, lists.
+               Draft banner: <div class="note">This document is a working draft ... not final until confirmed.</div>
+  {{DOC_NAME}} Short document name for the footer
+  {{DATE}}     Generation date, e.g. "June 13, 2026"
+-->

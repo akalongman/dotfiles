@@ -1,0 +1,3 @@
+sudo service elasticsearch start
+sudo service kibana start
+sudo service filebeat start

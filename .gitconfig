@@ -1,0 +1,30 @@
+[user]
+	name = Avtandil Kikabidze
+	email = akalongman@gmail.com
+	signingkey = ~/.ssh/id_ed25519.pub
+[commit]
+	gpgsign = true
+[core]
+	autocrlf = input
+[credential "https://github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[gpg]
+	format = ssh
+[gpg "ssh"]
+	allowedSignersFile = ~/.config/git/allowed_signers
+[init]
+	defaultBranch = main
+[pull]
+	rebase = false
+[push]
+	autoSetupRemote = true
+[fetch]
+	prune = true
+[rebase]
+	autostash = true
+[rerere]
+	enabled = true

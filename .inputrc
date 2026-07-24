@@ -1,0 +1,24 @@
+# Readline configuration, used by bash and any readline-based program.
+# Portable across machines; contains no host-specific paths.
+
+$include /etc/inputrc
+
+# Up/Down search history by the text already typed before the cursor,
+# instead of stepping blindly through every previous command.
+"\e[A": history-search-backward
+"\e[B": history-search-forward
+
+# Completion: case-insensitive, treat - and _ as equivalent, and show all
+# candidates on the first Tab instead of beeping then waiting for a second.
+set completion-ignore-case on
+set completion-map-case on
+set show-all-if-ambiguous on
+set show-all-if-unmodified on
+
+# Colorize completion listings like ls and mark the common prefix.
+set colored-stats on
+set colored-completion-prefix on
+set visible-stats on
+
+# Append a slash when completing a symlink that points to a directory.
+set mark-symlinked-directories on

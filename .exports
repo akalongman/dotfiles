@@ -1,0 +1,84 @@
+# Single canonical exports file.
+# Sourced by both .profile (login, /bin/sh) and .bashrc (interactive bash).
+# Keep this file POSIX-compatible: no $'...' ANSI-C quoting, no [[ ]],
+# no bash arrays. Idempotent: safe to source more than once.
+#
+# Note: GPG_TTY is intentionally NOT here. It needs $(tty) re-evaluated
+# per interactive shell, so it lives in .bashrc.
+
+# Editor
+export EDITOR="vim"
+
+# History (32^3 entries; default is 500). ignoreboth = skip duplicates AND
+# commands prefixed with a space (handy for keeping secrets out of history).
+export HISTSIZE=32768
+export HISTFILESIZE=$HISTSIZE
+export HISTCONTROL=ignoreboth
+export HISTIGNORE="ls:cd:cd -:pwd:exit:date:* --help"
+
+# Locale (LANG only; LC_ALL would override per-category LC_* customization)
+export LANG="en_US.UTF-8"
+
+# Highlight section titles in manual pages (bold yellow). POSIX-portable escape.
+__esc=$(printf '\033')
+export LESS_TERMCAP_md="${__esc}[1;33m"
+export LESS_TERMCAP_me="${__esc}[0m"
+unset __esc
+
+# Don't clear the screen after quitting a manual page
+export MANPAGER="less -X"
+
+# Homebrew: no auto-update
+export HOMEBREW_NO_AUTO_UPDATE=1
+
+# grpc fork safety. The grpc PHP extension is fork-hostile, which deadlocks any
+# tool that parallelises via pcntl_fork (e.g. `composer phpcs`/`phpcbf`, which
+# pass --parallel). This flag makes grpc fork-safe so those runs complete
+# instead of hanging. Harmless when no fork happens.
+export GRPC_ENABLE_FORK_SUPPORT=1
+
+# Android SDK (ANDROID_HOME points at the SDK root, which contains
+# platform-tools/, build-tools/, cmdline-tools/, etc.)
+export ANDROID_HOME="/opt/google/android/sdk"
+
+# NVM (sourcing of nvm.sh stays in .bashrc; only the dir var lives here)
+export NVM_DIR="$HOME/.nvm"
+
+# PATH (idempotent helpers; safe to source this file multiple times)
+__prepend_path() {
+    case ":$PATH:" in
+        *":$1:"*) ;;
+        *) PATH="$1:$PATH" ;;
+    esac
+}
+__append_path() {
+    case ":$PATH:" in
+        *":$1:"*) ;;
+        *) PATH="$PATH:$1" ;;
+    esac
+}
+
+[ -d "$HOME/bin" ] && __prepend_path "$HOME/bin"
+[ -d "$HOME/.local/bin" ] && __prepend_path "$HOME/.local/bin"
+[ -d "$HOME/.cargo/bin" ] && __prepend_path "$HOME/.cargo/bin"
+[ -d "$HOME/.opencode/bin" ] && __prepend_path "$HOME/.opencode/bin"
+[ -d "$HOME/.config/composer/vendor/bin" ] && __prepend_path "$HOME/.config/composer/vendor/bin"
+
+[ -d "/opt/apache-jmeter/bin" ] && __append_path "/opt/apache-jmeter/bin"
+[ -d "$ANDROID_HOME/platform-tools" ] && __append_path "$ANDROID_HOME/platform-tools"
+[ -d "$HOME/.composer/vendor/bin" ] && __append_path "$HOME/.composer/vendor/bin"
+
+# Flutter SDK (extracted to ~/development/flutter; keep it user-writable so
+# `flutter upgrade` works without sudo)
+[ -d "$HOME/development/flutter/bin" ] && __append_path "$HOME/development/flutter/bin"
+
+unset -f __prepend_path __append_path
+export PATH
+
+# fzf: Tokyo Night colours (coordinates with the GNOME Terminal palette).
+# Plain hex values, POSIX-safe; backslash-newlines fold into one option string.
+export FZF_DEFAULT_OPTS="\
+--color=bg+:#283457,bg:#1a1b26,spinner:#bb9af7,hl:#7aa2f7 \
+--color=fg:#c0caf5,header:#7aa2f7,info:#7dcfff,pointer:#bb9af7 \
+--color=marker:#9ece6a,fg+:#c0caf5,prompt:#7dcfff,hl+:#7aa2f7 \
+--color=border:#414868"

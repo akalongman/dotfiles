@@ -1,0 +1,18 @@
+# Global gitignore for every repository (XDG path; git reads this
+# automatically). Per-repo .gitignore rules still apply on top. Keep this
+# minimal: only universal junk that no project ever wants committed.
+
+# Claude Code per-project local settings (machine-local, never shared).
+**/.claude/settings.local.json
+
+# Personal "parking lot" notes (/later) and any *.local.md scratch files.
+*.local.md
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editor swap and backup files
+*.swp
+*.swo
+*~

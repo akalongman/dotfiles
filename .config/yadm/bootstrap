@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# yadm bootstrap, runs once on a new machine after `yadm clone`.
+
+set -euo pipefail
+
+# Core CLI toolchain referenced by .aliases/.bashrc/.tmux.conf. The dotfiles
+# degrade gracefully when these are absent, so install them explicitly here
+# rather than discovering the gaps one missing tool at a time.
+if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get install -y \
+        tmux fzf ripgrep fd-find bat eza zoxide direnv xclip yadm vim git \
+        || echo "apt package step skipped (no sudo or offline)."
+elif command -v brew >/dev/null 2>&1; then
+    brew install tmux fzf ripgrep fd bat eza zoxide direnv yadm vim git \
+        || echo "brew package step skipped (offline?)."
+fi
+
+# glow (terminal markdown reader, used by the spec() function in .functions)
+# is not in the Ubuntu archive; install it from Charm's own apt repo.
+if command -v apt-get >/dev/null 2>&1; then
+    if [ ! -f /etc/apt/sources.list.d/charm.list ]; then
+        sudo mkdir -p /etc/apt/keyrings
+        curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg \
+            && echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" \
+                | sudo tee /etc/apt/sources.list.d/charm.list >/dev/null \
+            && sudo apt-get update \
+            || echo "Charm apt repo step skipped (no sudo or offline)."
+    fi
+    sudo apt-get install -y glow || echo "glow install skipped."
+elif command -v brew >/dev/null 2>&1; then
+    brew install glow || echo "glow install skipped."
+fi
+
+# TPM (tmux plugin manager): .tmux.conf runs ~/.tmux/plugins/tpm/tpm, which
+# does not exist until cloned. Plugins themselves install via prefix+I.
+if [ ! -d "$HOME/.tmux/plugins/tpm" ]; then
+    git clone --depth 1 https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm" \
+        || echo "TPM clone skipped (offline?)."
+fi
+
+# Re-apply the GNOME Terminal Tokyo Night theme (no-op when off GNOME/dconf).
+if [ -x "$HOME/bin/gnome-terminal-tokyonight.sh" ]; then
+    "$HOME/bin/gnome-terminal-tokyonight.sh" || echo "GNOME Terminal theme step skipped."
+fi
+
+# Rebuild bat's theme cache so the tracked custom themes (.config/bat/themes/)
+# are picked up. No-op if bat isn't installed.
+if command -v batcat >/dev/null 2>&1; then
+    batcat cache --build >/dev/null 2>&1 || echo "bat cache build skipped."
+elif command -v bat >/dev/null 2>&1; then
+    bat cache --build >/dev/null 2>&1 || echo "bat cache build skipped."
+fi
+
+cat <<'NOTE'
+
+yadm clone complete. Manual follow-ups:
+  1. claude /login                          (re-auth Claude Code)
+  2. Clone the private repository to ~/.dotfiles-private
+  3. ~/.dotfiles-private/link.sh            (symlink private files into $HOME)
+  4. Install starship (not packaged in apt):
+     curl -sS https://starship.rs/install.sh | sh
+  5. In tmux, press prefix+I to install tmux-resurrect/continuum via TPM.
+
+NOTE

@@ -1,0 +1,16 @@
+# bat configuration (Ubuntu package binary: batcat).
+#
+# Theme: a dedicated 24-bit Tokyo Night ("night" variant) theme whose
+# background (#1a1b26) matches the GNOME Terminal profile. Installed from
+# folke/tokyonight.nvim into themes/ and compiled with "bat cache --build"
+# (the yadm bootstrap rebuilds it on a new machine). Zero-dependency fallback
+# if the theme file is ever missing: --theme="base16".
+--theme="tokyonight_night"
+
+# Syntax mapping: these custom shell dotfiles have no extension and are not in
+# bat's built-in filename map, so bat renders them as plain text (no
+# highlighting). Map them to the Bash syntax. The basename glob also covers the
+# copies under ~/.dotfiles-private/home/.
+--map-syntax=".exports:Bourne Again Shell (bash)"
+--map-syntax=".aliases:Bourne Again Shell (bash)"
+--map-syntax=".functions:Bourne Again Shell (bash)"

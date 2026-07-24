@@ -1,0 +1,136 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+
+palette = "black"
+
+command_timeout = 1000
+
+format = """
+[](os_bg)\
+$username\
+$hostname\
+[](bg:dir_bg fg:os_bg)\
+$directory\
+[](fg:dir_bg bg:git_bg)\
+$git_branch\
+$git_status\
+$git_state\
+$docker_context\
+${custom.venv}\
+[](fg:git_bg bg:time_bg)\
+$cmd_duration\
+$time\
+[ ](fg:time_bg)\
+\n$character"""
+
+# To switch themes, change the `palette = "..."` line at the top of this file
+# to one of: black, tokyo_night, catppuccin_mocha, gruvbox_dark.
+# Every module references the slot names below (os_bg, git_bg, fg_blue, ...),
+# so a single-line swap re-skins the whole prompt.
+
+[palettes.black]
+# Monochrome "black pills" palette. Every segment background is dark, so the
+# fg_dark and fg_light slots both hold light text (dark text would be invisible
+# on these pills). root_red stays the one accent color, a safety cue for root
+# sessions and interrupted git states.
+os_bg = "#3a3a3a"
+dir_bg = "#2b2b2b"
+git_bg = "#1f1f1f"
+time_bg = "#141414"
+fg_dark = "#e6e6e6"
+fg_light = "#f2f2f2"
+fg_blue = "#c0c0c0"
+fg_time = "#8a8a8a"
+root_red = "#ff6b6b"
+
+[palettes.tokyo_night]
+os_bg = "#a3aed2"
+dir_bg = "#769ff0"
+git_bg = "#394260"
+time_bg = "#1d2230"
+fg_dark = "#090c0c"
+fg_light = "#e3e5e5"
+fg_blue = "#769ff0"
+fg_time = "#a0a9cb"
+root_red = "#ff6b6b"
+
+[palettes.catppuccin_mocha]
+os_bg = "#b4befe"
+dir_bg = "#89b4fa"
+git_bg = "#313244"
+time_bg = "#181825"
+fg_dark = "#11111b"
+fg_light = "#11111b"
+fg_blue = "#89b4fa"
+fg_time = "#a6adc8"
+root_red = "#f38ba8"
+
+[palettes.gruvbox_dark]
+os_bg = "#fabd2f"
+dir_bg = "#458588"
+git_bg = "#504945"
+time_bg = "#1d2021"
+fg_dark = "#1d2021"
+fg_light = "#ebdbb2"
+fg_blue = "#b8bb26"
+fg_time = "#a89984"
+root_red = "#fb4934"
+
+[username]
+show_always = true
+style_user = "bg:os_bg fg:fg_dark"
+style_root = "bg:os_bg fg:root_red"
+format = '[$user]($style)'
+
+[hostname]
+ssh_only = false
+style = "bg:os_bg fg:fg_dark"
+format = '[@$hostname ]($style)'
+
+[directory]
+style = "fg:fg_light bg:dir_bg"
+format = "[ $path ]($style)"
+truncation_length = 0
+truncation_symbol = "…/"
+truncate_to_repo = false
+
+[git_branch]
+symbol = ""
+style = "bg:git_bg"
+format = '[[ $symbol $branch ](fg:fg_blue bg:git_bg)]($style)'
+
+[git_status]
+style = "bg:git_bg"
+format = '[[($all_status$ahead_behind )](fg:fg_blue bg:git_bg)]($style)'
+
+[git_state]
+style = "bg:git_bg"
+format = '[[ \($state $progress_current/$progress_total\) ](fg:root_red bg:git_bg)]($style)'
+
+[docker_context]
+disabled = true
+symbol = " "
+style = "bg:git_bg"
+format = '[[ $symbol$context ](fg:fg_blue bg:git_bg)]($style)'
+
+[custom.venv]
+command = "basename \"$VIRTUAL_ENV\""
+when = 'test -n "$VIRTUAL_ENV"'
+symbol = " "
+style = "bg:git_bg"
+format = '[[ $symbol$output ](fg:fg_blue bg:git_bg)]($style)'
+
+[cmd_duration]
+min_time = 2000
+show_milliseconds = false
+style = "bg:time_bg"
+format = '[[  $duration ](fg:fg_time bg:time_bg)]($style)'
+
+[time]
+disabled = false
+time_format = "%T"
+style = "bg:time_bg"
+format = '[[ $time ](fg:fg_time bg:time_bg)]($style)'
+
+[character]
+success_symbol = "[❯](bold #e6e6e6)"
+error_symbol = "[❯](bold #ff6b6b)"

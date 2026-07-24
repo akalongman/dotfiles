@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# later — park a follow-up note from any terminal, concurrently with whatever
+# Claude (or anything else) is doing. Thin, safe front-end over the engine at
+# ~/.claude/scripts/later.sh.
+#
+# Notes are stored per-project in ./NOTES.local.md and resurfaced by Claude's
+# Stop hook once the queue settles. The ENTIRE argument string is the note, so
+# first words like "check" or "list" are parked literally, never mistaken for a
+# subcommand.
+
+ENGINE="$HOME/.claude/scripts/later.sh"
+
+if [ ! -x "$ENGINE" ]; then
+    echo "later: engine not found or not executable at $ENGINE" >&2
+    exit 1
+fi
+
+case "${1:-}" in
+    '')
+        exec "$ENGINE" list
+        ;;
+    -h|--help)
+        printf '%s\n' \
+            'later — park a follow-up note (front-end for later.sh)' \
+            '' \
+            'usage:' \
+            '  later                list parked notes for the current project' \
+            '  later <note...>      park <note...> into ./NOTES.local.md' \
+            '  later -h | --help    show this help'
+        ;;
+    *)
+        exec "$ENGINE" add "$*"
+        ;;
+esac

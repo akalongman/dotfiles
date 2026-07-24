@@ -1,0 +1,86 @@
+# PHP
+alias phpunit="vendor/bin/phpunit"
+alias a="php artisan"
+alias ar="php artisan remote"
+alias c="claude"
+alias cy="claude-yolo"
+alias cu="composer update"
+alias cr="composer require"
+alias ci="composer install"
+alias cda="composer dump-autoload -o"
+alias hostfile="sudo vi /etc/hosts"
+alias deploy='envoy run deploy'
+alias deploy-code='envoy run deploy-code'
+alias mfs='php artisan migrate:fresh --seed'
+alias nah='git reset --hard;git clean -df'
+
+alias pp="php artisan test --parallel"
+alias sshconfig="vi ~/.ssh/config"
+
+# JavaScript
+alias jest="./node_modules/.bin/jest"
+
+# Git
+alias gpo="git push origin"
+alias push="git push"
+alias pull="git pull"
+alias uncommit="git reset --soft HEAD~1"
+
+# List all files colorized in long format (fallback; eza overrides below)
+alias l="ls -laF"
+
+# VS Code
+alias vscode='code "`pwd`"'
+
+# Redis
+alias flush-redis="redis-cli FLUSHALL"
+
+# Public IP
+alias ip="curl ifconfig.me/ip ; echo"
+
+# OS-specific aliases
+if [ "$(uname -s)" = "Darwin" ]; then
+    alias o="open ."
+    alias copykey='{ command cat ~/.ssh/id_ed25519.pub 2>/dev/null || command cat ~/.ssh/id_rsa.pub; } | pbcopy'
+    alias localip="ifconfig -a | grep -o 'inet6\? \(addr:\)\?\s\?\(\(\([0-9]\+\.\)\{3\}[0-9]\+\)\|[a-fA-F0-9:]\+\)' | awk '{ sub(/inet6? (addr:)? ?/, \"\"); print }'"
+    alias flushdns="sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder"
+    alias show="defaults write com.apple.finder AppleShowAllFiles -bool true && killall Finder"
+    alias hide="defaults write com.apple.finder AppleShowAllFiles -bool false && killall Finder"
+    alias phpstorm='open -a ~/Applications/PhpStorm.app "`pwd`"'
+    alias zed='open -a /Applications/Zed.app "`pwd`"'
+else
+    alias o="xdg-open ."
+    alias copykey='{ command cat ~/.ssh/id_ed25519.pub 2>/dev/null || command cat ~/.ssh/id_rsa.pub; } | xclip -selection clipboard'
+    alias localip="ip -br -4 addr show scope global"
+    alias flushdns="resolvectl flush-caches"
+fi
+
+# Enable aliases to be sudo’ed
+alias sudo='sudo '
+
+# Modern CLI tool aliases (each guarded; the plain tool stays when absent)
+if command -v eza &> /dev/null; then
+    alias ls="eza --group-directories-first"
+    alias l="eza -la --group-directories-first"
+    alias ll="eza -lao --git --no-permissions --group-directories-first"
+    alias lt="eza --tree --level=2"
+    alias tree="eza --tree"
+fi
+
+# Debian/Ubuntu ship bat as batcat and fd as fdfind; other systems use the
+# upstream names. Normalize so `bat` and `fd` work everywhere.
+if command -v batcat &> /dev/null; then
+    alias bat="batcat"
+    alias cat="batcat --style=plain --paging=never"
+elif command -v bat &> /dev/null; then
+    alias cat="bat --style=plain --paging=never"
+fi
+
+if ! command -v fd &> /dev/null && command -v fdfind &> /dev/null; then
+    alias fd="fdfind"
+fi
+
+if command -v bottom &> /dev/null; then
+    alias htop="btm"
+    alias top="btm"
+fi

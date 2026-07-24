@@ -1,0 +1,22 @@
+{
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    }
+  },
+  "ide": {
+    "hasSeenNudge": true
+  },
+  "context": {
+    "fileName": [
+      ".gemini/GEMINI.md",
+      "GEMINI.md"
+    ]
+  },
+  "ui": {
+    "loadingPhrases": "witty"
+  },
+  "model": {
+    "name": "gemini-3.1-pro-preview"
+  }
+}
