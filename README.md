@@ -1,6 +1,6 @@
 # Dotfiles
 
-Personal dotfiles, Linux first. Tracks shell (bash), tmux, vim, git, starship, Sublime Text, Zed, and Claude Code configuration. Managed with [yadm](https://yadm.io), which tracks `$HOME` as a git working tree directly. No symlink layer, no installer.
+Personal dotfiles, Linux first. Tracks shell (bash), tmux, vim, git, starship, Zed, and Claude Code configuration. Managed with [yadm](https://yadm.io), which tracks `$HOME` as a git working tree directly. No symlink layer, no installer.
 
 ![Claude Code session in tmux with the custom statusline](.github/screenshot.png)
 
@@ -8,7 +8,7 @@ Highlights:
 
 * bash with a starship prompt, tmux autostart, and a modern CLI toolchain (fzf, ripgrep, fd, bat, eza, zoxide, direnv) installed by the bootstrap.
 * The whole Claude Code setup: global `CLAUDE.md`, rule files, skills, agents, hooks, and a custom statusline.
-* Sublime Text and Zed configuration, SSH-signed commits.
+* Zed configuration, SSH-signed commits.
 
 ## Install
 
@@ -83,7 +83,6 @@ $HOME/                    yadm working tree
 │   ├── git/              allowed_signers for SSH commit signing, global ignore.
 │   ├── htop/htoprc
 │   ├── starship.toml     Prompt configuration.
-│   ├── sublime-text/Packages/User/   Sublime Text user customizations.
 │   ├── zed/              Zed settings, keymap, and theme.
 │   └── yadm/bootstrap    Setup script run by `yadm bootstrap` after clone (see Install).
 ├── .gemini/settings.json
@@ -134,7 +133,7 @@ Linux first; daily driven on Ubuntu. macOS works on a best-effort basis: the she
 
 `~/bin/` holds the public utility scripts (`disable-kvm`, `power-*`, `listppa`, `gsettings-iterate-all`, `empty-trash`, `elk-*`, `gnome-terminal-tokyonight.sh`, `later`, `worktree`) as regular tracked files; the `.gitignore` allowlists them by name.
 
-Private scripts also live in `~/bin/` at runtime, but only as symlinks created by the private repository's link script; neither the scripts nor the symlinks are tracked here. The same applies to a few private Sublime Text, Claude Code, and opencode files. After cloning the private repository and running its link script, everything appears in place; until then `~/bin/` simply holds the public scripts. The split keeps private material out of this repository while keeping the canonical bin directory at `~/bin/` for muscle memory and PATH simplicity.
+Private scripts also live in `~/bin/` at runtime, but only as symlinks created by the private repository's link script; neither the scripts nor the symlinks are tracked here. The same applies to the entire Sublime Text configuration and a few private Claude Code and opencode files. After cloning the private repository and running its link script, everything appears in place; until then `~/bin/` simply holds the public scripts. The split keeps private material out of this repository while keeping the canonical bin directory at `~/bin/` for muscle memory and PATH simplicity.
 
 ## Forking
 
