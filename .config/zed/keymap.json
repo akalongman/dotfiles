@@ -5,18 +5,22 @@
 //
 // To see the default key bindings run `zed: open default keymap`
 // from the command palette.
+//
+// Base keymap is "JetBrains" (set in settings.json), so PhpStorm bindings
+// apply: ctrl-alt-l formats, ctrl-shift-f finds in files, ctrl-shift-n
+// opens files. Only additions on top of that belong here.
 [
   {
     "context": "Workspace",
     "bindings": {
-      // "shift shift": "file_finder::Toggle"
+      // PhpStorm "Search Everywhere"
+      "shift shift": "file_finder::Toggle"
     }
   },
   {
     "context": "Editor",
     "bindings": {
       // "j k": ["workspace::SendKeystrokes", "escape"]
-      "ctrl-shift-f": "editor::Format"
     }
   }
 ]

@@ -153,8 +153,11 @@ command -v direnv &> /dev/null && eval "$(direnv hook bash)"
 # the shell over to tmux so closing tmux closes the window cleanly. Placed last
 # so PATH and all dotfiles are loaded before `command -v tmux` is checked.
 # Set NO_TMUX=1 to bypass on demand (e.g. a dedicated plain-shell profile).
-# IDE integrated terminals (JetBrains sets TERMINAL_EMULATOR, VS Code sets
-# TERM_PROGRAM) are also skipped: the IDE manages its own terminal tabs.
+# IDE integrated terminals (JetBrains sets TERMINAL_EMULATOR, VS Code and Zed
+# set TERM_PROGRAM) are also skipped: the IDE manages its own terminal tabs.
+# The [ -t 0 ] guard skips TTY-less interactive shells, notably Zed's login-shell
+# environment capture at project open, where exec tmux would fail with
+# "open terminal failed: not a terminal" and abort the whole env probe.
 #
 # The first local terminal attaches to (or creates) `main`. Once `main` already
 # has a client attached, extra terminals get their own fresh session instead of
@@ -162,11 +165,13 @@ command -v direnv &> /dev/null && eval "$(direnv hook bash)"
 # `new-session` to `new-session -t main` in the branch below.
 if command -v tmux >/dev/null 2>&1 \
     && [ -n "$PS1" ] \
+    && [ -t 0 ] \
     && [ -z "$TMUX" ] \
     && { [ -z "$SSH_CONNECTION" ] || [ -f "$HOME/.config/tmux-ssh-autostart" ]; } \
     && [ -z "$NO_TMUX" ] \
     && [ -z "$TERMINAL_EMULATOR" ] \
-    && [ "$TERM_PROGRAM" != "vscode" ]; then
+    && [ "$TERM_PROGRAM" != "vscode" ] \
+    && [ "$TERM_PROGRAM" != "zed" ]; then
     if tmux has-session -t main 2>/dev/null && [ -n "$(tmux list-clients -t main 2>/dev/null)" ]; then
         exec tmux new-session
     else

@@ -7,25 +7,179 @@
 // custom settings, run `zed: open default settings` from the
 // command palette (cmd-shift-p / ctrl-shift-p)
 {
-  "assistant": {
-    "default_model": {
-      "provider": "copilot_chat",
-      "model": "gpt-4o"
-    },
-    "version": "2"
+  // JetBrains-style keybindings: ctrl-alt-l formats, ctrl-shift-f finds in files,
+  // matching PhpStorm muscle memory
+  "edit_predictions": {
+    "provider": "copilot"
   },
+  "base_keymap": "SublimeText",
+
+  // --- Appearance ---
   "ui_font_size": 18,
   "ui_font_family": "Ubuntu Mono",
-  "buffer_font_size": 18,
-  "buffer_font_weight": 900,
-  "buffer_font_family": "Ubuntu Mono",
   "ui_font_weight": 900,
-  "middle_click_paste": false,
+  "buffer_font_size": 18,
+  "buffer_font_family": "Ubuntu Mono",
+  "buffer_font_weight": 900,
   "theme": {
     "mode": "system",
     "light": "One Light",
     "dark": "Longish Dark"
   },
+
+  // --- Panels ---
+  "project_panel": {
+    "dock": "left"
+  },
+  "outline_panel": {
+    "dock": "left"
+  },
+  "collaboration_panel": {
+    "dock": "left"
+  },
+  "git_panel": {
+    "dock": "left"
+  },
+
+  // --- Editor behavior ---
+  "middle_click_paste": false,
+  "autosave": "on_focus_change",
+  "tab_size": 4,
+  "preferred_line_length": 120,
+  "wrap_guides": [120],
+  "show_whitespaces": "selection",
+  "inlay_hints": {
+    "enabled": true
+  },
+  // Formatting stays manual (ctrl-alt-l); per-language overrides below
+  "format_on_save": "off",
+
+  // --- Git ---
+  "git": {
+    "inline_blame": {
+      "enabled": true,
+      "delay_ms": 600
+    }
+  },
+
+  // --- Terminal ---
+  "terminal": {
+    "working_directory": "first_project_directory",
+    "copy_on_select": false
+  },
+
+  // --- Extensions: declared here so a fresh machine restores them from dotfiles ---
+  "auto_install_extensions": {
+    "html": true,
+    "php": true,
+    "blade": true,
+    "laravel": true,
+    "emmet": true,
+    "vue": true,
+    "dart": true,
+    "csharp": true,
+    "sql": true,
+    "xml": true,
+    "log": true,
+    "toml": true,
+    "dockerfile": true,
+    "env": true
+  },
+
+  // --- Languages ---
+  "languages": {
+    "PHP": {
+      // Licensed Intelephense is the sole PHP server (licence file:
+      // ~/intelephense/licence.txt); phpantom/phpactor/phptools stay disabled
+      "language_servers": ["intelephense", "!phpantom_lsp", "!phpactor", "!phptools", "..."],
+      // Laravel projects format via Pint (composer), not the LSP
+      "format_on_save": "off"
+    },
+    "Blade": {
+      "format_on_save": "off"
+    },
+    "JavaScript": {
+      "prettier": {
+        "allowed": true,
+        "singleQuote": true,
+        "printWidth": 120,
+        "tabWidth": 4
+      }
+    },
+    "TypeScript": {
+      "prettier": {
+        "allowed": true,
+        "singleQuote": true,
+        "printWidth": 120,
+        "tabWidth": 4
+      }
+    },
+    "TSX": {
+      "prettier": {
+        "allowed": true,
+        "singleQuote": true,
+        "printWidth": 120,
+        "tabWidth": 4
+      }
+    },
+    "Vue.js": {
+      "prettier": {
+        "allowed": true,
+        "singleQuote": true,
+        "printWidth": 120,
+        "tabWidth": 4
+      }
+    },
+    "Rust": {
+      "format_on_save": "on"
+    },
+    "Dart": {
+      "format_on_save": "on"
+    }
+  },
+
+  // --- LSP tuning ---
+  "lsp": {
+    "intelephense": {
+      "settings": {
+        "intelephense": {
+          "files": {
+            // Default 1MB skips large generated files (_ide_helper.php and
+            // friends in Laravel projects)
+            "maxSize": 5000000,
+            // Overriding files.exclude REPLACES intelephense's defaults, so the
+            // default globs are restated here. The .worktrees entry keeps
+            // per-branch worktree copies (this machine's convention:
+            // <project>/.worktrees/<branch>) out of the index; without it every
+            // branch copy is indexed and completions show duplicate symbols
+            "exclude": [
+              "**/.git/**",
+              "**/.svn/**",
+              "**/.hg/**",
+              "**/CVS/**",
+              "**/.DS_Store/**",
+              "**/node_modules/**",
+              "**/bower_components/**",
+              "**/vendor/**/{Tests,tests}/**",
+              "**/.history/**",
+              "**/vendor/**/vendor/**",
+              "**/.worktrees/**"
+            ]
+          }
+        }
+      }
+    }
+  },
+
+  // --- AI ---
+  "agent": {
+    "dock": "right",
+    "default_model": {
+      "provider": "copilot_chat",
+      "model": "gpt-4o"
+    }
+  },
+
   "telemetry": {
     "diagnostics": false,
     "metrics": false
