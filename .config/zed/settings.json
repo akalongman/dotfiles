@@ -35,6 +35,9 @@
   // prompts)
   "buffer_font_family": "JetBrainsMonoNL NFM",
   "buffer_font_weight": 400,
+  // JetBrains Mono has no Georgian glyphs; without an explicit monospace
+  // fallback each Georgian char is pulled from a random proportional font
+  "buffer_font_fallbacks": ["Hack Nerd Font Mono"],
   "theme": {
     "mode": "system",
     "light": "One Light",
@@ -78,11 +81,11 @@
 
   // --- Terminal ---
   "terminal": {
-    "cursor_shape": "block",
-    // Explicit font: without it the terminal inherits the buffer font,
-    // including its ExtraBold weight
+    "cursor_shape": "bar",
+    // Explicit font pins the terminal against future buffer font changes
     "font_family": "JetBrainsMonoNL NFM",
     "font_weight": 400,
+    "font_fallbacks": ["Hack Nerd Font Mono"],
     "working_directory": "first_project_directory",
     "copy_on_select": false
   },

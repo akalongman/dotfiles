@@ -1,26 +1,90 @@
 // Zed keymap
 //
-// For information on binding keys, see the Zed
-// documentation: https://zed.dev/docs/key-bindings
-//
-// To see the default key bindings run `zed: open default keymap`
-// from the command palette.
-//
-// Base keymap is "JetBrains" (set in settings.json), so PhpStorm bindings
-// apply: ctrl-alt-l formats, ctrl-shift-f finds in files, ctrl-shift-n
-// opens files. Only additions on top of that belong here.
+// Personal bindings ported from the PhpStorm "Longish Linux" keymap
+// (~/.config/JetBrains/PhpStorm2026.2/keymaps/), layered on top of the
+// SublimeText base keymap set in settings.json. Only deviations from the
+// base live here, mirroring how JetBrains keymaps store only the diff.
 [
   {
     "context": "Workspace",
     "bindings": {
       // PhpStorm "Search Everywhere"
-      "shift shift": "file_finder::Toggle"
+      "shift shift": "file_finder::Toggle",
+      // ActivateProjectToolWindow (f4 / shift-ctrl-1)
+      "f4": "project_panel::ToggleFocus",
+      "shift-ctrl-1": "project_panel::ToggleFocus",
+      // GotoAction second binding (shift-ctrl-p works via the base keymap)
+      "shift-ctrl-a": "command_palette::Toggle",
+      // RecentFiles; shadows zed::Quit on purpose, quitting was never ctrl-q
+      // muscle memory, recent files was
+      "ctrl-q": "tab_switcher::Toggle",
+      // ManageRecentProjects
+      "ctrl-alt-p": "projects::OpenRecent",
+      // Back / Forward navigation
+      "ctrl-alt-left": "pane::GoBack",
+      "ctrl-alt-right": "pane::GoForward",
+      // CheckinFiles (commit); PhpStorm's primary ctrl-k is left alone
+      // because it is Sublime's chord prefix (ctrl-k ctrl-b etc.)
+      "alt-up": "git_panel::ToggleFocus",
+      // Vcs.Push
+      "shift-ctrl-k": "git::Push",
+      // Git.Branches
+      "alt-/": "branches::OpenRecent",
+      // SplitHorizontally / SplitVertically
+      "ctrl-f11": "pane::SplitDown",
+      "ctrl-f12": "pane::SplitRight",
+      // ToggleFullScreen
+      "shift-ctrl-f11": "zed::ToggleFullScreen"
     }
   },
   {
     "context": "Editor",
     "bindings": {
-      // "j k": ["workspace::SendKeystrokes", "escape"]
+      // RenameElement
+      "f2": "editor::Rename",
+      // GotoNextError / GotoPreviousError
+      "f6": "editor::GoToDiagnostic",
+      "shift-f6": "editor::GoToPreviousDiagnostic",
+      // ReformatCode
+      "ctrl-alt-f": "editor::Format",
+      // GotoTypeDeclaration
+      "shift-ctrl-b": "editor::GoToTypeDefinition",
+      // EditorDeleteLine
+      "shift-ctrl-delete": "editor::DeleteLine",
+      // SelectNextOccurrence extra binding (ctrl-d works via the base keymap)
+      "alt-j": "editor::SelectNext",
+      // EditorCloneCaretAbove / Below
+      "alt--": "editor::AddSelectionAbove",
+      "alt-=": "editor::AddSelectionBelow",
+      // EditorToggleUseSoftWraps
+      "alt-w": "editor::ToggleSoftWrap",
+      // Fold/expand on PhpStorm's bracket bindings; shadows Sublime
+      // indent/unindent (tab and shift-tab cover those)
+      "ctrl-[": "editor::Fold",
+      "ctrl-]": "editor::UnfoldLines",
+      "shift-ctrl-[": "editor::FoldAll",
+      "shift-ctrl-]": "editor::UnfoldAll",
+      // PHP macros: Macro.arrow and Macro.array typed -> and =>
+      "ctrl--": ["workspace::SendKeystrokes", "- >"],
+      "ctrl-=": ["workspace::SendKeystrokes", "= >"],
+      // EditorDecrease/IncreaseFontSizeGlobal
+      "ctrl-alt--": "zed::DecreaseBufferFontSize",
+      "ctrl-alt-=": "zed::IncreaseBufferFontSize",
+      // StringManipulation upper/lower
+      "shift-ctrl-u": "editor::ConvertToUpperCase",
+      "ctrl-alt-i": "editor::ConvertToLowerCase",
+      // ReopenClosedTab
+      "ctrl-e": "pane::ReopenClosedItem",
+      // GoToLastTab: closest Zed concept is flipping to the previous buffer
+      "alt-z": "pane::AlternateFile",
+      // CloseAllEditors
+      "shift-ctrl-w": "pane::CloseAllItems",
+      // ReplaceInPath
+      "shift-ctrl-h": ["pane::DeploySearch", { "replace_enabled": true }],
+      // CheckinFiles: must shadow the default alt-up (editor::MoveLineUp)
+      // here, or the editor swallows the key before the Workspace binding;
+      // the PhpStorm keymap had MoveLineUp unbound too
+      "alt-up": "git_panel::ToggleFocus"
     }
   }
 ]
