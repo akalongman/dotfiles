@@ -55,10 +55,14 @@ cat <<'NOTE'
 
 yadm clone complete. Manual follow-ups:
   1. claude /login                          (re-auth Claude Code)
-  2. Clone the private repository to ~/.dotfiles-private
-  3. ~/.dotfiles-private/link.sh            (symlink private files into $HOME)
-  4. Install starship (not packaged in apt):
+  2. Install Dropbox and let it finish syncing before step 4
+     (link.sh links several directories from it into $HOME)
+  3. Clone the private repository to ~/.dotfiles-private
+  4. ~/.dotfiles-private/link.sh            (symlink private files into $HOME)
+     If it prints SKIP for Documents or Pictures, GNOME recreated them as
+     empty XDG dirs: rmdir ~/Documents ~/Pictures and re-run.
+  5. Install starship (not packaged in apt):
      curl -sS https://starship.rs/install.sh | sh
-  5. In tmux, press prefix+I to install tmux-resurrect/continuum via TPM.
+  6. In tmux, press prefix+I to install tmux-resurrect/continuum via TPM.
 
 NOTE
