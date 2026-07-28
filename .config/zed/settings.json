@@ -9,6 +9,18 @@
 {
   // JetBrains-style keybindings: ctrl-alt-l formats, ctrl-shift-f finds in files,
   // matching PhpStorm muscle memory
+  "toolbar": {
+    "code_actions": true
+  },
+  "minimap": {
+    "thumb_border": "full",
+    "show": "auto"
+  },
+  "icon_theme": {
+    "mode": "system",
+    "light": "Zed (Default)",
+    "dark": "Zed (Default)"
+  },
   "edit_predictions": {
     "provider": "copilot"
   },
@@ -16,11 +28,13 @@
 
   // --- Appearance ---
   "ui_font_size": 18,
-  "ui_font_family": "Ubuntu Mono",
-  "ui_font_weight": 900,
+  "ui_font_family": "JetBrainsMonoNL NFM",
+  "ui_font_weight": 400,
   "buffer_font_size": 18,
-  "buffer_font_family": "Ubuntu Mono",
-  "buffer_font_weight": 900,
+  // NL = no ligatures, NFM = Nerd Font Mono (patched glyphs for terminal
+  // prompts)
+  "buffer_font_family": "JetBrainsMonoNL NFM",
+  "buffer_font_weight": 400,
   "theme": {
     "mode": "system",
     "light": "One Light",
@@ -64,6 +78,11 @@
 
   // --- Terminal ---
   "terminal": {
+    "cursor_shape": "block",
+    // Explicit font: without it the terminal inherits the buffer font,
+    // including its ExtraBold weight
+    "font_family": "JetBrainsMonoNL NFM",
+    "font_weight": 400,
     "working_directory": "first_project_directory",
     "copy_on_select": false
   },

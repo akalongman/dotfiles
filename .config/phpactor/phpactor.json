@@ -1,0 +1,9 @@
+{
+    "indexer.exclude_patterns": [
+        "/vendor/**/Tests/**/*",
+        "/vendor/**/tests/**/*",
+        "/vendor/composer/**/*",
+        "/vendor/rector/rector/stubs-rector",
+        "/.worktrees/**/*"
+    ]
+}

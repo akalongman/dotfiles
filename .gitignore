@@ -140,6 +140,7 @@ __pycache__/
 !.config/git
 !.config/starship.toml
 !.config/htop
+!.config/phpactor
 !.config/zed
 
 # htop writes a temp file next to htoprc on exit; never track it.
