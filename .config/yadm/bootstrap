@@ -8,10 +8,10 @@ set -euo pipefail
 # rather than discovering the gaps one missing tool at a time.
 if command -v apt-get >/dev/null 2>&1; then
     sudo apt-get install -y \
-        tmux fzf ripgrep fd-find bat eza zoxide direnv xclip yadm vim git \
+        tmux fzf ripgrep fd-find bat eza zoxide direnv xclip yadm vim git git-delta \
         || echo "apt package step skipped (no sudo or offline)."
 elif command -v brew >/dev/null 2>&1; then
-    brew install tmux fzf ripgrep fd bat eza zoxide direnv yadm vim git \
+    brew install tmux fzf ripgrep fd bat eza zoxide direnv yadm vim git git-delta \
         || echo "brew package step skipped (offline?)."
 fi
 

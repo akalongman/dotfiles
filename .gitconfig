@@ -6,6 +6,7 @@
 	gpgsign = true
 [core]
 	autocrlf = input
+	pager = delta
 [credential "https://github.com"]
 	helper = 
 	helper = !/usr/bin/gh auth git-credential
@@ -28,3 +29,9 @@
 	autostash = true
 [rerere]
 	enabled = true
+[interactive]
+	diffFilter = delta --color-only
+[delta]
+	navigate = true
+	line-numbers = true
+	side-by-side = true
