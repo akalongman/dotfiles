@@ -159,10 +159,11 @@ command -v direnv &> /dev/null && eval "$(direnv hook bash)"
 # environment capture at project open, where exec tmux would fail with
 # "open terminal failed: not a terminal" and abort the whole env probe.
 #
-# The first local terminal attaches to (or creates) `main`. Once `main` already
-# has a client attached, extra terminals get their own fresh session instead of
-# mirroring `main`. To make the extras share main's window list instead, change
-# `new-session` to `new-session -t main` in the branch below.
+# Terminals opened in $HOME attach to (or create) `main`; terminals opened in
+# a project directory attach to a session named after the directory, creating
+# it if absent. If the target session already has a client, a grouped session
+# (`new-session -t`) gives this terminal an independent view of the same
+# windows instead of mirroring or stealing the existing client's view.
 if command -v tmux >/dev/null 2>&1 \
     && [ -n "$PS1" ] \
     && [ -t 0 ] \
@@ -172,9 +173,14 @@ if command -v tmux >/dev/null 2>&1 \
     && [ -z "$TERMINAL_EMULATOR" ] \
     && [ "$TERM_PROGRAM" != "vscode" ] \
     && [ "$TERM_PROGRAM" != "zed" ]; then
-    if tmux has-session -t main 2>/dev/null && [ -n "$(tmux list-clients -t main 2>/dev/null)" ]; then
-        exec tmux new-session
+    if [ "$PWD" = "$HOME" ]; then
+        sess=main
     else
-        exec tmux new-session -A -s main
+        sess=$(basename "$PWD")
+    fi
+    if tmux has-session -t "=$sess" 2>/dev/null && [ -n "$(tmux list-clients -t "=$sess" 2>/dev/null)" ]; then
+        exec tmux new-session -t "=$sess"
+    else
+        exec tmux new-session -A -s "$sess"
     fi
 fi
