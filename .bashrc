@@ -161,9 +161,11 @@ command -v direnv &> /dev/null && eval "$(direnv hook bash)"
 #
 # Terminals opened in $HOME attach to (or create) `main`; terminals opened in
 # a project directory attach to a session named after the directory, creating
-# it if absent. If the target session already has a client, a grouped session
-# (`new-session -t`) gives this terminal an independent view of the same
-# windows instead of mirroring or stealing the existing client's view.
+# it if absent. If the target session already has a client, the new terminal
+# gets a grouped session (`new-session -t`) opened on a fresh window: the
+# window list is shared, but the view is independent rather than a mirror.
+# The grouped session self-destructs when its client closes; its windows
+# (and anything running in them) live on in the named session.
 if command -v tmux >/dev/null 2>&1 \
     && [ -n "$PS1" ] \
     && [ -t 0 ] \
@@ -179,7 +181,7 @@ if command -v tmux >/dev/null 2>&1 \
         sess=$(basename "$PWD")
     fi
     if tmux has-session -t "=$sess" 2>/dev/null && [ -n "$(tmux list-clients -t "=$sess" 2>/dev/null)" ]; then
-        exec tmux new-session -t "=$sess"
+        exec tmux new-session -t "=$sess" \; set-option destroy-unattached on \; new-window
     else
         exec tmux new-session -A -s "$sess"
     fi
