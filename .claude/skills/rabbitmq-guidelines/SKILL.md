@@ -1,7 +1,8 @@
 ---
-name: rules-rabbitmq
-description: Apply RabbitMQ and message-queue guidelines for any task that publishes or consumes messages, designs exchange/queue/binding topology, chooses queue types, operates or monitors a broker or cluster, or scripts against rabbitmqadmin.
+name: rabbitmq-guidelines
+description: Use when publishing to or consuming from RabbitMQ in any language, designing exchange/queue/binding topology, choosing queue types, operating or monitoring a broker or cluster, scripting against rabbitmqadmin, or diagnosing delivery loss, unbounded memory growth, consumer stalls, or partition behavior.
 ---
+
 
 # RabbitMQ Guidelines
 

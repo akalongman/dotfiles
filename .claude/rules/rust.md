@@ -1,6 +1,11 @@
 ---
 name: rules-rust
 description: Apply Rust architecture and coding standards for any task that creates, edits, reviews, or refactors Rust code. Covers ownership and lifetime gates, trait vs enum vs concrete-type decisions, type-level discipline, crate and test layout, error design, review smells, and the strongest-tool-per-verification-layer mapping.
+paths:
+  - "**/*.rs"
+  - "**/Cargo.toml"
+  - "**/Cargo.lock"
+  - "**/clippy.toml"
 ---
 
 # Rust Guidelines
