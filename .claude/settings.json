@@ -9,7 +9,7 @@
   "permissions": {
     "defaultMode": "auto"
   },
-  "model": "fable",
+  "model": "opus",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "Notification": [
@@ -80,13 +80,10 @@
     "frontend-design@claude-plugins-official": true,
     "superpowers@claude-plugins-official": true,
     "context7@claude-plugins-official": true,
-    "github@claude-plugins-official": true,
+    "github@claude-plugins-official": false,
     "phpstorm-plugin@phpstorm-marketplace": true,
     "security-guidance@claude-plugins-official": true,
-    "stitch-build@google-labs-code-stitch-skills": true,
-    "stitch-design@google-labs-code-stitch-skills": true,
-    "stitch-utilities@google-labs-code-stitch-skills": true,
-    "claude-md-management@claude-plugins-official": true
+    "claude-md-management@claude-plugins-official": false
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {
