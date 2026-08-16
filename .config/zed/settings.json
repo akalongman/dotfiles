@@ -9,6 +9,14 @@
 {
   // JetBrains-style keybindings: ctrl-alt-l formats, ctrl-shift-f finds in files,
   // matching PhpStorm muscle memory
+  "agent_servers": {
+    "claude-acp": {
+      "default_config_options": {
+        "model": "opus[1m]"
+      },
+      "type": "registry"
+    }
+  },
   "toolbar": {
     "code_actions": true
   },
@@ -28,12 +36,12 @@
 
   // --- Appearance ---
   "ui_font_size": 18,
-  "ui_font_family": "JetBrainsMonoNL NFM",
+  "ui_font_family": "JetBrainsMonoNL Nerd Font Mono",
   "ui_font_weight": 400,
   "buffer_font_size": 18,
   // NL = no ligatures, NFM = Nerd Font Mono (patched glyphs for terminal
   // prompts)
-  "buffer_font_family": "JetBrainsMonoNL NFM",
+  "buffer_font_family": "JetBrainsMonoNL Nerd Font Mono",
   "buffer_font_weight": 400,
   // JetBrains Mono has no Georgian glyphs; without an explicit monospace
   // fallback each Georgian char is pulled from a random proportional font
@@ -65,6 +73,21 @@
   "preferred_line_length": 120,
   "wrap_guides": [120],
   "show_whitespaces": "selection",
+  // Zed's own scanner walks gitignored dirs for the panel/finder; this key
+  // REPLACES the defaults, so they are restated. .worktrees copies open as
+  // their own projects, they have no business inside the parent's scan
+  "file_scan_exclusions": [
+    "**/.git",
+    "**/.svn",
+    "**/.hg",
+    "**/.jj",
+    "**/CVS",
+    "**/.DS_Store",
+    "**/Thumbs.db",
+    "**/.classpath",
+    "**/.settings",
+    "**/.worktrees"
+  ],
   "inlay_hints": {
     "enabled": true
   },
@@ -83,7 +106,7 @@
   "terminal": {
     "cursor_shape": "bar",
     // Explicit font pins the terminal against future buffer font changes
-    "font_family": "JetBrainsMonoNL NFM",
+    "font_family": "JetBrainsMonoNL Nerd Font Mono",
     "font_weight": 400,
     "font_fallbacks": ["Hack Nerd Font Mono"],
     "working_directory": "first_project_directory",
@@ -113,11 +136,17 @@
     "PHP": {
       // Licensed Intelephense is the sole PHP server (licence file:
       // ~/intelephense/licence.txt); phpantom/phpactor/phptools stay disabled
-      "language_servers": ["intelephense", "!phpantom_lsp", "!phpactor", "!phptools", "..."],
+      // The registered server ID is "phpantom" (binary name phpantom_lsp
+      // does not match; a "!phpantom_lsp" entry is silently ignored)
+      "language_servers": ["intelephense", "!phpantom", "!phpactor", "!phptools", "..."],
       // Laravel projects format via Pint (composer), not the LSP
       "format_on_save": "off"
     },
     "Blade": {
+      // The blade extension registers intelephense, phpactor, AND phptools
+      // for Blade; one PHP brain is enough. Phpactor carries the .worktrees
+      // exclusion via ~/.config/phpactor/phpactor.json
+      "language_servers": ["phpactor", "emmet", "!intelephense", "!phptools", "..."],
       "format_on_save": "off"
     },
     "JavaScript": {
@@ -163,31 +192,32 @@
   // --- LSP tuning ---
   "lsp": {
     "intelephense": {
+      // NO "intelephense" wrapper inside settings: the php extension wraps
+      // this object in {"intelephense": ...} itself, so wrapping here
+      // double-nests and the server silently ignores everything
       "settings": {
-        "intelephense": {
-          "files": {
-            // Default 1MB skips large generated files (_ide_helper.php and
-            // friends in Laravel projects)
-            "maxSize": 5000000,
-            // Overriding files.exclude REPLACES intelephense's defaults, so the
-            // default globs are restated here. The .worktrees entry keeps
-            // per-branch worktree copies (this machine's convention:
-            // <project>/.worktrees/<branch>) out of the index; without it every
-            // branch copy is indexed and completions show duplicate symbols
-            "exclude": [
-              "**/.git/**",
-              "**/.svn/**",
-              "**/.hg/**",
-              "**/CVS/**",
-              "**/.DS_Store/**",
-              "**/node_modules/**",
-              "**/bower_components/**",
-              "**/vendor/**/{Tests,tests}/**",
-              "**/.history/**",
-              "**/vendor/**/vendor/**",
-              "**/.worktrees/**"
-            ]
-          }
+        "files": {
+          // Default 1MB skips large generated files (_ide_helper.php and
+          // friends in Laravel projects)
+          "maxSize": 5000000,
+          // Overriding files.exclude REPLACES intelephense's defaults, so the
+          // default globs are restated here. The .worktrees entry keeps
+          // per-branch worktree copies (this machine's convention:
+          // <project>/.worktrees/<branch>) out of the index; without it every
+          // branch copy is indexed and completions show duplicate symbols
+          "exclude": [
+            "**/.git/**",
+            "**/.svn/**",
+            "**/.hg/**",
+            "**/CVS/**",
+            "**/.DS_Store/**",
+            "**/node_modules/**",
+            "**/bower_components/**",
+            "**/vendor/**/{Tests,tests}/**",
+            "**/.history/**",
+            "**/vendor/**/vendor/**",
+            "**/.worktrees/**"
+          ]
         }
       }
     }
@@ -195,10 +225,12 @@
 
   // --- AI ---
   "agent": {
+    "show_turn_stats": true,
+    "play_sound_when_agent_done": "when_hidden",
     "dock": "right",
     "default_model": {
-      "provider": "copilot_chat",
-      "model": "gpt-4o"
+      "provider": "anthropic",
+      "model": "opus"
     }
   },
 

@@ -1,0 +1,48 @@
+// Zed global tasks: the "custom menu" replacement. Open with the
+// task: spawn action (bound to shift-ctrl-\, the old PhpStorm
+// QuickList.Handy Actions key). Per-project tasks go in .zed/tasks.json.
+[
+  {
+    "label": "Pint: fix current file",
+    "command": "vendor/bin/pint",
+    "args": ["$ZED_RELATIVE_FILE"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "Pint: fix dirty files",
+    "command": "vendor/bin/pint",
+    "args": ["--dirty"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "Artisan: test current file",
+    "command": "php",
+    "args": ["artisan", "test", "$ZED_RELATIVE_FILE"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "Composer: test",
+    "command": "composer",
+    "args": ["test"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "Artisan: migrate",
+    "command": "php",
+    "args": ["artisan", "migrate"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "Artisan: route:list",
+    "command": "php",
+    "args": ["artisan", "route:list"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "Artisan: tinker",
+    "command": "php",
+    "args": ["artisan", "tinker"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true
+  }
+]

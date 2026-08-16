@@ -34,7 +34,10 @@
       "ctrl-f11": "pane::SplitDown",
       "ctrl-f12": "pane::SplitRight",
       // ToggleFullScreen
-      "shift-ctrl-f11": "zed::ToggleFullScreen"
+      "shift-ctrl-f11": "zed::ToggleFullScreen",
+      // QuickList.Handy Actions: the task picker is Zed's custom menu.
+      // Zed matches produced characters: shift+\ types |, so bind ctrl-|
+      "ctrl-|": "task::Spawn"
     }
   },
   {
@@ -62,8 +65,9 @@
       // indent/unindent (tab and shift-tab cover those)
       "ctrl-[": "editor::Fold",
       "ctrl-]": "editor::UnfoldLines",
-      "shift-ctrl-[": "editor::FoldAll",
-      "shift-ctrl-]": "editor::UnfoldAll",
+      // shift+bracket produces the brace character, so ctrl-{ not shift-ctrl-[
+      "ctrl-{": "editor::FoldAll",
+      "ctrl-}": "editor::UnfoldAll",
       // PHP macros: Macro.arrow and Macro.array typed -> and =>
       "ctrl--": ["workspace::SendKeystrokes", "- >"],
       "ctrl-=": ["workspace::SendKeystrokes", "= >"],
@@ -84,7 +88,13 @@
       // CheckinFiles: must shadow the default alt-up (editor::MoveLineUp)
       // here, or the editor swallows the key before the Workspace binding;
       // the PhpStorm keymap had MoveLineUp unbound too
-      "alt-up": "git_panel::ToggleFocus"
+      "alt-up": "git_panel::ToggleFocus",
+      // Same shadowing story: Editor-context defaults beat Workspace
+      // bindings while typing, so these repeat here to win focus
+      "ctrl-|": "task::Spawn",
+      // Sublime base binds shift-ctrl-k to editor::DeleteLine; push wins
+      // (deleting lines stays on shift-ctrl-delete)
+      "shift-ctrl-k": "git::Push"
     }
   }
 ]
