@@ -110,6 +110,12 @@
     "font_weight": 400,
     "font_fallbacks": ["Hack Nerd Font Mono"],
     "working_directory": "first_project_directory",
+    // Persistent per-project tmux session (zed-<project>): terminal
+    // processes survive Zed restarts. The wrapper needs the
+    // working_directory setting above to derive the session name
+    "shell": {
+      "program": "/home/longman/bin/zed-term"
+    },
     "copy_on_select": false
   },
 
