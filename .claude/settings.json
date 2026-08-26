@@ -9,7 +9,7 @@
   "permissions": {
     "defaultMode": "auto"
   },
-  "model": "opus",
+  "model": "fable",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "Notification": [
@@ -77,25 +77,17 @@
     "command": "~/.claude/statusline.sh"
   },
   "enabledPlugins": {
-    "frontend-design@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": false,
     "superpowers@claude-plugins-official": true,
-    "context7@claude-plugins-official": true,
-    "github@claude-plugins-official": false,
+    "context7@claude-plugins-official": false,
     "phpstorm-plugin@phpstorm-marketplace": true,
-    "security-guidance@claude-plugins-official": true,
-    "claude-md-management@claude-plugins-official": false
+    "security-guidance@claude-plugins-official": true
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {
       "source": {
         "source": "github",
         "repo": "jetbrains/phpstorm-claude-marketplace"
-      }
-    },
-    "superpowers-marketplace": {
-      "source": {
-        "source": "github",
-        "repo": "obra/superpowers-marketplace"
       }
     }
   },

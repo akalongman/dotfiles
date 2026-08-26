@@ -1,6 +1,14 @@
 ---
 name: app-socratic-probe
-description: Use when stuck on a design or architecture question and circling, proposing solutions that keep collapsing to the same shape, unable to see past your own assumptions, or when the user keeps saying "that is still the same thinking." Runs a repo-blind, different-model questioning agent that only asks questions (never proposes) to surface the hidden assumption. Precedes brainstorming or planning rather than replacing them. Triggers: "I keep going in circles", "every option looks the same", "socratic", "break my assumptions", "I am stuck on the design".
+description: >-
+  Use when stuck on a design or architecture question and circling, proposing
+  solutions that keep collapsing to the same shape, unable to see past your own
+  assumptions, or when the user keeps saying "that is still the same thinking."
+  Runs a repo-blind, different-model questioning agent that only asks questions
+  (never proposes) to surface the hidden assumption. Precedes brainstorming or
+  planning rather than replacing them. Triggers: "I keep going in circles",
+  "every option looks the same", "socratic", "break my assumptions", "I am stuck
+  on the design".
 ---
 
 # Socratic Probe

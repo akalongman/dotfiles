@@ -1,6 +1,16 @@
 ---
 name: rules-javascript
 description: Apply JavaScript coding standards for any task that creates, edits, reviews, refactors, or formats JavaScript or TypeScript code; use for variable declarations, comparisons, functions, destructuring, and Prettier configuration to align with this JS conventions.
+paths:
+  - "**/*.js"
+  - "**/*.mjs"
+  - "**/*.cjs"
+  - "**/*.ts"
+  - "**/*.jsx"
+  - "**/*.tsx"
+  - "**/*.vue"
+  - "**/package.json"
+  - "**/tsconfig.json"
 ---
 
 # JavaScript Guidelines

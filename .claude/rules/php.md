@@ -1,6 +1,11 @@
 ---
 name: rules-php
 description: Apply PHP coding standards for any task that creates, edits, reviews, refactors, or formats PHP code;
+paths:
+  - "**/*.php"
+  - "**/composer.json"
+  - "**/composer.lock"
+  - "**/phpunit.xml"
 ---
 
 # Laravel & PHP Guidelines for AI Code Assistants
