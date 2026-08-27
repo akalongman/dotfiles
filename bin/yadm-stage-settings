@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Stage ~/.claude/settings.json for the public dotfiles repo with the
+# autoMode block filtered out. Claude Code's auto mode rewrites that block
+# with client-environment facts, which must never reach the public remote.
+# The block stays in the working file; only the staged blob excludes it.
+#
+# Usage: yadm-stage-settings   (then commit as usual)
+
+set -euo pipefail
+
+FILE="$HOME/.claude/settings.json"
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+
+cp "$FILE" "$TMP"
+
+if ! jq . "$TMP" | cmp -s - "$TMP"; then
+    echo "warning: jq reformats this file; the staged diff will carry formatting noise" >&2
+fi
+
+jq 'del(.autoMode)' "$TMP" > "$FILE"
+git -C "$HOME" add .claude/settings.json
+cp "$TMP" "$FILE"
+
+STAGED_HAS_BLOCK="$(git -C "$HOME" show :.claude/settings.json | jq 'has("autoMode")')"
+if [ "$STAGED_HAS_BLOCK" != "false" ]; then
+    echo "error: staged settings.json still contains autoMode; aborting" >&2
+    exit 1
+fi
+
+echo "staged .claude/settings.json without autoMode (working file untouched)"

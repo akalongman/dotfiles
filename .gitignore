@@ -173,3 +173,4 @@ bin/*
 !bin/power-consumption
 !bin/power-input
 !bin/worktree
+!bin/yadm-stage-settings
