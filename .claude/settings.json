@@ -83,7 +83,10 @@
     "context7@claude-plugins-official": false,
     "phpstorm-plugin@phpstorm-marketplace": true,
     "security-guidance@claude-plugins-official": true,
-    "azure@claude-plugins-official": false
+    "azure@claude-plugins-official": false,
+    "php-lsp@claude-plugins-official": true,
+    "session-report@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {

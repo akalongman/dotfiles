@@ -198,6 +198,16 @@
   // --- LSP tuning ---
   "lsp": {
     "intelephense": {
+      // Use the standalone install (npm prefix ~/.local/lib/intelephense,
+      // linked as ~/bin/intelephense) instead of the copy the php and blade
+      // extensions each download into their own node_modules. Both
+      // extensions declare this same "intelephense" server id, so this one
+      // override covers PHP and Blade. Absolute path: Zed does not expand ~
+      // reliably in binary.path.
+      "binary": {
+        "path": "/home/longman/bin/intelephense",
+        "arguments": ["--stdio"]
+      },
       // NO "intelephense" wrapper inside settings: the php extension wraps
       // this object in {"intelephense": ...} itself, so wrapping here
       // double-nests and the server silently ignores everything
