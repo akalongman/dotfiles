@@ -9,6 +9,7 @@
 {
   // JetBrains-style keybindings: ctrl-alt-l formats, ctrl-shift-f finds in files,
   // matching PhpStorm muscle memory
+  "cli_default_open_behavior": "existing_window",
   "agent_servers": {
     "claude-acp": {
       "default_config_options": {
