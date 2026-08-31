@@ -1,6 +1,9 @@
 ---
 name: rules-openspec
 description: Apply these rules when a project has an `openspec/` directory.
+paths:
+  - "openspec/**"
+  - "**/openspec/**"
 ---
 
 # OpenSpec Project Conventions
