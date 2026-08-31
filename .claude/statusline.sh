@@ -83,7 +83,27 @@ if git -C "$DIR" rev-parse --git-dir > /dev/null 2>&1; then
     fi
 fi
 
-CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; RESET='\033[0m'
+CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; MAGENTA='\033[35m'; RESET='\033[0m'
+
+# Account badge, always shown. Reads the active slot's cached identity so a
+# /login in the wrong terminal is visible immediately (R6 in the dual-account
+# design). CLAUDE_CONFIG_DIR is exported by the claude2 wrapper; unset means
+# the default slot, whose state file is the legacy ~/.claude.json (a config
+# dir relocates it to $CLAUDE_CONFIG_DIR/.claude.json). Color marks the slot:
+# green = default, magenta = secondary.
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    ACCT_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
+    ACCT_COLOR="$MAGENTA"
+else
+    ACCT_FILE="$HOME/.claude.json"
+    ACCT_COLOR="$GREEN"
+fi
+ACCT_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$ACCT_FILE" 2>/dev/null)
+if [ -n "$ACCT_EMAIL" ]; then
+    ACCT_SEG="${ACCT_COLOR}[👤 ${ACCT_EMAIL%%@*}]${RESET} "
+else
+    ACCT_SEG="${RED}[👤 not logged in]${RESET} "
+fi
 
 # Pick bar color based on context usage
 if [ "$PCT" -ge 90 ]; then BAR_COLOR="$RED"
@@ -137,7 +157,7 @@ printf -v DIR_PAD '%*s' "$(( 60 - ${#DIR_DISP} > 0 ? 60 - ${#DIR_DISP} : 0 ))" '
 # BEL form through to the terminal but drops ST (anthropics/claude-code#26356).
 DIR_LINK="\033]8;;${DIR_URI}\a\033[4m${DIR_DISP}\033[24m\033]8;;\a${DIR_PAD}"
 
-echo -e "${CYAN}[$MODEL]${RESET} | 📁 ${DIR_LINK} $BRANCH$WORKTREE $REPO_LINK"
+echo -e "${ACCT_SEG}${CYAN}[$MODEL]${RESET} | 📁 ${DIR_LINK} $BRANCH$WORKTREE $REPO_LINK"
 COST_FMT=$(printf '$%.2f' "$COST")
 
 EFFORT_SEG=""
