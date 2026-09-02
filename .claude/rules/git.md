@@ -55,6 +55,12 @@ branch, branch first" behavior.
   under 72 characters and use plain prose, not section headers.
 - Do not include `Co-Authored-By` trailers.
 - Do not mention Claude Code or AI assistants.
+- Never override commit signing (no `-c commit.gpgsign=false`, no
+  `--no-gpg-sign`). Before committing, check the repo's signing setup
+  (`git config --get commit.gpgsign` and recent `git log --format='%h %G?'`)
+  and let the configured signing run; the agent signs without a prompt. If
+  signing fails, report it and hand the user the amend command instead of
+  retrying unsigned.
 
 ## GitHub and GitLab
 
