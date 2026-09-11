@@ -269,6 +269,19 @@ $failedChecks = $site->checks()->where('status', 'failed')->get();
 
 - Use descriptive test method names
 - Follow the arrange-act-assert pattern
+- Before citing a test as the proof that a protection holds (in a review reply, a
+  rebuttal, a commit message, or a spec), mutation-check it: remove or invert the
+  protection, run the test, confirm it fails, then restore. A test that still passes
+  locks nothing, and citing it publishes a false guarantee. The two usual causes:
+  - The fixture already produces the asserted result without the protection, for
+    example rows inserted in the order an `ORDER BY` should impose, so the test passes
+    with the ordering deleted. Arrange fixtures so the unprotected code gives the
+    wrong answer (insert the row that must lose first).
+  - The test hooks the mechanism it is testing, for example forcing a race from the
+    write path's `saving` event, so it goes silent the moment that write takes
+    another form. Hook an earlier, implementation-independent point (the read that
+    loaded the row, through a one-shot `retrieved` listener), and assert the hook
+    actually fired so the test cannot pass vacuously.
 
 ## Concurrency and row locking
 
