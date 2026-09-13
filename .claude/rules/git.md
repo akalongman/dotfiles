@@ -44,6 +44,18 @@ branch, branch first" behavior.
 ## Commits
 
 - Commit or push only when the user asks.
+- Stage explicit paths. Do not use `git add -A`, `git add .`, or `git commit -a`.
+  Other sessions, background tools, and generators leave untracked files in the
+  same checkout, and a blanket stage commits them silently under your message.
+  Name the paths the change actually touches, adding `git add -u <path>` for
+  deletions and renames under a path you moved. Commit path-limited, in one
+  command with the add: `git add <paths> && git commit -m "<title>" -- <paths>`.
+  Another session can commit the shared index at any moment, so pausing to
+  inspect the staged list is exactly when its plain `git commit` sweeps your
+  staged files into its commit; the pathspec records only your paths whatever
+  else is staged. Verify with `git show --stat HEAD` afterwards. If a stray
+  file did land and the commit is unpushed, reset and re-stage rather than
+  leaving it in history.
 - Before pushing, inspect what the push will publish (`git log @{u}..` or
   `git log origin/<branch>..HEAD`) and surface any commits beyond the one you
   intended. A push publishes the whole branch, so commits that were already
