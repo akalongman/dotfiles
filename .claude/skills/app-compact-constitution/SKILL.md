@@ -43,9 +43,9 @@ Every project converges on the same constitution, with these headings in this or
 
    | Term or topic | Where | One-line rule |
    |---|---|---|
-   | Parcel | `parcels` | Central entity; lifecycle is a sequence of logistic events. |
+   | Order | `orders` | Central entity; its lifecycle is a sequence of status events. |
    | Form requests | `api-infrastructure` | Every action with input injects a `FormRequest` subclass. |
-   | Sub-user linking | `customer-accounts` (no spec yet) | Verified PN is the only lookup key; phone is a sanity check. |
+   | Account linking | `accounts` (no spec yet) | A verified national ID is the only lookup key; phone is a sanity check. |
 
    "Where" is the capability name from the map in `openspec/config.yaml`, marked "no spec yet" when `openspec/specs/<name>/spec.md` does not exist; on other projects it is the path of a path-scoped rule file, a skill directory, or a source file. The rule column stands alone, under about 40 words: a reader who never opens the target still grasps the headline, and a multi-rule cluster is summarised by its class name and threshold keywords, not restated. This table replaces any separate "domain concepts" list and the capability-spec table from the user-level `rules/openspec.md`; that rule's template should be updated to this heading and these columns in the same commit that installs this skill.
 6. `## Project-specific rules`: high-consequence rules that nothing else enforces (a migration discipline, a refactor discipline), each in a few lines.
