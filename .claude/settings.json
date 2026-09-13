@@ -107,6 +107,11 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
+  "modelSettings": {
+    "claude-fable-5-1": {
+      "effortLevel": "high"
+    }
+  },
   "awaySummaryEnabled": true,
   "skipDangerousModePermissionPrompt": false,
   "skipWorkflowUsageWarning": true,
