@@ -14,9 +14,9 @@ Review a merge request (GitLab) or pull request (GitHub) thoroughly by reading f
    - If `$ARGUMENTS` contains `github.com` or looks like a GitHub URL → GitHub
    - If only a number is given, infer the platform from the current repo's remote URL (`git remote get-url origin`)
 
-2. Fetch MR/PR metadata and the source branch name:
-   - **GitLab:** `glab mr view <number> --repo <namespace/repo>`
-   - **GitHub:** `gh pr view <number> --repo <owner/repo>`
+2. Fetch MR/PR metadata, the source branch name, and the head SHA (keep the SHA; step 6 asserts against it):
+   - **GitLab:** `glab mr view <number> --repo <namespace/repo>`, then `glab api "projects/<encoded-namespace>/merge_requests/<number>"` for `sha` (the head) and `diff_refs`
+   - **GitHub:** `gh pr view <number> --repo <owner/repo> --json headRefName,headRefOid`
 
 3. Fetch existing review comments so you are aware of what has already been flagged:
    - **GitLab:** `glab api "projects/<encoded-namespace>/merge_requests/<number>/notes"` — parse JSON, skip entries with `system: true`, print author + body
@@ -28,11 +28,14 @@ Review a merge request (GitLab) or pull request (GitHub) thoroughly by reading f
 
 5. Note the current branch (`git branch --show-current`), then stash any uncommitted changes with `git stash` if the working tree is dirty.
 
-6. Fetch and check out the MR/PR branch locally:
+6. Fetch and check out the MR/PR branch locally, then prove the checkout IS the MR/PR head. A local branch of the same name often already exists from an earlier review of the same MR/PR, and `git checkout <branch>` lands on that stale ref, not on the commit just fetched:
    ```
    git fetch origin <branch>
    git checkout <branch>
+   git merge --ff-only origin/<branch>
+   git rev-parse HEAD
    ```
+   Compare `git rev-parse HEAD` with the head SHA from step 2. If they differ, stop and reconcile before reading a single file (a diverged local branch needs `git checkout -B <branch> origin/<branch>`); every later step reviews whatever is checked out, so a stale checkout silently reviews the previous round.
 
 7. Read every changed file in full using the Read tool. Do not skip any file.
 
