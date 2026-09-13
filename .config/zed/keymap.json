@@ -35,6 +35,9 @@
       "ctrl-f12": "pane::SplitRight",
       // ToggleFullScreen
       "shift-ctrl-f11": "zed::ToggleFullScreen",
+      // ActivateTerminalToolWindow, but as a center tab instead of the bottom
+      // dock (shadows git_panel::ToggleFocus, which lives on alt-up)
+      "shift-ctrl-g": "workspace::NewCenterTerminal",
       // QuickList.Handy Actions: the task picker is Zed's custom menu.
       // Zed matches produced characters: shift+\ types |, so bind ctrl-|
       "ctrl-|": "task::Spawn"
