@@ -95,6 +95,7 @@ __pycache__/
 !.claude/skills
 .claude/skills/app-audit-server
 .claude/skills/app-investigate-incident
+.claude/skills/app-workstation-project
 !.claude/hooks
 # scripts: the /later engine plus the worktree orchestrator and its tests
 !.claude/scripts
