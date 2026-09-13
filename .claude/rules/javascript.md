@@ -15,18 +15,6 @@ paths:
 
 # JavaScript Guidelines
 
-## Overview
-Apply JavaScript coding standards to keep JS/TS code consistent and readable.
-
-## When to Activate
-- Activate this skill for any JavaScript or TypeScript coding work.
-- Activate this skill when working on `.js`, `.ts`, `.jsx`, `.tsx`, or `.vue` files.
-- Activate this skill when configuring Prettier or ESLint for a project.
-
-## Scope
-- In scope: JavaScript, TypeScript, Vue single-file components, Prettier/ESLint configuration.
-- Out of scope: PHP, Laravel, CSS-only files, server configuration.
-
 ## Prettier Configuration
 - Indentation: 4 spaces (via `.editorconfig`, not Prettier default of 2)
 - Print width: 120 characters (not Prettier default of 80)

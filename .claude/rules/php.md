@@ -10,8 +10,6 @@ paths:
 
 # Laravel & PHP Guidelines for AI Code Assistants
 
-This file contains Laravel and PHP coding standards optimized for AI code assistants like Claude Code, Gemini, or Cursor.
-
 ## Core Laravel Principle
 
 **Follow Laravel conventions first.** If Laravel has a documented way to do something, use it. Only deviate when you have a clear justification.
@@ -24,7 +22,7 @@ Str::lower($value);      // over strtolower($value)
 Str::upper($value);      // over strtoupper($value)
 Str::contains($h, $n);   // over str_contains($h, $n)
 Arr::get($data, 'a.b');  // over nested isset() / null coalescing
-now();                   // over Carbon::now() (see Code Quality Reminders)
+now();                   // over Carbon::now()
 Http::get($url);         // over curl_* / file_get_contents
 Storage::get($path);     // over file_get_contents on a local path
 ```
@@ -38,6 +36,9 @@ Why it is the default, not dogma: the framework versions are usually multibyte-s
 - Use short nullable notation: `?string` not `string|null`
 - Always specify `void` return types when methods return nothing
 - Post-increment operator should be used only as single instruction
+- Closure not using "$this" should be declared static
+- PHP internal functions must be imported
+- All PHP files must declare declare(strict_types=1) at the top
 
 ## Class Structure
 - Use typed properties, not docblocks
@@ -357,17 +358,3 @@ does not is worse than no claim, because it stops the next reader looking.
 ### Composer Dependencies
 
 - When adopting an API introduced mid-major in a dependency (e.g. a method added in PHPUnit 13.2 while the constraint says `^13.0`), raise the composer constraint floor to that minor in the same change. The locked version is not the contract; the constraint is. CI runs or fresh installs that resolve an older minor will fail on the missing API even though it works locally.
-
-### Code Quality Reminders
-
-#### PHP
-- Use typed properties over docblocks
-- Prefer early returns over nested if/else
-- Use constructor property promotion when all properties can be promoted
-- Avoid `else` statements when possible
-- Use string concatenation over interpolation
-- Always use curly braces for control structures
-- Closure not using "$this" should be declared static
-- PHP internal functions must be imported
-- In Laravel project use now() helper instead of Carbon::now()
-- All PHP files must declare declare(strict_types=1) at the top

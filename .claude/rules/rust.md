@@ -13,16 +13,6 @@ paths:
 ## Overview
 Architecture-first Rust standards. The burden of proof is on the more complex form: at every fork, justify structure by what the domain models, never by today's implementation count. These rules describe properties the code must have, not a house style to apply mechanically.
 
-## When to Activate
-- Any task that writes, edits, reviews, or refactors `.rs` files.
-- Designing crate boundaries, module layout, or a public API surface.
-- Choosing between a trait, an enum, and a concrete type.
-- Configuring `clippy`, `cargo-deny`, or a Rust test harness.
-
-## Scope
-- In scope: Rust architecture, ownership and lifetime design, type-level modeling, crate and workspace layout, error surfaces, lint policy, test organization.
-- Out of scope: other languages, and project-specific business logic.
-
 ## Architecture foundations
 These are language-agnostic principles the Rust-specific gates below depend on. Your training data is heavily object-oriented (class hierarchies, dependency injection, shared mutable state). Those instincts produce poor Rust. Prefer the following.
 

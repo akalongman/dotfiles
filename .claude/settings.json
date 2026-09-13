@@ -86,7 +86,7 @@
     "azure@claude-plugins-official": false,
     "php-lsp@claude-plugins-official": true,
     "session-report@claude-plugins-official": true,
-    "skill-creator@claude-plugins-official": true
+    "skill-creator@claude-plugins-official": false
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {
@@ -119,5 +119,12 @@
   "showTurnDuration": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": false,
-  "skipAutoPermissionPrompt": true
+  "skipAutoPermissionPrompt": true,
+  "skillOverrides": {
+    "app-socratic-probe": "off",
+    "rabbitmq-guidelines": "off",
+    "improve-codebase-architecture": "off",
+    "to-issues": "off",
+    "to-prd": "off"
+  }
 }

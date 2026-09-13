@@ -9,22 +9,6 @@ Rules for how to work with git branches, commits, and the GitHub/GitLab
 forges. This file loads in every session; `~/.claude/CLAUDE.md` carries only a
 one-line summary of the branch guardrail under its Stops section.
 
-## When to Activate
-
-Use this file when:
-
-- Creating, switching, renaming, or deleting a git branch.
-- Committing or pushing, or being asked for a commit message.
-- Opening, updating, or reviewing a pull request or merge request.
-- Writing any PR, MR, issue, or commit description.
-
-## Scope
-
-- In scope: branch workflow, commit conventions, commit-message style, and
-  GitHub/GitLab tooling and PR conventions.
-- Out of scope: language-specific coding standards (see the matching rule file)
-  and spec-workflow gates (see `openspec.md`).
-
 ## Branches
 
 Never create, switch, or rename a git branch on your own initiative. This
