@@ -6,9 +6,8 @@ description: Apply git and forge (GitHub/GitLab) workflow rules for any task tha
 # Git & Forge Workflow Guidelines
 
 Rules for how to work with git branches, commits, and the GitHub/GitLab
-forges. The single non-negotiable branch guardrail also lives inline in
-`~/.claude/CLAUDE.md` so it stays in context even when this file has not been
-loaded; the rest of the detail lives here.
+forges. This file loads in every session; `~/.claude/CLAUDE.md` carries only a
+one-line summary of the branch guardrail under its Stops section.
 
 ## When to Activate
 

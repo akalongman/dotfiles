@@ -13,7 +13,7 @@ cluster them into recurring patterns, and propose edits to `~/.claude/CLAUDE.md`
 `~/.claude/rules/*.md`, skills, hooks, or memories. Read-only until the final
 phase; nothing is written without explicit user approval.
 
-Not for in-session reflection (the Self-improvement section of CLAUDE.md handles
+Not for in-session reflection (the Self-improvement workflow in CLAUDE.md handles
 the current session at the moment of correction) and not for project-docs
 learnings (that is `/learn`).
 
@@ -119,7 +119,7 @@ rule or knowledge was missing or ignored.
 
 ## Phase 5: Route each pattern
 
-Use the decision tree from the Self-improvement section of CLAUDE.md: user- or
+Use the decision tree from the Self-improvement workflow in CLAUDE.md: user- or
 project-specific goes to a memory file; a cross-project rule goes to CLAUDE.md or
 the matching `~/.claude/rules/*.md`; a repeatable workflow becomes a skill or
 hook. Read the target file first. If the rule already exists and was violated
