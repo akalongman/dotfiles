@@ -24,7 +24,7 @@ Do not re-derive or contradict the constitution inside `openspec/` files.
 
 ## CLAUDE.md uses Progressive Disclosure
 
-CLAUDE.md is a thin orientation layer, not a rule encyclopedia. Most rule detail belongs in capability specs under `openspec/specs/<capability>/spec.md`. CLAUDE.md points to those specs from a single capability-spec table; the detail lives in the spec.
+CLAUDE.md is a thin orientation layer, not a rule encyclopedia. Most rule detail belongs in capability specs under `openspec/specs/<capability>/spec.md`. CLAUDE.md points to those specs from a single dictionary table; the detail lives in the spec.
 
 **Stays inline in CLAUDE.md:**
 
@@ -34,7 +34,7 @@ CLAUDE.md is a thin orientation layer, not a rule encyclopedia. Most rule detail
 - Operational essentials a developer types or pastes: command list (`composer test`, `composer phpcs`, etc.), test auth-helper code blocks, response-assertion enumerations.
 - Domain Concepts intros: 1-2 lines per entity, NOT the detailed behavior.
 - Code Style + Commands block.
-- The capability-spec table itself (the index that points to every spec).
+- The dictionary table itself (the index that points to every spec, capability, and domain term).
 
 **Moves to a capability spec:**
 
@@ -44,21 +44,22 @@ CLAUDE.md is a thin orientation layer, not a rule encyclopedia. Most rule detail
 - Verification protocols (e.g. "run `composer docs` and treat as blocking").
 - Anything that needs WHEN/THEN scenarios to fully describe the contract.
 
-**Capability-spec table format** in CLAUDE.md:
+**Dictionary table format** in CLAUDE.md:
 
 ```markdown
-## Capability specs (Progressive Disclosure)
+## Dictionary
 
 For canonical detail, read the cited capability spec under `openspec/specs/<name>/spec.md`. Rules below are summaries; the spec is the source of truth.
 
-| Topic | Spec | Rule summary |
+| Term or topic | Where | One-line rule |
 |---|---|---|
-| <Topic name> | `<spec-name>` | <one-line summary capturing the most-cited rule and any gotcha keyword> |
+| <Topic name> | `<capability>` | <one-line summary capturing the most-cited rule and any gotcha keyword> |
+| <Domain term> | `<capability>` (no spec yet) | <the one rule a reader must know about this entity> |
 ```
 
-The summary should be self-contained enough that a reader who never opens the spec still grasps the headline rule. The spec carries the detail, scenarios, and rationale.
+"Where" is the capability name from the map in `openspec/config.yaml`, marked "no spec yet" when that capability has no `spec.md` so far. A row exists because there is a rule, not because there is a file. The rule column stays under about 40 words and must be self-contained enough that a reader who never opens the spec still grasps the headline rule. The spec carries the detail, scenarios, and rationale. The `app-compact-constitution` skill audits and maintains this table.
 
-**Extracting existing inline convention is fine.** The "do not stub empty specs" rule (in Bootstrapping below) is specifically about empty stubs that force artificial `ADDED Requirements` deltas. Extracting an existing body of inline CLAUDE.md convention into a born-populated spec is a real change with real content — run a normal `/opsx:propose` → `/opsx:apply` → `/opsx:archive` cycle for the extraction. If you find yourself about to add 5+ lines of rule detail to CLAUDE.md, that's a signal to extract instead: add a row to the capability-spec table and put the detail in a new (or existing) spec.
+**Extracting existing inline convention is fine.** The "do not stub empty specs" rule (in Bootstrapping below) is specifically about empty stubs that force artificial `ADDED Requirements` deltas. Extracting an existing body of inline CLAUDE.md convention into a born-populated spec is a real change with real content — run a normal `/opsx:propose` → `/opsx:apply` → `/opsx:archive` cycle for the extraction. If you find yourself about to add 5+ lines of rule detail to CLAUDE.md, that's a signal to extract instead: add a row to the dictionary table and put the detail in a new (or existing) spec.
 
 ## What belongs in `openspec/config.yaml`
 
