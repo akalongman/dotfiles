@@ -44,6 +44,10 @@ export ANDROID_HOME="/opt/google/android/sdk"
 # NVM (sourcing of nvm.sh stays in .bashrc; only the dir var lives here)
 export NVM_DIR="$HOME/.nvm"
 
+# AWS CLI: keep `aws login` session tokens (refresh token included) in a local
+# cache rather than under ~/.aws, which is synced across machines
+export AWS_LOGIN_CACHE_DIRECTORY="$HOME/.cache/aws/login"
+
 # PATH (idempotent helpers; safe to source this file multiple times)
 __prepend_path() {
     case ":$PATH:" in
