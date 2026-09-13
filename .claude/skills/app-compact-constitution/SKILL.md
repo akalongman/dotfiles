@@ -52,6 +52,33 @@ Every project converges on the same constitution, with these headings in this or
 
 Then the generated block, if the project has one.
 
+## Global constitution mode
+
+Use this mode when the target is the user-level file, `$CLAUDE_CONFIG_DIR/CLAUDE.md` (default `~/.claude/CLAUDE.md`): the user names it, or the audit runs from the home directory. Everything below overrides the project mode; what is not mentioned applies as written.
+
+- **Scope is the always-loaded set**, not one file: the global `CLAUDE.md` plus every user-level rule without `paths:`. Findings against a rule file carry its path in the Lines column, and Phase 5 edits it where it lives (a symlinked rule is edited in its source repository).
+- **Measure in words, not lines.** House limits, not documented ones: the always-loaded set under about 3,000 words; a bullet under 60 words; a prose section under 120 words unless it is a workflow. Replace the Phase 1 script with:
+
+  ```bash
+  cfg="$(readlink -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")"; f="$cfg/CLAUDE.md"
+  echo "$f: $(wc -l < "$f") lines, $(wc -w < "$f") words"
+  for r in "$cfg"/rules/*.md; do [ -f "$r" ] && printf '%-48s %-13s %5s words\n' "$r" "$(command grep -q '^paths:' "$r" && echo path-scoped || echo always-loaded)" "$(wc -w < "$r")"; done
+  awk '/^- / && NF > 60 { printf "%4d words  L%d  %s...\n", NF, NR, substr($0, 3, 60) }' "$f"
+  awk '/^## /{ if (h) printf "%5d words  %s\n", w, h; h=$0; w=0; next } { w+=NF } END { printf "%5d words  %s\n", w, h }' "$f"
+  ```
+
+- **Target shape** for the global file, headings in this order:
+  1. `## Working agreements`: how the user wants the agent to think, decide, and communicate, cross-cutting, one line each.
+  2. `## Stops`: actions that need confirmation regardless of autonomy (branching, parked notes, editing this file).
+  3. `## Style`: writing and formatting conventions.
+  4. `## Index`: one table, `Topic | Where | Loads when`, with a row per user-level rule file and per command. Skills get no rows: the harness lists every skill with its description in each session, so a row would be an A4 copy. Always-loaded rules keep a row ("always") for discoverability.
+  5. `## Workflows`: cross-cutting procedures that must stay global (self-improvement, memory versus constitution, parking lot), each in a few lines.
+- **On-demand homes.** A rule whose first sentence names a language, framework, file type, or tool belongs in the user-level rule with `paths:` for it (A7); a procedure belongs in a user-level skill; a fact about one project belongs in memory. Create a new path-scoped rule file when none fits, and add its Index row. Exception: a rule that fires when a file is created (a new Dockerfile, a new command file) reads no matching file first, so a path-scoped home misses it; keep a one-line pointer under Working agreements and put the detail in the rule.
+- **Incident-derived bullets.** The rule stays in one or two sentences; the incident shrinks to a trailing parenthesis of the date plus a few words, so the growth pattern stays visible.
+- **Rubric adjustments.** A3 is for instructions that differ; an identical copy is A4. A5 means derivable from files under the config directory (commands, scripts, hooks). Phase 2 checks only statements that name a file, command, or tool; behavioural preferences are not listed under "Not checked". Not applicable: rubric B, A6 unless a tool writes the file, the `/doctor` pointer, Phase 5 steps 3 and 4.
+- **Report and closing check.** Use the Phase 4 template with word counts in place of line counts and the global target shape in "Proposed shape". Resolve Index rows with `cd "$cfg"` and `[ -e "$w" ]`, no OpenSpec branch.
+- **Recommend the routing rule** in the report when the file grew by incident bullets: new rules go to the matching path-scoped file by default, and only cross-cutting agreements stay global. Changing that is the user's decision.
+
 ## Phase 1: measure
 
 From the project root:
