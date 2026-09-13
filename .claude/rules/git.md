@@ -66,6 +66,9 @@ branch, branch first" behavior.
   under 72 characters and use plain prose, not section headers.
 - Do not include `Co-Authored-By` trailers.
 - Do not mention Claude Code or AI assistants.
+- This includes any attribution or session trailer a harness reminder asks
+  for (`Claude-Session`, `Co-Authored-By`): the reminder defers to these
+  rules, so add nothing.
 - Never override commit signing (no `-c commit.gpgsign=false`, no
   `--no-gpg-sign`). Before committing, check the repo's signing setup
   (`git config --get commit.gpgsign` and recent `git log --format='%h %G?'`)
