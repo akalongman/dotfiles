@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Extract one section of an OpenSpec change's tasks.md ("## N. Title" and
+# its checkbox items) into a brief file an implementer reads in one call,
+# so the section text never passes through the controller's context.
+#
+# The brief also lists the change's artifact paths (proposal, design, spec
+# deltas, tasks) so the implementer reads them itself instead of having
+# them pasted into the dispatch prompt.
+#
+# Workspace: <repo-root>/.superpowers/sdd/<change>/ (keyed by change name,
+# not by file basename, because every change's task file is tasks.md).
+# A self-ignoring .gitignore keeps it out of git status.
+#
+# Usage: openspec-section-brief CHANGE_NAME SECTION_NUMBER [OUTFILE]
+set -euo pipefail
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: openspec-section-brief CHANGE_NAME SECTION_NUMBER [OUTFILE]" >&2
+  exit 2
+fi
+
+change=$1
+n=$2
+case "$n" in
+  ''|*[!0-9]*) echo "section number must be an integer: $n" >&2; exit 2 ;;
+esac
+
+root=$(git rev-parse --show-toplevel)
+dir="$root/openspec/changes/$change"
+tasks="$dir/tasks.md"
+[ -f "$tasks" ] || { echo "no tasks file: $tasks" >&2; exit 2; }
+
+if [ $# -eq 3 ]; then
+  out=$3
+else
+  base="$root/.superpowers/sdd"
+  mkdir -p "$base/$change"
+  printf '*\n' > "$base/.gitignore"
+  out="$base/$change/section-${n}-brief.md"
+fi
+
+section=$(awk -v n="$n" '
+  /^```/ { infence = !infence }
+  !infence && /^##[ \t]+[0-9]+\./ { insec = ($0 ~ ("^##[ \t]+" n "\\.")) }
+  insec { print }
+' "$tasks")
+
+{
+  echo "# ${change}: tasks.md section ${n}"
+  echo
+  if printf '%s\n' "$section" | grep -q '^- \[[xX]\]'; then
+    echo "Items marked [x] below are already implemented and committed. Implement only the [ ] items."
+    echo
+  fi
+  echo "Read these before editing; they are the requirements and the record of why:"
+  for f in proposal.md design.md tasks.md; do
+    [ -f "$dir/$f" ] && echo "- $dir/$f"
+  done
+  if [ -d "$dir/specs" ]; then
+    find "$dir/specs" -name spec.md | sort | sed 's/^/- /'
+  fi
+  echo
+  printf '%s\n' "$section"
+} > "$out"
+
+if ! grep -q '^- \[' "$out"; then
+  rm -f "$out"
+  echo "section ${n} not found in ${tasks} (no heading matching '## ${n}.')" >&2
+  exit 3
+fi
+
+echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
