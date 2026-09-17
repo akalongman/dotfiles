@@ -83,24 +83,31 @@ if git -C "$DIR" rev-parse --git-dir > /dev/null 2>&1; then
     fi
 fi
 
-CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; MAGENTA='\033[35m'; RESET='\033[0m'
+CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; MAGENTA='\033[35m'; BLUE='\033[34m'; RESET='\033[0m'
 
 # Account badge, always shown. Reads the active slot's cached identity so a
-# /login in the wrong terminal is visible immediately (R6 in the dual-account
-# design). CLAUDE_CONFIG_DIR is exported by the claude2 wrapper; unset means
+# /login in the wrong terminal is visible immediately (R6 in the multi-account
+# design). CLAUDE_CONFIG_DIR is exported by the claude<N> wrappers; unset means
 # the default slot, whose state file is the legacy ~/.claude.json (a config
-# dir relocates it to $CLAUDE_CONFIG_DIR/.claude.json). Color marks the slot:
-# green = default, magenta = secondary.
+# dir relocates it to $CLAUDE_CONFIG_DIR/.claude.json). Color marks the slot
+# by the config dir's name: ~/.claude green, ~/.claude2 magenta, ~/.claude3
+# blue, anything else yellow so an unexpected dir stands out. The badge shows
+# the full address: accounts can share a local part across domains.
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
     ACCT_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
-    ACCT_COLOR="$MAGENTA"
+    case "$(basename "$CLAUDE_CONFIG_DIR")" in
+        .claude)  ACCT_COLOR="$GREEN" ;;
+        .claude2) ACCT_COLOR="$MAGENTA" ;;
+        .claude3) ACCT_COLOR="$BLUE" ;;
+        *)        ACCT_COLOR="$YELLOW" ;;
+    esac
 else
     ACCT_FILE="$HOME/.claude.json"
     ACCT_COLOR="$GREEN"
 fi
 ACCT_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$ACCT_FILE" 2>/dev/null)
 if [ -n "$ACCT_EMAIL" ]; then
-    ACCT_SEG="${ACCT_COLOR}[👤 ${ACCT_EMAIL%%@*}]${RESET} "
+    ACCT_SEG="${ACCT_COLOR}[👤 ${ACCT_EMAIL}]${RESET} "
 else
     ACCT_SEG="${RED}[👤 not logged in]${RESET} "
 fi
