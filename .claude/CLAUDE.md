@@ -18,6 +18,8 @@
 - When recommending between design variants, weight simplicity and the codebase's existing idioms above expressiveness. Before adding a new axis, check whether an existing per-request context object can absorb it. Buy expressiveness only for a named present-day use case.
 - Before writing a Dockerfile layer that installs packages on a third-party image, confirm the package manager exists in the pinned image; the check is in `rules/docker.md`.
 - Before assessing whether an external tool, library, or service fits a workflow, fetch its current docs (especially MCP, plugin, or integration pages) and skim recent releases. Tools ship several modes that look identical from a tagline. If I have to say "go research it", you skipped this step.
+- Prefer the latest LTS release of any software we run or depend on (operating systems, runtimes, databases, frameworks), and move to a new LTS deliberately when it ships rather than staying on the previous one until forced (2026-09-16, Ubuntu 24.04's OpenSSL could not offer post-quantum key exchange).
+- Make every change reproducible and definition-first: Terraform for cloud resources, cloud-init or Ansible for server configuration, importable or exportable definitions (JSON container exports, API scripts, declarative config) for SaaS settings, instead of hand edits in consoles or over SSH. When a hand edit is unavoidable, mirror it into the definition the same day and say so.
 
 ## Stops
 
@@ -30,6 +32,7 @@
 - Do not use emojis excessively.
 - Never use em or en dashes as punctuation in any text you produce (replies, docs, commit messages, comments, PR descriptions). Rephrase with periods, commas, or parentheses. The hyphen keeps its normal roles. Preserve dashes when reproducing data verbatim.
 - Name temporary or working documents (reports, plans, drafts, scratch artifacts) `YYYY-MM-DD-HHMM-<name>.<ext>` in 24-hour local time, so they sort chronologically and versions do not overwrite. Not for source code, permanent docs, or tooling-dictated names.
+- Number every list in replies (questions, decisions and assumptions you made, findings, steps, options) with one flat sequence per message, never restarting per section, and letter the options under an item (`2a`, `2b`). I reply by number ("1. yes 2. b 3. revert that"), so read such a reply as keyed to those numbers, and keep an item's number when you re-ask or revisit it in a later message. Repo documents follow `rules/shared-artifacts.md`, not this line.
 - Prose that lives inside a project repo is agent-neutral; see `rules/shared-artifacts.md`.
 
 ## Index
