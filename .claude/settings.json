@@ -10,8 +10,13 @@
   "permissions": {
     "defaultMode": "auto"
   },
-  "model": "opus",
+  "model": "fable",
   "enableAllProjectMcpServers": true,
+  "skillOverrides": {
+    "app-rabbitmq-guidelines": "user-invocable-only",
+    "app-socratic-probe": "off",
+    "diagnosing-bugs": "user-invocable-only"
+  },
   "hooks": {
     "Notification": [
       {
@@ -119,12 +124,5 @@
   "showTurnDuration": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": false,
-  "skipAutoPermissionPrompt": true,
-  "skillOverrides": {
-    "app-socratic-probe": "off",
-    "rabbitmq-guidelines": "off",
-    "improve-codebase-architecture": "off",
-    "to-issues": "off",
-    "to-prd": "off"
-  }
+  "skipAutoPermissionPrompt": true
 }

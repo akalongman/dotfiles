@@ -24,6 +24,7 @@
 !/.vimrc
 !/README.md
 !/.claude
+!/.agents
 !/.config
 !/.gemini
 !/.github
@@ -77,6 +78,11 @@ __pycache__/
 **/.pgpass
 **/gpg-agent.conf
 **/private-keys-v1.d/
+
+# ~/.agents tree: only the skills.sh lockfile (install definition); the
+# skills themselves are copied into ~/.claude/skills and tracked there.
+.agents/*
+!.agents/.skill-lock.json
 
 # ~/.claude tree: allowlist what we explicitly track, ignore everything
 # else. Prevents Claude Code's volatile state (projects/, file-history/,

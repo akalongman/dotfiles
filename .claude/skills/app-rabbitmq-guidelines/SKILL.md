@@ -1,5 +1,5 @@
 ---
-name: rabbitmq-guidelines
+name: app-rabbitmq-guidelines
 description: Use when publishing to or consuming from RabbitMQ in any language, designing exchange/queue/binding topology, choosing queue types, operating or monitoring a broker or cluster, scripting against rabbitmqadmin, or diagnosing delivery loss, unbounded memory growth, consumer stalls, or partition behavior.
 ---
 
