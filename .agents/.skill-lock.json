@@ -26,9 +26,10 @@
       "sourceType": "github",
       "sourceUrl": "https://github.com/blader/humanizer.git",
       "skillPath": "SKILL.md",
-      "skillFolderHash": "523374dee72d67c7b2b5f858ea0094ffda49c3ac",
+      "skillFolderHash": "9862685f575c65a8247f90369951df1b3416e3d6",
+      "pluginName": "humanizer",
       "installedAt": "2026-07-27T09:25:13.204Z",
-      "updatedAt": "2026-07-27T09:25:13.204Z"
+      "updatedAt": "2026-09-18T10:21:10.708Z"
     },
     "grilling": {
       "source": "mattpocock/skills",
