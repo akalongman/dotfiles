@@ -38,6 +38,14 @@ if [ ! -d "$HOME/.tmux/plugins/tpm" ]; then
         || echo "TPM clone skipped (offline?)."
 fi
 
+# nvm reads $NVM_DIR/default-packages to reinstall global npm packages on
+# every `nvm install`. ~/.nvm is nvm's own git clone, so yadm cannot track a
+# file inside it; the tracked source lives in .config/nvm and is linked in.
+# (`corepack enable` still has to run once per new Node version for yarn/pnpm.)
+if [ -d "$HOME/.nvm" ] && [ ! -e "$HOME/.nvm/default-packages" ]; then
+    ln -s "$HOME/.config/nvm/default-packages" "$HOME/.nvm/default-packages"
+fi
+
 # Re-apply the GNOME Terminal Tokyo Night theme (no-op when off GNOME/dconf).
 if [ -x "$HOME/bin/gnome-terminal-tokyonight.sh" ]; then
     "$HOME/bin/gnome-terminal-tokyonight.sh" || echo "GNOME Terminal theme step skipped."
