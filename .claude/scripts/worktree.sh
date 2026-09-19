@@ -77,6 +77,41 @@ wt_detect_primitive() { # dir target -> composer|yarn|pnpm|npm|""
     printf ''
 }
 
+wt_target_commands() { # dir target -> the composer target's plain shell entries, one per line
+    jq -r --arg t "$2" '.scripts[$t] // empty | if type == "array" then .[] else . end' \
+        "$1/composer.json" 2>/dev/null
+}
+
+wt_preflight_tools() { # dir target -> 0 if every tool the target invokes is on PATH
+    # Runs before anything is created: an nvm Node bump drops per-version
+    # globals (yarn, pnpm) and the setup script otherwise dies with 127 only
+    # after `composer install` has already spent minutes.
+    local dir="$1" target="$2" pm missing='' line tool
+    pm="$(wt_detect_primitive "$dir" "$target")"
+    case "$pm" in
+        composer)
+            if ! [ -x "$dir/bin/composer" ] && ! command -v composer >/dev/null 2>&1; then
+                missing="composer"
+            fi
+            while IFS= read -r line; do
+                case "$line" in ''|@*|*'::'*) continue ;; esac
+                tool="${line%% *}"
+                case "$tool" in *=*) continue ;; esac
+                command -v "$tool" >/dev/null 2>&1 && continue
+                case " $missing " in *" $tool "*) ;; *) missing="$missing $tool" ;; esac
+            done < <(wt_target_commands "$dir" "$target")
+            ;;
+        yarn|pnpm|npm)
+            command -v "$pm" >/dev/null 2>&1 || missing="$pm"
+            ;;
+    esac
+    missing="${missing# }"
+    [ -z "$missing" ] && return 0
+    wt_fail "$target needs tools missing from PATH: $missing"
+    wt_info "If nvm just switched Node versions: . ~/.nvm/nvm.sh && corepack enable && npm i -g <globals>"
+    return 1
+}
+
 wt_run_target() { # dir target -> exit code of the target (0 if none)
     local dir="$1" target="$2" pm
     pm="$(wt_detect_primitive "$dir" "$target")"
@@ -147,9 +182,14 @@ wt_default_branch() { # repo_dir -> base ref
     printf '%s' "$ref"
 }
 
-wt_rollback() { # repo_dir worktree_dir
+wt_rollback() { # repo_dir worktree_dir [created_branch]
     wt_warn "Rolling back $2"
     git -C "$1" worktree remove --force "$2" 2>/dev/null || rm -rf "$2"
+    # A branch this run minted with `worktree add -b` would otherwise outlive
+    # the worktree and block the next attempt under the same name.
+    if [ -n "${3:-}" ]; then
+        git -C "$1" branch -D "$3" >/dev/null 2>&1 && wt_warn "Deleted branch $3 (created by this run)"
+    fi
 }
 
 wt_create() { # name -> prints worktree path on stdout
@@ -175,11 +215,15 @@ wt_create() { # name -> prints worktree path on stdout
 
     if [ -e "$wt_path" ]; then wt_fail "$wt_path already exists"; return 1; fi
 
+    wt_preflight_tools "$repo_dir" worktree:setup || return 1
+
     wt_phase "Creating git worktree"
+    local created_branch=''
     if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch"; then
         git -C "$repo_dir" worktree add "$wt_path" "$branch" >&2 || { wt_fail "git worktree add failed"; return 1; }
     else
         git -C "$repo_dir" worktree add -b "$branch" "$wt_path" "$base" >&2 || { wt_fail "git worktree add failed"; return 1; }
+        created_branch="$branch"
     fi
 
     wt_apply_include "$repo_dir" "$wt_path"
@@ -190,12 +234,12 @@ wt_create() { # name -> prints worktree path on stdout
     else
         wt_phase "Running worktree:setup ($primitive)"
         if ! wt_run_target "$wt_path" worktree:setup >&2; then
-            wt_fail "worktree:setup failed"; wt_rollback "$repo_dir" "$wt_path"; return 1
+            wt_fail "worktree:setup failed"; wt_rollback "$repo_dir" "$wt_path" "$created_branch"; return 1
         fi
     fi
 
     if [ ! -d "$wt_path" ] || [ ! -e "$wt_path/.git" ]; then
-        wt_fail "postflight: worktree missing after setup"; wt_rollback "$repo_dir" "$wt_path"; return 1
+        wt_fail "postflight: worktree missing after setup"; wt_rollback "$repo_dir" "$wt_path" "$created_branch"; return 1
     fi
 
     wt_ok "Worktree ready at $wt_path"
