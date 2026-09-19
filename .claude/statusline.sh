@@ -121,7 +121,17 @@ FILLED=$((PCT / 10)); EMPTY=$((10 - FILLED))
 printf -v FILL "%${FILLED}s"; printf -v PAD "%${EMPTY}s"
 BAR="${FILL// /█}${PAD// /░}"
 
-MINS=$((DURATION_MS / 60000)); SECS=$(((DURATION_MS % 60000) / 1000))
+# Session wall clock on a unit ladder. Seconds stop carrying information once
+# a session has run for an hour, and minutes stop once it has run for a day,
+# so each step drops the smallest unit rather than printing 312m or 1874m.
+DUR_S=$((DURATION_MS / 1000))
+if [ "$DUR_S" -ge 86400 ]; then
+    printf -v DURATION '%dd %dh' "$((DUR_S / 86400))" "$(( (DUR_S % 86400) / 3600 ))"
+elif [ "$DUR_S" -ge 3600 ]; then
+    printf -v DURATION '%dh %dm' "$((DUR_S / 3600))" "$(( (DUR_S % 3600) / 60 ))"
+else
+    printf -v DURATION '%dm %ds' "$((DUR_S / 60))" "$((DUR_S % 60))"
+fi
 
 url_encode_path() {
     local LC_ALL=C string="$1" out='' i char dec hex
@@ -178,20 +188,65 @@ rl_color() {
     else printf '%s' "$GREEN"; fi
 }
 
-RL_SEG=""
-if [ -n "$RL_5H" ] || [ -n "$RL_7D" ]; then
-    RL_WHEN=""
-    if [ -n "$RL_5H_RESET" ]; then
-        RL_LEFT=$(( RL_5H_RESET - $(date +%s) ))
-        [ "$RL_LEFT" -lt 0 ] && RL_LEFT=0
-        printf -v RL_WHEN ' (↻ %dh%02dm)' "$(( RL_LEFT / 3600 ))" "$(( (RL_LEFT % 3600) / 60 ))"
-    fi
-    RL_7D_WHEN=""
-    if [ -n "$RL_7D_RESET" ]; then
-        printf -v RL_7D_WHEN ' (↻ %s)' "$(date -d "@$RL_7D_RESET" '+%d %b %H:%M')"
-    fi
-    RL_SEG=" 🚦 5h $(rl_color "${RL_5H:-0}")${RL_5H:-0}%${RESET}${RL_WHEN} · 7d $(rl_color "${RL_7D:-0}")${RL_7D:-0}%${RESET}${RL_7D_WHEN} |"
+# Per-model weekly windows (a Fable cap today, whatever the server scopes
+# later). The status line payload has no such bucket as of 2.1.278, so a helper
+# caches them from the usage endpoint out of band and this reads the cache;
+# see statusline-usage.sh for why that fetch is throttled. A future CLI that
+# ships rate_limits.model_scoped wins, and the helper is never called.
+#
+# Either source yields four fields: name, percent, reset epoch, and 1 when
+# the number is too old to pass off as live. Payload rows are current by
+# definition, so they get 0.
+MODEL_ROWS=$(echo "$input" | jq -r '
+    (.rate_limits.model_scoped // [])[]
+    | select(.utilization != null)
+    | [.display_name, (.utilization | floor), (.resets_at // 0), 0] | @tsv')
+if [ -z "$MODEL_ROWS" ] && [ -x "$HOME/.claude/statusline-usage.sh" ]; then
+    MODEL_ROWS=$("$HOME/.claude/statusline-usage.sh" read 2>/dev/null)
 fi
 
-#echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% | ${YELLOW}${COST_FMT}${RESET} | ⏱️ ${MINS}m ${SECS}s"
-echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% | 🎨 ${YELLOW}${OUTPUT_STYLE}${RESET} |${EFFORT_SEG}${RL_SEG} ⏱️ ${MINS}m ${SECS}s"
+RL_PARTS=()
+while IFS=$'\t' read -r M_NAME M_PCT M_RESET M_STALE; do
+    [ -n "$M_NAME" ] || continue
+    [[ $M_PCT =~ ^[0-9]+$ ]] || continue
+    # The cache stores an epoch; the payload branch would carry ISO 8601, so
+    # anything non-numeric goes through date rather than being trusted as one.
+    [[ $M_RESET =~ ^[0-9]+$ ]] || M_RESET=$(date -d "$M_RESET" +%s 2>/dev/null || echo 0)
+    M_WHEN=""
+    # A scoped week ends when the all-model week does, so the timestamp is
+    # printed only when it actually differs and carries information.
+    if [ "$M_RESET" != "0" ] && [ "$M_RESET" != "$RL_7D_RESET" ]; then
+        printf -v M_WHEN ' (↻ %s)' "$(date -d "@$M_RESET" '+%d %b %H:%M')"
+    fi
+    # Trailing ~ reads as "about": these windows come from a cache that can
+    # only refresh as often as a stingy endpoint allows, and a number nobody
+    # can date is worse than one openly marked as approximate.
+    M_AGED=""
+    [ "${M_STALE:-0}" = "1" ] && M_AGED="~"
+    RL_PARTS+=("${M_NAME} $(rl_color "$M_PCT")${M_PCT}%${M_AGED}${RESET}${M_WHEN}")
+done <<< "$MODEL_ROWS"
+
+RL_SEG=""
+if [ -n "$RL_5H" ] || [ -n "$RL_7D" ] || [ ${#RL_PARTS[@]} -gt 0 ]; then
+    if [ -n "$RL_5H" ] || [ -n "$RL_7D" ]; then
+        RL_WHEN=""
+        if [ -n "$RL_5H_RESET" ]; then
+            RL_LEFT=$(( RL_5H_RESET - $(date +%s) ))
+            [ "$RL_LEFT" -lt 0 ] && RL_LEFT=0
+            printf -v RL_WHEN ' (↻ %dh%02dm)' "$(( RL_LEFT / 3600 ))" "$(( (RL_LEFT % 3600) / 60 ))"
+        fi
+        RL_7D_WHEN=""
+        if [ -n "$RL_7D_RESET" ]; then
+            printf -v RL_7D_WHEN ' (↻ %s)' "$(date -d "@$RL_7D_RESET" '+%d %b %H:%M')"
+        fi
+        # The plan windows lead; scoped model windows follow in server order.
+        RL_PARTS=("5h $(rl_color "${RL_5H:-0}")${RL_5H:-0}%${RESET}${RL_WHEN}" \
+                  "7d $(rl_color "${RL_7D:-0}")${RL_7D:-0}%${RESET}${RL_7D_WHEN}" \
+                  "${RL_PARTS[@]}")
+    fi
+    RL_JOINED=$(printf ' · %s' "${RL_PARTS[@]}")
+    RL_SEG=" 🚦${RL_JOINED# ·} |"
+fi
+
+#echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% | ${YELLOW}${COST_FMT}${RESET} | ⏱️ ${DURATION}"
+echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% | 🎨 ${YELLOW}${OUTPUT_STYLE}${RESET} |${EFFORT_SEG}${RL_SEG} ⏱️ ${DURATION}"
