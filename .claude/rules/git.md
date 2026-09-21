@@ -39,6 +39,11 @@ branch, branch first" behavior.
   else is staged. Verify with `git show --stat HEAD` afterwards. If a stray
   file did land and the commit is unpushed, reset and re-stage rather than
   leaving it in history.
+  Exception: a file whose staged blob differs from the working tree on purpose
+  (`~/.claude/settings.json` after `yadm-stage-settings`, which strips the
+  autoMode block) must be committed with a plain `git commit` from the index;
+  the pathspec form commits the working-tree version and bypasses the filtered
+  blob (2026-09-21).
 - Before pushing, inspect what the push will publish (`git log @{u}..` or
   `git log origin/<branch>..HEAD`) and surface any commits beyond the one you
   intended. A push publishes the whole branch, so commits that were already
