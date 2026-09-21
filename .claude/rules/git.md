@@ -63,6 +63,9 @@ branch, branch first" behavior.
 ## GitHub and GitLab
 
 - For anything on GitHub, use the `gh` tool.
+- Edit a PR title or body with `gh api -X PATCH repos/<owner>/<repo>/pulls/<n>`,
+  not `gh pr edit` (it fails on repos with classic project cards), and read the
+  field back before calling it done (2026-09-21).
 - For anything on GitLab, use the `glab` tool.
 - Never mention Claude Code in PR or MR descriptions, PR or MR comments, or
   issue comments.
