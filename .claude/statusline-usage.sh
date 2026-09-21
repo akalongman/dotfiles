@@ -4,12 +4,11 @@
 # Claude Code's status line payload has a rate_limits.model_scoped array, but
 # the CLI fills it only from a successful call to the usage endpoint; windows
 # seeded from response headers carry no limits[], so in practice the payload
-# holds just five_hour and seven_day (checked against 2.1.278 on 2026-09-21,
-# with the endpoint refusing every call for days). A per-model weekly cap, the
-# kind Fable has, appears only in the usage response's limits[] array, as a
-# row with kind "weekly_scoped" and a scope.model.display_name. The flat
-# seven_day_opus and seven_day_sonnet keys beside it are null, so the array is
-# the only source.
+# holds just five_hour and seven_day (checked against 2.1.278 on 2026-09-21).
+# A per-model weekly cap, the kind Fable has, appears only in the usage
+# response's limits[] array, as a row with kind "weekly_scoped" and a
+# scope.model.display_name. The flat seven_day_opus and seven_day_sonnet keys
+# beside it are null, so the array is the only source.
 #
 # Two ways to reach that array, tried cheapest first:
 #
@@ -18,9 +17,11 @@
 #      account. It is only as fresh as the CLI's last endpoint call, though,
 #      and the CLI seeds its own windows from response headers instead, so
 #      this can easily be days old.
-#   2. GET /api/oauth/usage. Authoritative, but the endpoint answers 429 to
-#      barely a dozen calls and stays that way for a long while, so it is
-#      asked at most once a TTL and backs off hard when refused.
+#   2. GET /api/oauth/usage. Authoritative; asked at most once a TTL and
+#      backed off when refused. It answers an unauthenticated request with
+#      429, not 401, so a 429 here is as likely a dropped Authorization
+#      header as a real rate limit (2026-09-21: curl 8.5 silently drops an
+#      unquoted config-file header, and every call had gone out anonymous).
 #
 # Whichever carries the newer data wins, and its age travels with the rows so
 # the status line can mark a stale number rather than passing it off as live.
@@ -130,10 +131,11 @@ endpoint_rows() {
     [ -n "$token" ] || return 2
 
     # The header goes through a config file on stdin, never argv, so the token
-    # stays out of the process list. Unquoted: a curl config value runs to the
-    # end of the line, which sidesteps escaping entirely.
+    # stays out of the process list. The value must be quoted: curl 8.5 warns
+    # about unquoted whitespace and then sends no header at all. OAuth tokens
+    # are base64url, so the quoted form needs no escaping.
     local body
-    body=$(printf 'header = Authorization: Bearer %s\n' "$token" |
+    body=$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
         curl -sS -m 10 --config - \
             -H 'Content-Type: application/json' \
             -H 'anthropic-beta: oauth-2025-04-20' \
