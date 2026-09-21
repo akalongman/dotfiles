@@ -1,12 +1,15 @@
 #!/bin/bash
 # Per-model weekly rate-limit windows for statusline.sh.
 #
-# Claude Code's status line payload carries only the five_hour and seven_day
-# windows (checked against 2.1.278, whose payload is built from exactly those
-# plus spend_limit). A per-model weekly cap, the kind Fable has, appears only
-# in the claude.ai usage response's limits[] array, as a row with kind
-# "weekly_scoped" and a scope.model.display_name. The flat seven_day_opus and
-# seven_day_sonnet keys beside it are null, so the array is the only source.
+# Claude Code's status line payload has a rate_limits.model_scoped array, but
+# the CLI fills it only from a successful call to the usage endpoint; windows
+# seeded from response headers carry no limits[], so in practice the payload
+# holds just five_hour and seven_day (checked against 2.1.278 on 2026-09-21,
+# with the endpoint refusing every call for days). A per-model weekly cap, the
+# kind Fable has, appears only in the usage response's limits[] array, as a
+# row with kind "weekly_scoped" and a scope.model.display_name. The flat
+# seven_day_opus and seven_day_sonnet keys beside it are null, so the array is
+# the only source.
 #
 # Two ways to reach that array, tried cheapest first:
 #
@@ -28,7 +31,11 @@
 #   fetch    refresh unconditionally, ignoring TTL and backoff (for testing)
 #   path     print the cache file
 #
-# Rows are TSV: display name, whole-percent used, reset epoch, data epoch.
+# Cache rows are TSV: display name, whole-percent used, reset epoch, data
+# epoch. read prints display name, percent, reset epoch, stale flag; the
+# percent is "?" on a placeholder row, printed when nothing current is cached
+# and the last attempt failed, so that an outage is visible as unknown rather
+# than indistinguishable from "no scoped cap".
 
 set -uo pipefail
 
@@ -43,6 +50,9 @@ BACKOFF="${CLAUDE_STATUSLINE_USAGE_BACKOFF:-1800}"
 # CLI's own limit for trusting its cached snapshot.
 STALE_AT="${CLAUDE_STATUSLINE_USAGE_STALE_AT:-3600}"
 MAX_AGE="${CLAUDE_STATUSLINE_USAGE_MAX_AGE:-86400}"
+# Name on the placeholder row for a slot whose cache never held a row, so it
+# has no name of its own to keep: the one cap the server scopes today.
+LABEL="${CLAUDE_STATUSLINE_SCOPED_LABEL:-Fable}"
 
 # The config dir picks the account, so everything here is keyed by it: two
 # slots must never read each other's windows. Unset means the default slot,
@@ -58,9 +68,10 @@ fi
 
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-statusline"
 CACHE="$CACHE_DIR/$SLOT.tsv"
-# Holds the epoch before which no endpoint call is attempted. Written on every
-# attempt, success or failure, so a 429 or an expired token costs one call per
-# backoff rather than one per status line render.
+# Holds the epoch before which no endpoint call is attempted, then "ok" or
+# "fail" for how the last attempt ended. Written on every attempt, so a 429 or
+# an expired token costs one call per backoff rather than one per status line
+# render, and the verdict is what turns an empty cache into a placeholder.
 DUE="$CACHE_DIR/$SLOT.due"
 LOCK="$CACHE_DIR/$SLOT.lock"
 
@@ -71,12 +82,18 @@ due() {
     # Redirections are applied left to right, so stderr must be silenced
     # before the input redirect that may fail: the shell reports a failed
     # redirect itself, and 2>/dev/null written afterwards comes too late.
-    read -r at 2>/dev/null < "$DUE"
+    read -r at _ 2>/dev/null < "$DUE"
     [[ $at =~ ^[0-9]+$ ]] || return 0
     [ "$EPOCHSECONDS" -ge "$at" ]
 }
 
-set_due() { printf '%s\n' "$(( EPOCHSECONDS + $1 ))" 2>/dev/null > "$DUE"; }
+set_due() { printf '%s %s\n' "$(( EPOCHSECONDS + $1 ))" "${2:-ok}" 2>/dev/null > "$DUE"; }
+
+last_failed() {
+    local at='' why=''
+    read -r at why 2>/dev/null < "$DUE"
+    [ "$why" = "fail" ]
+}
 
 # Pulls the weekly_scoped rows out of a usage response on stdin and stamps
 # them with $1. resets_at is ISO 8601 with a fractional part and a numeric
@@ -109,8 +126,8 @@ endpoint_rows() {
     local token
     token=$(jq -r '.claudeAiOauth.accessToken // empty' "$CFG/.credentials.json" 2>/dev/null)
     # No OAuth token means an API key, Bedrock or Vertex session, which has no
-    # plan windows to ask about.
-    [ -n "$token" ] || return 1
+    # plan windows to ask about. Its own status, since it is not a failure.
+    [ -n "$token" ] || return 2
 
     # The header goes through a config file on stdin, never argv, so the token
     # stays out of the process list. Unquoted: a curl config value runs to the
@@ -159,13 +176,19 @@ do_refresh() {
     # this costs no network at all, and the scarce endpoint budget is left to
     # the CLI, which needs it for the windows the status line already shows.
     if [ "$(( EPOCHSECONDS - at ))" -lt "$TTL" ]; then
-        set_due "$TTL"
-    elif candidate=$(endpoint_rows); then
-        c_at=$(rows_at "$candidate")
-        [ "$c_at" -ge "$at" ] && { rows="$candidate"; at="$c_at"; }
-        set_due "$TTL"
+        set_due "$TTL" ok
     else
-        set_due "$BACKOFF"
+        candidate=$(endpoint_rows)
+        case $? in
+            0)  c_at=$(rows_at "$candidate")
+                [ "$c_at" -ge "$at" ] && { rows="$candidate"; at="$c_at"; }
+                set_due "$TTL" ok ;;
+            # Nothing to ask. Not a failure, so no placeholder either.
+            2)  set_due "$TTL" ok ;;
+            # Refused or unreachable. Marked so read can say so: days of 429
+            # once passed for "no scoped cap" (2026-09-21).
+            *)  set_due "$BACKOFF" fail ;;
+        esac
     fi
 
     # Neither source answered, or both answered with no scoped window at all.
@@ -199,20 +222,28 @@ read_rows() {
     # on an inherited pipe.
     if due; then setsid "$0" refresh </dev/null >/dev/null 2>&1 & fi
 
+    local name pct reset at age shown=0 seen=''
     # Guarded rather than redirecting the loop's stderr: the shell reports a
     # failed redirect itself, before anything inside the loop can silence it.
-    [ -r "$CACHE" ] || return 0
-
-    local name pct reset at age
-    while IFS=$'\t' read -r name pct reset at || [ -n "$name" ]; do
-        [ -n "$name" ] || continue
-        [[ $at =~ ^[0-9]+$ ]] || continue
-        age=$(( EPOCHSECONDS - at ))
-        [ "$age" -lt "$MAX_AGE" ] || continue
-        # Fourth field becomes the staleness flag the status line renders: 0
-        # while the number can be read as current, 1 once it cannot.
-        printf '%s\t%s\t%s\t%s\n' "$name" "$pct" "$reset" "$(( age >= STALE_AT ? 1 : 0 ))"
-    done < "$CACHE"
+    if [ -r "$CACHE" ]; then
+        while IFS=$'\t' read -r name pct reset at || [ -n "$name" ]; do
+            [ -n "$name" ] || continue
+            seen="$name"
+            [[ $at =~ ^[0-9]+$ ]] || continue
+            age=$(( EPOCHSECONDS - at ))
+            [ "$age" -lt "$MAX_AGE" ] || continue
+            # Fourth field becomes the staleness flag the status line renders:
+            # 0 while the number can be read as current, 1 once it cannot.
+            printf '%s\t%s\t%s\t%s\n' "$name" "$pct" "$reset" "$(( age >= STALE_AT ? 1 : 0 ))"
+            shown=1
+        done < "$CACHE"
+    fi
+    # Nothing current and the last attempt failed: a placeholder row, so the
+    # status line can show the window as unknown. It keeps the name the cache
+    # last saw; a slot that never fetched has none and takes the default.
+    if [ "$shown" -eq 0 ] && last_failed; then
+        printf '%s\t?\t0\t1\n' "${seen:-$LABEL}"
+    fi
 }
 
 case "${1:-read}" in

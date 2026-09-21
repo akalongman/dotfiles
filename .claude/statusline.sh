@@ -83,7 +83,7 @@ if git -C "$DIR" rev-parse --git-dir > /dev/null 2>&1; then
     fi
 fi
 
-CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; MAGENTA='\033[35m'; BLUE='\033[34m'; RESET='\033[0m'
+CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; MAGENTA='\033[35m'; BLUE='\033[34m'; DIM='\033[2m'; RESET='\033[0m'
 
 # Account badge, always shown. Reads the active slot's cached identity so a
 # /login in the wrong terminal is visible immediately (R6 in the multi-account
@@ -196,7 +196,8 @@ rl_color() {
 #
 # Either source yields four fields: name, percent, reset epoch, and 1 when
 # the number is too old to pass off as live. Payload rows are current by
-# definition, so they get 0.
+# definition, so they get 0. The helper's percent is "?" when its fetch is
+# failing and nothing current is cached.
 MODEL_ROWS=$(echo "$input" | jq -r '
     (.rate_limits.model_scoped // [])[]
     | select(.utilization != null)
@@ -208,6 +209,9 @@ fi
 RL_PARTS=()
 while IFS=$'\t' read -r M_NAME M_PCT M_RESET M_STALE; do
     [ -n "$M_NAME" ] || continue
+    # Placeholder: shown dim, so an outage reads as unknown rather than as a
+    # cap that does not exist.
+    if [ "$M_PCT" = "?" ]; then RL_PARTS+=("${M_NAME} ${DIM}?${RESET}"); continue; fi
     [[ $M_PCT =~ ^[0-9]+$ ]] || continue
     # The cache stores an epoch; the payload branch would carry ISO 8601, so
     # anything non-numeric goes through date rather than being trusted as one.
