@@ -47,9 +47,6 @@ Why it is the default, not dogma: the framework versions are usually multibyte-s
 - Put methods by visibility from top to bottom: public methods, protected methods and private methods
 
 ## Type Declarations & Docblocks
-- Use typed properties over docblocks
-- Specify return types including `void`
-- Use short nullable syntax: `?Type` not `Type|null`
 - Document iterables with generics:
   ```php
   /** @return Collection<int, User> */
@@ -207,10 +204,6 @@ $failedChecks = $site->checks()->where('status', 'failed')->get();
 ```
 
 **Guidelines:**
-- Don't add comments that describe what the code does - make the code describe itself
-- Short, readable code doesn't need comments explaining it
-- Use descriptive variable names instead of generic names + comments
-- Only add comments when explaining *why* something non-obvious is done, not *what* is being done
 - Never add comments to tests that restate what the test does - the test name should carry that. A non-obvious *why* the name cannot express (for example, why a specific fixture value is pinned) is still allowed, exactly as in the rule above
 
 ## Whitespace
@@ -331,14 +324,6 @@ spec. "Narrows the window" is an honest and useful claim; "closes the race" when
 does not is worse than no claim, because it stops the next reader looking.
 
 ## Quick Reference
-
-### Naming Conventions
-- **Classes**: PascalCase (`UserController`, `OrderStatus`)
-- **Methods/Variables**: camelCase (`getUserName`, `$firstName`)
-- **Routes**: kebab-case (`/open-source`, `/user-profile`)
-- **Config files**: kebab-case (`pdf-generator.php`)
-- **Config keys**: snake_case (`chrome_path`)
-- **Artisan commands**: kebab-case (`php artisan delete-old-records`)
 
 ### File Structure
 - Controllers: plural resource name + `Controller` (`PostsController`)

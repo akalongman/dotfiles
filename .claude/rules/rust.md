@@ -47,6 +47,7 @@ At each architecture fork, pick the correct Rust form. The burden of proof is on
 11. Sealed traits. Is the trait an internal abstraction rather than an extension point? Seal it. Unsealed public traits are a compatibility promise.
 12. Compile-time evaluation. No heap allocation, no runtime dispatch, no I/O? Evaluate at compile time. Push computation as early as possible.
 13. Do not fight the borrow checker. On borrow errors, do not just satisfy it at any cost with a "pragmatic solution" as a crutch. Consider whether refactoring removes the fight entirely.
+14. Module cohesion. A module that mixes pure and effectful code, or imports from many siblings, is a god module. Split it by purity or by domain.
 
 ## Ownership and lifetimes
 1. Own stored data and return values. Accept borrowed inputs (`&str`, `&[T]`, `&Path`) when the function does not need ownership.
@@ -83,27 +84,6 @@ One coherent public error surface per crate. Use `thiserror` for library crates.
 2. Public types must be `Send` unless deliberately thread-local.
 3. Hide `Arc`, `Rc`, `RefCell` behind clean APIs; these are implementation details. `Box<T>` is fine when heap semantics are intentional.
 4. Construction: `new()` when construction is genuinely simple and all params are obvious from context. A builder when construction has staged invariants, orthogonal configuration, or params whose meaning is not obvious from position. Do not count params; ask whether the caller benefits from named, staged construction.
-
-## Review smells
-1. Generic coordinator objects: a struct with vague verb methods (`process`, `handle`, `run`) that owns no real invariant.
-2. Counting impls to decide on traits: the test is domain modeling, not impl count.
-3. A method that ignores `self`: pure namespacing, should be a free function.
-4. Clone laundering: `.clone()` before a closure to silence borrow errors instead of fixing ownership.
-5. `Arc<Mutex<T>>` as architecture: multiple mutex fields, or a mutex in a public signature.
-6. God modules: mixed pure and effectful code, importing from many siblings.
-7. Async coloring: `async fn` with no `.await`, or pure logic trapped inside an async boundary.
-8. Lifetime laundering: `'static` or extra lifetime params to silence the compiler.
-9. Unjustified builders: a builder where `new()` is perfectly clear.
-10. Primitive obsession: `String` where a newtype prevents confusion, `bool` params where an enum clarifies.
-11. Reinventing existing helpers.
-12. Runtime state panic: `panic!("invalid state")` or `unreachable!()` in match arms that should be compile-time impossible via typestate.
-13. Reflexive `Box<dyn Trait>`: dynamic dispatch for a closed set of variants that should be an enum.
-14. Eager collect: `.collect::<Vec<_>>()` inside a function that could return an iterator.
-15. Open traits that should be sealed: a public trait with no intention of downstream impls.
-16. Ad-hoc conversions: `fn to_foo()` or `fn as_bar()` methods instead of `From` or `AsRef` impls.
-17. Missing `#[must_use]`: a `Result`-returning function where silently ignoring the return is a bug.
-18. Deep nesting: needs decomposition or early-exit idioms (`?`, `let-else`, guard clauses), not reformatting.
-19. Qualified-path noise: repeated fully-qualified paths in function bodies instead of module-level imports.
 
 ## Writing habits
 Right fix versus wrong fix for the most common lint failures.

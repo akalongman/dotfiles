@@ -15,7 +15,13 @@
   "skillOverrides": {
     "app-rabbitmq-guidelines": "user-invocable-only",
     "app-socratic-probe": "off",
-    "diagnosing-bugs": "user-invocable-only"
+    "diagnosing-bugs": "user-invocable-only",
+    "app-investigate-incident": "user-invocable-only",
+    "app-pdf-doc": "user-invocable-only",
+    "app-retro": "user-invocable-only",
+    "app-openspec-drift": "user-invocable-only",
+    "app-compact-constitution": "user-invocable-only",
+    "app-review-project": "user-invocable-only"
   },
   "hooks": {
     "Notification": [
@@ -87,10 +93,9 @@
     "superpowers@claude-plugins-official": true,
     "context7@claude-plugins-official": false,
     "phpstorm-plugin@phpstorm-marketplace": true,
-    "security-guidance@claude-plugins-official": true,
+    "security-guidance@claude-plugins-official": false,
     "azure@claude-plugins-official": false,
     "php-lsp@claude-plugins-official": true,
-    "session-report@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": false
   },
   "extraKnownMarketplaces": {

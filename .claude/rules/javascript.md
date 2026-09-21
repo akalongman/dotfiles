@@ -141,6 +141,8 @@ default: {
 7. Absence: pick one representation per context. Use `T | undefined` for optional parameters. When absence carries meaning, prefer a discriminated union (`{ kind: 'found', value: T } | { kind: 'not_found' }`) over `T | null`. Do not mix `T | null | undefined`.
 8. Signatures accept the narrowest useful input and return the widest useful output: `(input: ReadonlyArray<string>) => Map<string, number>`, not `(input: string[]) => any`.
 9. Validate external data (API responses, `localStorage`, URL params, user input) with a schema (for example Zod) at entry points. Inside the validated boundary, trust the types and do not re-validate.
+10. `Object`, `{}`, and `Function` are not types. They are too wide; name the specific shape or signature.
+11. No mutable module-level state (`let` at module scope, exported mutable objects) outside reactive containers.
 
 ### Immutability
 Prefer `readonly` properties, `ReadonlyArray<T>`, and `Readonly<Record<K, V>>` by default. Use mutable types only when in-place mutation is the point.
@@ -161,17 +163,6 @@ Vue note: reactive state (`ref`, `reactive`, `defineModel`, Pinia stores) is mut
 
 ### Functional core, imperative shell (optional pattern)
 Where it fits (libraries, business logic, parsers, state reducers), separate pure logic from side effects. Pure modules export pure functions and types only, with no `document`, `window`, `fetch`, `console.log`, or mutable module-level state, and never import effectful modules. A `src/core/` (pure) and `src/shell/` or `src/app/` (effectful) split makes the boundary enforceable via ESLint `no-restricted-imports`. Treat this as a strong pattern for logic-heavy code, not a mandate for every small app or view component.
-
-### Review smells
-1. `any`, or `Promise<any>`. Use `unknown` and narrow.
-2. `as` mid-logic to silence the compiler instead of fixing the type.
-3. `!` non-null assertion without proof.
-4. Mutable module-level state (`let` at module scope, exported mutable objects) outside reactive containers.
-5. TypeScript `enum` where `as const` or a union fits.
-6. `Object`, `{}`, or `Function` as a type. Too wide; use a specific type.
-7. String-based dispatch (`if (type === 'foo')`) instead of a discriminated union with an exhaustive switch.
-8. Missing return-type annotations on exported functions.
-9. `T | null | undefined` mixing two absence representations in one place.
 
 ### Verification layer mapping
 Use the strongest tool that can express the check. Strongest and most permanent first:

@@ -8,8 +8,6 @@ paths:
 
 # OpenSpec Project Conventions
 
-Apply these rules when a project has an `openspec/` directory.
-
 ## The constitution lives in CLAUDE.md
 
 The project's `CLAUDE.md` is the OpenSpec constitution. It is the single source of truth for:
