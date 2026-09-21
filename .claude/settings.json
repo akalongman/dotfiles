@@ -10,7 +10,7 @@
   "permissions": {
     "defaultMode": "auto"
   },
-  "model": "fable",
+  "model": "opus",
   "enableAllProjectMcpServers": true,
   "skillOverrides": {
     "app-rabbitmq-guidelines": "user-invocable-only",
