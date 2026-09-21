@@ -3,27 +3,47 @@
 # its checkbox items) into a brief file an implementer reads in one call,
 # so the section text never passes through the controller's context.
 #
-# The brief also lists the change's artifact paths (proposal, design, spec
-# deltas, tasks) so the implementer reads them itself instead of having
-# them pasted into the dispatch prompt.
+# The brief lists the change's proposal, design and spec-delta paths so the
+# implementer reads them itself, carries any preamble tasks.md puts above
+# its first section (repo-wide conventions), and then the section itself.
+# tasks.md is not on the reading list: other sections belong to other units.
+#
+# Section boundary (section-span.awk, shared with openspec-section-tick): a section runs
+# from its "## N." heading to the next level-2 heading of any kind outside a
+# code fence, so a trailing "## Notes" or "## Not completed" block never
+# rides into the last section's brief, and a lettered section added
+# mid-change ("## 2b.") is its own unit, requested as SECTION 2b. Verified
+# byte-identical to the old boundary on 2721 of 2732 real sections; the 11
+# differences are leaked text removed. Checkbox items are counted at any
+# indent and never inside a fence.
 #
 # Workspace: <repo-root>/.superpowers/sdd/<change>/ (keyed by change name,
 # not by file basename, because every change's task file is tasks.md).
 # A self-ignoring .gitignore keeps it out of git status.
 #
-# Usage: openspec-section-brief CHANGE_NAME SECTION_NUMBER [OUTFILE]
+# Usage: openspec-section-brief CHANGE_NAME SECTION [OUTFILE]
+#   SECTION is digits with an optional lowercase letter (2, 10, 2b).
+# Exit codes: 2 usage or missing file; 3 no such section heading (stop
+# probing); 4 the section exists but holds no checkbox item outside a fence
+# (skip it, note it in the ledger, continue with the next section). Nothing
+# is written on exit 3 or 4.
 set -euo pipefail
 
+here=$(cd "$(dirname "$0")" && pwd)
+span="$here/section-span.awk"
+[ -f "$span" ] || { echo "missing $span" >&2; exit 2; }
+
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then
-  echo "usage: openspec-section-brief CHANGE_NAME SECTION_NUMBER [OUTFILE]" >&2
+  echo "usage: openspec-section-brief CHANGE_NAME SECTION [OUTFILE]" >&2
   exit 2
 fi
 
 change=$1
 n=$2
-case "$n" in
-  ''|*[!0-9]*) echo "section number must be an integer: $n" >&2; exit 2 ;;
-esac
+[[ $n =~ ^[0-9]+[a-z]?$ ]] || {
+  echo "section must be digits with an optional letter suffix (2, 10, 2b): $n" >&2
+  exit 2
+}
 
 root=$(git rev-parse --show-toplevel)
 dir="$root/openspec/changes/$change"
@@ -39,34 +59,54 @@ else
   out="$base/$change/section-${n}-brief.md"
 fi
 
-section=$(awk -v n="$n" '
+section=$(awk -v n="$n" -v mode=print -f "$span" "$tasks")
+
+if [ -z "$section" ]; then
+  echo "section ${n} not found in ${tasks} (no heading matching '## ${n}.'); stop probing" >&2
+  exit 3
+fi
+
+read -r open closed < <(awk -v n="$n" -v mode=count -f "$span" "$tasks")
+if [ $((open + closed)) -eq 0 ]; then
+  echo "section ${n} in ${tasks} exists but holds no '- [ ]' checkbox items; nothing to dispatch, record it as skipped in the ledger and continue with the next section" >&2
+  exit 4
+fi
+
+# Preamble: everything between the H1 and the first level-2 heading, fences
+# respected. 11 of 469 sectioned tasks.md files carry a preamble, some of it
+# binding ("run tests targeted on the changed files"), which a section
+# extractor would otherwise drop.
+preamble=$(awk '
   /^```/ { infence = !infence }
-  !infence && /^##[ \t]+[0-9]+\./ { insec = ($0 ~ ("^##[ \t]+" n "\\.")) }
-  insec { print }
-' "$tasks")
+  !infence && /^##[ \t]/ { exit }
+  !infence && /^#[ \t]/ { next }
+  { print }
+' "$tasks" | awk 'NF { started = 1 } started { print }')
 
 {
   echo "# ${change}: tasks.md section ${n}"
   echo
-  if printf '%s\n' "$section" | grep -q '^- \[[xX]\]'; then
-    echo "Items marked [x] below are already implemented and committed. Implement only the [ ] items."
+  if [ "$closed" -gt 0 ]; then
+    echo 'Items below not marked [ ] are already done or deferred. Do not redo or revert them; implement only the [ ] items.'
     echo
   fi
   echo "Read these before editing; they are the requirements and the record of why:"
-  for f in proposal.md design.md tasks.md; do
+  for f in proposal.md design.md; do
     [ -f "$dir/$f" ] && echo "- $dir/$f"
   done
   if [ -d "$dir/specs" ]; then
     find "$dir/specs" -name spec.md | sort | sed 's/^/- /'
   fi
   echo
+  if [ -n "$(printf '%s' "$preamble" | tr -d '[:space:]')" ]; then
+    echo "Global constraints from tasks.md (they apply to every unit):"
+    echo
+    printf '%s\n' "$preamble"
+    echo
+  fi
+  echo "Your unit is the section below. Other sections of tasks.md belong to other units: do not implement them, and do not open tasks.md to read them. If the section below conflicts with proposal.md, design.md or a spec, stop and report the conflict instead of resolving it yourself."
+  echo
   printf '%s\n' "$section"
 } > "$out"
 
-if ! grep -q '^- \[' "$out"; then
-  rm -f "$out"
-  echo "section ${n} not found in ${tasks} (no heading matching '## ${n}.')" >&2
-  exit 3
-fi
-
-echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
+echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines, ${open} open items, ${closed} done or deferred"

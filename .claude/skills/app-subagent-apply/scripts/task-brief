@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# This skill's copy of superpowers' subagent-driven-development
+# scripts/task-brief. It exists because the plugin's copy ends a task only
+# at the next "Task <digits>" heading, so every non-task section after a
+# task (Self-review, Final gate) leaks into that task's brief, and "Task 3b"
+# merges into "Task 3" (measured: 72 leaking task runs in 65 of 77 real
+# plans). The plugin file is replaced on plugin update, so it cannot be
+# patched in place; drop this copy once upstream fixes it.
+#
+# Extract one task's full text from an implementation plan into a file the
+# implementer reads in one call, so the task text never passes through the
+# controller's context.
+#
+# Usage: task-brief PLAN_FILE TASK [OUTFILE]
+#   TASK is digits with an optional lowercase letter (3, 12, 3b).
+#   Default OUTFILE: <repo-root>/.superpowers/sdd/<plan-basename>/task-<N>-brief.md,
+#   the directory the sub-skill's sdd-workspace derives; it is created and
+#   gitignored here so this copy needs no sibling script.
+# Exit codes: 2 usage or missing plan; 3 no such task heading (nothing written).
+set -euo pipefail
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: task-brief PLAN_FILE TASK [OUTFILE]" >&2
+  exit 2
+fi
+
+plan=$1
+n=$2
+[ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
+[[ $n =~ ^[0-9]+[a-z]?$ ]] || {
+  echo "task must be digits with an optional letter suffix (3, 12, 3b): $n" >&2
+  exit 2
+}
+
+if [ $# -eq 3 ]; then
+  out=$3
+else
+  root=$(git rev-parse --show-toplevel)
+  slug=$(basename "$plan" .md)
+  base="$root/.superpowers/sdd"
+  mkdir -p "$base/$slug"
+  printf '*\n' > "$base/.gitignore"
+  out="$base/$slug/task-${n}-brief.md"
+fi
+
+# A task runs from its "Task N" heading (any level) to the next heading of
+# level 2 or deeper that is not deeper than the task heading, skipping
+# headings inside ``` or ~~~ fences. "Task 3" must not match "Task 3b" or
+# "Task 30". Level-1 lines never end a task: inside indented code blocks
+# they are shell comments (6 real task runs would be truncated), and a real
+# level-1 heading never follows a task. Validated: 619 of 619 tasks in the
+# 77 real plans match the reference parse.
+awk -v n="$n" '
+  /^(```|~~~)/ { infence = !infence }
+  !infence && /^##+[ \t]/ {
+    match($0, /^#+/); lvl = RLENGTH
+    if ($0 ~ /^#+[ \t]+Task[ \t]+[0-9]+/) {
+      intask = ($0 ~ ("^#+[ \t]+Task[ \t]+" n "([^0-9A-Za-z]|$)"))
+      tasklvl = lvl
+    } else if (intask && lvl <= tasklvl) {
+      intask = 0
+    }
+  }
+  intask { print }
+' "$plan" > "$out"
+
+if [ ! -s "$out" ]; then
+  rm -f "$out"
+  echo "task ${n} not found in ${plan} (no heading matching 'Task ${n}')" >&2
+  exit 3
+fi
+
+echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
