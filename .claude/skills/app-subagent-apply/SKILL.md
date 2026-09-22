@@ -29,6 +29,7 @@ user-invocable: true
 3. **Consent, not worktrees.** Ask once through AskUserQuestion: implementers commit on `<branch>` as they go, path-limited per `~/.claude/rules/git.md`; continue, or stop to create a branch first? Never create or switch a branch yourself. Stop on uncommitted changes in the units' files. Ledger `Run base: <sha7>` and `Commit mode: commit on <branch>`.
 4. **Models.** Aliases `sonnet`, `opus`, `fable`; the sub-skill's Model Selection picks the tier. `fable` is capped on this account: the final review and rounds 4 and 5 only. On `rate_limit`, `429` or `reached your <tier> limit`: ledger `Model fallback: <role> <from> -> <to>`, run that role one tier down for the rest of the session, never re-probe.
 5. **Gates.** superpowers:verification-before-completion with the project's own lint, analysis and test commands (OpenSpec: `openspec validate <name> --strict` first); none defined: say so. Ledger `Gates: <commands> passed`.
+6. **Subagent types.** Implementers dispatch as `app-sdd-implementer`; task reviewers, re-reviewers and the final reviewer as `app-sdd-reviewer` (definitions in `~/.claude/agents/`; their `model` line is a fallthrough only, item 4 still names the model on every dispatch).
 
 ## Overrides of the sub-skill
 
