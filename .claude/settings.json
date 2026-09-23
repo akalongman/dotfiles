@@ -5,7 +5,8 @@
     "AZURE_MCP_COLLECT_TELEMETRY": "false",
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80",
     "CLAUDE_CODE_NO_FLICKER": "1",
-    "FORCE_HYPERLINK": "1"
+    "FORCE_HYPERLINK": "1",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus"
   },
   "permissions": {
     "defaultMode": "auto"
@@ -120,12 +121,16 @@
   "modelSettings": {
     "claude-fable-5-1": {
       "effortLevel": "high"
+    },
+    "claude-opus-5-5": {
+      "effortLevel": "xhigh"
     }
   },
   "awaySummaryEnabled": true,
   "skipDangerousModePermissionPrompt": false,
   "skipWorkflowUsageWarning": true,
   "autoCompactEnabled": true,
+  "switchModelsOnFlag": false,
   "showTurnDuration": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": false,
