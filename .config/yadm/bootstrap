@@ -71,6 +71,10 @@ yadm clone complete. Manual follow-ups:
      empty XDG dirs: rmdir ~/Documents ~/Pictures and re-run.
   5. Install starship (not packaged in apt):
      curl -sS https://starship.rs/install.sh | sh
-  6. In tmux, press prefix+I to install tmux-resurrect/continuum via TPM.
+  6. Install uv (Python packaging; upgrade later with `uv self update`):
+     curl -LsSf https://astral.sh/uv/install.sh | sh
+  7. In tmux, press prefix+I to install tmux-resurrect/continuum via TPM.
+  8. Everything else (apt repos and packages, Flatpaks, snaps, CLIs):
+     uv tool install ansible-core && ~/.dotfiles-private/machine  (see its README)
 
 NOTE
