@@ -151,6 +151,7 @@ __pycache__/
 !.config/htop
 !.config/phpactor
 !.config/zed
+!.config/nvm
 
 # htop writes a temp file next to htoprc on exit; never track it.
 .config/htop/*.tmp.*
