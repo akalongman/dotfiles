@@ -1,2 +1,4 @@
 @fission-ai/openspec
+@modelcontextprotocol/inspector
+@stripe/cli
 agent-browser
