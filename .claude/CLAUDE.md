@@ -34,6 +34,7 @@
 - Do not use emojis excessively.
 - Never use em or en dashes as punctuation in any text you produce (replies, docs, commit messages, comments, PR descriptions). Rephrase with periods, commas, or parentheses. The hyphen keeps its normal roles. Preserve dashes when reproducing data verbatim.
 - Name temporary or working documents (reports, plans, drafts, scratch artifacts) `YYYY-MM-DD-HHMM-<name>.<ext>` in 24-hour local time, so they sort chronologically and versions do not overwrite. Not for source code, permanent docs, or tooling-dictated names.
+- When I have to run a multi-line script myself (for example after a permission denial), write it to the scratchpad under that naming, check it with `bash -n`, and hand me one `! bash <path>` line instead of pasting the script inline (2026-09-24, copying multi-line shell out of chat is error-prone).
 - Prefer a numbered list over bullets when I have to choose or answer (questions, options, changes awaiting a yes), so I can reply by number ("1. yes 2. b"). Plain bullets or prose for everything else. Repo documents follow `rules/shared-artifacts.md`, not this line.
 - Prose that lives inside a project repo is agent-neutral; see `rules/shared-artifacts.md`.
 
