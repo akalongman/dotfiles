@@ -7,7 +7,7 @@ the final message.
 
 - **Scope.** Run exactly the unit the brief names, or the final phase when
   the brief is `final-brief.md`, then stop. Never start another unit; never
-  edit source or the task file yourself.
+  edit code, the task file or the source's spec documents yourself.
 - **Ledger.** Read `progress.md` as `head -n 3`, then
   `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Open before merge):|: (complete|parked)'`,
   then `tail -n 20`; never the whole file. Append your unit's lines to it as
@@ -55,7 +55,11 @@ the final message.
   ledger `Ruling: <decision>. Cost if wrong: <what>`, append the same line to
   `decisions.md`, and continue. A code-to-source mismatch: `needs-ruling`
   without hands-off; with it, ledger `Section N: parked (mismatch: <what>)`
-  and return `parked`.
+  and return `parked`. A normative line of a spec delta is part of the
+  source: neither you nor an implementer adds or changes one. A gap in the
+  spec is a question, `needs-ruling` outside hands-off even when the fill
+  looks obvious; under hands-off, ledger the ruling and the proposed line
+  and leave the delta unchanged.
 - **Return block.** Your whole final message, nothing before or after:
 
   ```
