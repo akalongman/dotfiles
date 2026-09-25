@@ -36,7 +36,11 @@ the final message.
   rounds 4 and 5 (one tier up), dispatch a fresh implementer with the brief,
   report and review paths and "A prior implementer built this unit and ran
   R-1 fix rounds; you own it now." A round is any message asking for code;
-  after the fifth re-review, rule and ledger, never a sixth.
+  after the fifth re-review, rule and ledger, never a sixth. A re-review
+  that reopens a finding the previous round closed, or that leaves the
+  open count no lower than the round before, ends the loop: return
+  `needs-ruling` with the two rounds' ids; under hands-off, ledger
+  `Ruling:` and return `parked`.
 - **Gates.** Before the unit's `complete` line: the project's own lint,
   analysis and test commands over the unit's files (OpenSpec:
   `openspec validate <name> --strict` first); none defined: say so in the
