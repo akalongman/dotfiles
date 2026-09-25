@@ -131,7 +131,7 @@ Linux first; daily driven on Ubuntu. macOS works on a best-effort basis: the she
 
 ## How `~/bin` works
 
-`~/bin/` holds the public utility scripts (`disable-kvm`, `power-*`, `listppa`, `gsettings-iterate-all`, `empty-trash`, `elk-*`, `gnome-terminal-tokyonight.sh`, `later`, `worktree`) as regular tracked files; the `.gitignore` allowlists them by name.
+`~/bin/` holds the public utility scripts (`claude-awake`, `disable-kvm`, `power-*`, `listppa`, `gsettings-iterate-all`, `empty-trash`, `elk-*`, `gnome-terminal-tokyonight.sh`, `later`, `worktree`) as regular tracked files; the `.gitignore` allowlists them by name.
 
 Private scripts also live in `~/bin/` at runtime, but only as symlinks created by the private repository's link script; neither the scripts nor the symlinks are tracked here. The same applies to the entire Sublime Text configuration and a few private Claude Code and opencode files. After cloning the private repository and running its link script, everything appears in place; until then `~/bin/` simply holds the public scripts. The split keeps private material out of this repository while keeping the canonical bin directory at `~/bin/` for muscle memory and PATH simplicity.
 

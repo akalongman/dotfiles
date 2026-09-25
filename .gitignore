@@ -172,6 +172,7 @@ __pycache__/
 # appear in ~/bin only as symlinks created by the private repository's
 # link script and are never tracked (not even the symlinks).
 bin/*
+!bin/claude-awake
 !bin/disable-kvm
 !bin/elk-start
 !bin/elk-stop

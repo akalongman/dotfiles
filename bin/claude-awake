@@ -1,0 +1,123 @@
+#!/bin/bash
+# Keeps this laptop awake with the lid closed while a Claude Code session
+# runs. Takes a logind handle-lid-switch inhibitor (the only kind logind
+# honours for the lid; plain sleep inhibitors are ignored because
+# LidSwitchIgnoreInhibited defaults to yes) held by a detached `tail --pid`
+# that exits when the session does, so the lock can never outlive it. Each
+# call takes its own lock and logind counts them, so several sessions need
+# no coordination; the lid suspends again once the last holder is gone.
+#
+# Usage:
+#   claude-awake [--for DURATION] [PID...]   hold until the session exits
+#   claude-awake --list                      show the locks held right now
+#   claude-awake --release [PID...|all]      drop locks early
+#
+# With no PID the nearest `claude` ancestor is used, so `! claude-awake`
+# typed inside a session locks that session. DURATION is a GNU timeout
+# value (30m, 4h, 0 for none); the default caps a forgotten lock so a
+# laptop left in a bag on battery still sleeps eventually.
+set -u
+
+DEFAULT_FOR=4h
+TAG=claude-awake
+
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+list_sessions() {
+    local p
+    for p in $(pgrep -x claude); do
+        printf '  %-8s %s\n' "$p" "$(readlink "/proc/$p/cwd" 2>/dev/null)"
+    done
+}
+
+claude_ancestor() {      # prints the nearest ancestor whose comm is claude
+    local p=$PPID i
+    for i in 1 2 3 4 5 6 7 8; do
+        [ "$p" -gt 1 ] 2>/dev/null || return 1
+        if [ "$(ps -o comm= -p "$p" 2>/dev/null)" = claude ]; then printf '%s' "$p"; return 0; fi
+        p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    done
+    return 1
+}
+
+holders() {              # prints "<inhibit pid> <session pid>" per held lock
+    local h
+    for h in $(pgrep -f -- "^[s]ystemd-inhibit .*--who=$TAG [0-9]+ "); do
+        printf '%s %s\n' "$h" "$(tr '\0' '\n' < "/proc/$h/cmdline" | sed -n "s/^--who=$TAG \([0-9]*\)$/\1/p")"
+    done
+}
+
+do_list() {
+    local found=0 h s
+    while read -r h s; do
+        [ -n "$h" ] || continue
+        found=1
+        printf '  session %-8s %-40s since %s\n' "$s" "$(readlink "/proc/$s/cwd" 2>/dev/null || echo '(exited)')" "$(ps -o lstart= -p "$h")"
+    done < <(holders)
+    [ "$found" = 1 ] || echo "no $TAG locks held"
+}
+
+do_release() {
+    local want="$*" h s n=0
+    while read -r h s; do
+        [ -n "$h" ] || continue
+        case " $want " in
+            *" all "*|*" $s "*) kill -- "-$h" 2>/dev/null && { echo "released session $s"; n=$((n + 1)); } ;;
+        esac
+    done < <(holders)
+    [ "$n" -gt 0 ] || { echo "nothing to release"; return 1; }
+}
+
+do_hold() {
+    local pid=$1 dur=$2 comm cwd
+    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || { echo "no such process: $pid" >&2; return 1; }
+    [ "$comm" = claude ] || echo "note: $pid is '$comm', not a claude session; holding anyway" >&2
+    cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)
+    if holders | /bin/grep -q " $pid$"; then
+        echo "already held for session $pid ($cwd)"
+        return 0
+    fi
+    setsid -f systemd-inhibit --what=handle-lid-switch --mode=block \
+        --who="$TAG $pid" --why="Claude Code session $pid in $cwd" \
+        timeout "$dur" tail --pid="$pid" -f /dev/null </dev/null >/dev/null 2>&1
+    sleep 0.3
+    if holders | /bin/grep -q " $pid$"; then
+        printf 'holding lid lock for session %s (%s) until it exits' "$pid" "$cwd"
+        [ "$dur" = 0 ] || printf ' or %s pass' "$dur"
+        echo
+    else
+        echo "failed to take the inhibitor for $pid" >&2; return 1
+    fi
+}
+
+dur=$DEFAULT_FOR
+mode=hold
+pids=()
+while [ $# -gt 0 ]; do
+    case $1 in
+        -h|--help) usage ;;
+        --for) [ $# -ge 2 ] || usage 1; dur=$2; shift ;;
+        --for=*) dur=${1#--for=} ;;
+        --list) mode=list ;;
+        --release) mode=release ;;
+        all) pids+=(all) ;;
+        -*) echo "unknown option: $1" >&2; usage 1 ;;
+        *) [[ $1 =~ ^[0-9]+$ ]] || { echo "not a pid: $1" >&2; exit 1; }; pids+=("$1") ;;
+    esac
+    shift
+done
+
+case $mode in
+    list) do_list ;;
+    release) [ ${#pids[@]} -gt 0 ] || pids=("$(claude_ancestor)") || { echo "which session? pass a pid or 'all'" >&2; exit 1; }
+             do_release "${pids[@]}" ;;
+    hold)
+        if [ ${#pids[@]} -eq 0 ]; then
+            pid=$(claude_ancestor) || {
+                echo "not inside a claude session; pass a pid:" >&2; list_sessions >&2; exit 1; }
+            pids=("$pid")
+        fi
+        rc=0
+        for pid in "${pids[@]}"; do do_hold "$pid" "$dur" || rc=1; done
+        exit $rc ;;
+esac
