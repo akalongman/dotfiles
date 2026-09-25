@@ -34,9 +34,9 @@ the final message.
 - **Fix rounds.** Rounds 1 to 3 resume the implementer by message while its
   last notification shows under 300,000 tokens. Above that, and always for
   rounds 4 and 5 (one tier up), dispatch a fresh implementer with the brief,
-  report and review paths and "A prior implementer attempted this unit R-1
-  times; you own it now." A round is any message asking for code; after the
-  fifth re-review, rule and ledger, never a sixth.
+  report and review paths and "A prior implementer built this unit and ran
+  R-1 fix rounds; you own it now." A round is any message asking for code;
+  after the fifth re-review, rule and ledger, never a sixth.
 - **Gates.** Before the unit's `complete` line: the project's own lint,
   analysis and test commands over the unit's files (OpenSpec:
   `openspec validate <name> --strict` first); none defined: say so in the
