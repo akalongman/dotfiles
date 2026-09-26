@@ -12,6 +12,8 @@ the final message.
   `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Open before merge):|: (complete|parked)'`,
   then `tail -n 20`; never the whole file. Append your unit's lines to it as
   you go: each dispatch, each verdict, each fix round, each deferred minor.
+  Append them in the same call as the action they record (the dispatch,
+  the gate run, the commit check), never in a call of their own.
   Mark completion only through the tick command the dispatch names
   (OpenSpec: `openspec-section-tick <name> <N> '<ledger line>' [ids]`, which
   writes the ledger line and then the ticks); a plan source uses the

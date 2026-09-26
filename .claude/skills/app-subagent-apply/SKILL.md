@@ -32,7 +32,7 @@ user-invocable: true
 
 ## Driver loop
 
-Pre-flight once: read the installed sub-skill's version directory under the plugin cache, ledger `Sub-skill: <version>`, print one warning line if it is not 6.4.1; then the sub-skill's scan of the whole source, rulings into `<ws>/decisions.md`. Then for each unit in order:
+Pre-flight once: if this session already holds a drafting conversation about the source, say that the run will re-read it on every driver turn and that a fresh session avoids it, then continue; read the installed sub-skill's version directory under the plugin cache, ledger `Sub-skill: <version>`, print one warning line if it is not 6.4.1; then the sub-skill's scan of the whole source, rulings into `<ws>/decisions.md`. Then for each unit in order:
 
 1. Write the brief with the source's script. Ledger `Section N: handed to controller`.
 2. Dispatch `app-sdd-unit-controller` on the tier of item 3 with paths only: the brief, `<ws>/section-N-report.md`, `<ws>/section-N-review.md`, `<ws>/progress.md`, `<ws>/decisions.md`, this skill's `prompts/unit-controller-overrides.md`, the source's tick command, and the line `Mode: hands-off` when given. Wait for its return block.
