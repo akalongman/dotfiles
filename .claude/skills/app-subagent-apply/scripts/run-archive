@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copy an apply run's workspace and its facts to a place that outlives the
 # workspace, the worktree and the transcript sweep:
-#   <config dir>/docs/apply-runs/<project slug>/<YYYY-MM-DD-HHMM>-<name>/
+#   <config dir>/docs/tmp/apply-runs/<project slug>/<YYYY-MM-DD-HHMM>-<name>/
 # The project slug is the one the harness uses for transcripts (the working
 # directory with every "/" replaced by "-"), so the run's transcript and its
 # archive sit under the same name.
@@ -17,7 +17,7 @@ name="${2:-$(basename "$ws")}"
 config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 slug="$(pwd | tr '/' '-')"
 stamp="$(date +%Y-%m-%d-%H%M)"
-dest="$config/docs/apply-runs/$slug/$stamp-$name"
+dest="$config/docs/tmp/apply-runs/$slug/$stamp-$name"
 mkdir -p "$dest"
 cp -r "$ws"/. "$dest"/
 
