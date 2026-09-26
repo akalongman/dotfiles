@@ -117,7 +117,12 @@
     "shell": {
       "program": "/home/longman/bin/zed-term"
     },
-    "copy_on_select": false
+    "copy_on_select": false,
+    // Show the title the shell sets (tmux forwards the window name, which
+    // follows Claude Code's session name) above the terminal. Off by default.
+    "toolbar": {
+      "breadcrumbs": true
+    }
   },
 
   // --- Extensions: declared here so a fresh machine restores them from dotfiles ---
