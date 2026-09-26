@@ -8,8 +8,33 @@
     "FORCE_HYPERLINK": "1",
     "CLAUDE_CODE_SUBAGENT_MODEL": "opus"
   },
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
   "permissions": {
-    "defaultMode": "auto"
+    "defaultMode": "auto",
+    "allow": [
+      "Bash(sdp --help:*)",
+      "Bash(sdp doctor:*)",
+      "Bash(sdp help:*)",
+      "Bash(sdp mine:*)",
+      "Bash(sdp notes:*)",
+      "Bash(sdp request:*)",
+      "Bash(sdp requests:*)",
+      "Bash(sdp search:*)",
+      "Bash(sdp task:*)",
+      "Bash(sdp tasks:*)"
+    ],
+    "ask": [
+      "Bash(sdp task comment:*)",
+      "Bash(sdp task status:*)",
+      "Bash(sdp task worklog:*)"
+    ],
+    "deny": [
+      "Bash(sdp login:*)"
+    ]
   },
   "model": "opus",
   "enableAllProjectMcpServers": true,
@@ -97,7 +122,8 @@
     "security-guidance@claude-plugins-official": false,
     "azure@claude-plugins-official": false,
     "php-lsp@claude-plugins-official": true,
-    "skill-creator@claude-plugins-official": false
+    "skill-creator@claude-plugins-official": false,
+    "slack@claude-plugins-official": true
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {
@@ -134,10 +160,5 @@
   "showTurnDuration": true,
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": false,
-  "skipAutoPermissionPrompt": true,
-  "attribution": {
-    "commit": "",
-    "pr": "",
-    "sessionUrl": false
-  }
+  "skipAutoPermissionPrompt": true
 }
