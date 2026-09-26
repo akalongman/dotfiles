@@ -1,0 +1,44 @@
+#!/bin/sh
+# Zed terminal shell: a persistent per-project tmux session, because Zed
+# restores terminal tabs as fresh shells and cannot re-run programs.
+# The base session is a durable detached holder; every client joins as a
+# grouped view that destroys itself on detach, so several tabs of one
+# project can show different windows instead of mirroring one screen.
+#
+# A grouped session starts on the group's current window, so without help
+# every tab would mirror the same window. Each tab therefore picks the first
+# window no attached tab is showing (restored tabs reattach to surviving
+# windows after a Zed restart) and opens a new window only when all are taken.
+
+name="$(basename "$PWD" | tr -c 'A-Za-z0-9_-' '-')"
+base="zed-${name%-}"
+
+if ! tmux has-session -t "=$base" 2>/dev/null; then
+    # The holder may be gone while tabs still hold the group (the reaper used
+    # to kill it): join a surviving member so the shared windows are kept.
+    member=$(tmux list-sessions -F '#{session_group} #{session_name}' 2>/dev/null \
+        | awk -v g="$base" '$1 == g { print $2; exit }')
+    if [ -n "$member" ]; then
+        tmux new-session -d -t "=$member" -s "$base" 2>/dev/null
+    else
+        tmux new-session -d -s "$base" 2>/dev/null
+    fi
+fi
+
+# Current window of every attached session in the group (list-sessions exposes
+# window_* for the session's current window).
+shown=$(tmux list-sessions -F '#{session_group} #{session_attached} #{window_id}' 2>/dev/null \
+    | awk -v g="$base" '$1 == g && $2 > 0 { print $3 }' | tr '\n' ' ')
+
+target=""
+for w in $(tmux list-windows -t "=$base" -F '#{window_id}' 2>/dev/null); do
+    case " $shown " in
+        *" $w "*) ;;
+        *) target=$w; break ;;
+    esac
+done
+
+if [ -n "$target" ]; then
+    exec tmux new-session -t "=$base" -s "$base-$$" \; set-option destroy-unattached on \; select-window -t "$target"
+fi
+exec tmux new-session -t "=$base" -s "$base-$$" \; set-option destroy-unattached on \; new-window
