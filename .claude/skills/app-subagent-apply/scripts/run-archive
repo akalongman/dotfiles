@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Copy an apply run's workspace and its facts to a place that outlives the
+# workspace, the worktree and the transcript sweep:
+#   <config dir>/apply-runs/<project slug>/<YYYY-MM-DD-HHMM>-<name>/
+# The project slug is the one the harness uses for transcripts (the working
+# directory with every "/" replaced by "-"), so the run's transcript and its
+# archive sit under the same name.
+#
+# Usage: run-archive WORKSPACE_DIR [NAME]
+#   WORKSPACE_DIR  the run's .superpowers/sdd/<name>/ directory
+#   NAME           defaults to the workspace directory's basename
+# Prints the archive path. Exit 2 on usage or a missing workspace.
+set -euo pipefail
+
+ws="${1:-}"; [ -d "$ws" ] || { echo "usage: run-archive WORKSPACE_DIR [NAME]" >&2; exit 2; }
+name="${2:-$(basename "$ws")}"
+config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+slug="$(pwd | tr '/' '-')"
+stamp="$(date +%Y-%m-%d-%H%M)"
+dest="$config/apply-runs/$slug/$stamp-$name"
+mkdir -p "$dest"
+cp -r "$ws"/. "$dest"/
+
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)"
+sha="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
+remote="$(git config --get "branch.$branch.remote" 2>/dev/null || echo origin)"
+host="$(git remote get-url "$remote" 2>/dev/null | sed -E 's#^[a-z+]+://##; s#^[^@]*@##; s#[:/].*$##' || true)"
+skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+h() { sha256sum "$1" 2>/dev/null | cut -c1-12; }
+session="${CLAUDE_CODE_SESSION_ID:-unknown}"
+transcript="$config/projects/$slug/$session.jsonl"
+if [ ! -f "$transcript" ]; then
+  found="$(find "$HOME"/.claude*/projects -maxdepth 2 -name "$session.jsonl" 2>/dev/null | head -1)"
+  transcript="${found:-$transcript (not found)}"
+fi
+{
+  echo "# Run facts"
+  echo "Archived: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "Session: $transcript"
+  echo "Repository: $(pwd) on $branch at $sha, remote host ${host:-none}"
+  echo "Skill: SKILL.md $(h "$skill_dir/SKILL.md"), unit-controller-overrides.md $(h "$skill_dir/prompts/unit-controller-overrides.md")"
+  echo "Sub-skill: $(ls -1 "$config/plugins/cache/claude-plugins-official/superpowers/" 2>/dev/null | sort -V | tail -1)"
+  echo "Workspace: $ws"
+} > "$dest/run-facts.md"
+echo "$dest"
