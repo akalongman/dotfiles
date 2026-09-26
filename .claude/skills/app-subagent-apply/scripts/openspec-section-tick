@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
-# Append one ledger line, THEN tick checkbox items of one tasks.md section,
-# in that order and in one command, so the ledger (what a resume trusts) is
-# never behind the ticks and the controller never hand-edits tasks.md.
+# Tick checkbox items of one tasks.md section and append one ledger line,
+# in one command, so the controller never hand-edits tasks.md and the ledger
+# (what a resume trusts) and the ticks are written together.
+#
+# Order of writes: every id is validated first and nothing is written if one
+# is unknown; the ticked file is built as a temp file beside tasks.md before
+# anything is written; then the ledger line is appended and the temp file is
+# renamed over tasks.md. The only window left is that same-filesystem rename.
 #
 # Usage: openspec-section-tick CHANGE SECTION "LEDGER LINE" [ITEM...]
 #   ITEM is an N.M id as written in the file (2.5, 2.10); with no ITEM every
 #   unticked checkbox in the section is ticked. Lettered sections (2b) hold
-#   whatever ids the file gives them.
-# Exit codes: 2 usage or missing file; 3 nothing to tick (ledger untouched);
-# 4 no ledger yet (run the load step first).
+#   whatever ids the file gives them. An ITEM that is already ticked is
+#   accepted as long as at least one ITEM is still open.
+# Exit codes: 2 usage or missing file; 3 nothing to tick (nothing written);
+# 4 no ledger yet (run the load step first); 5 an ITEM id has no checkbox
+# line in the section (nothing written).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 span="$here/section-span.awk"
@@ -16,14 +23,28 @@ span="$here/section-span.awk"
 [ $# -ge 3 ] || { echo 'usage: openspec-section-tick CHANGE SECTION "LEDGER LINE" [ITEM...]' >&2; exit 2; }
 change=$1; n=$2; line=$3; shift 3; items="$*"
 [[ $n =~ ^[0-9]+[a-z]?$ ]] || { echo "section must be digits with an optional letter (2, 10, 2b): $n" >&2; exit 2; }
+for it in $items; do
+  [[ $it =~ ^[0-9]+[a-z]?\.[0-9]+$ ]] || { echo "item id must be N.M as written in the file (2.5, 2b.1): $it" >&2; exit 2; }
+done
 root=$(git rev-parse --show-toplevel)
 tasks="$root/openspec/changes/$change/tasks.md"
 ledger="$root/.superpowers/sdd/$change/progress.md"
 [ -f "$tasks" ] || { echo "no tasks file: $tasks" >&2; exit 2; }
 [ -f "$ledger" ] || { echo "no ledger: $ledger (create it at the load step)" >&2; exit 4; }
-cnt=$(awk -v n="$n" -v mode=match -v items="$items" -f "$span" "$tasks" | awk '{ s += $2 } END { print s + 0 }')
-[ "$cnt" -gt 0 ] || { echo "nothing to tick in section $n for '${items:-all open items}'; ledger untouched" >&2; exit 3; }
+cnt=0
+while read -r id open any; do
+  if [ "$any" -eq 0 ] && [ "$id" != '*' ]; then
+    echo "no checkbox item $id in section $n of $tasks; nothing written" >&2
+    exit 5
+  fi
+  cnt=$((cnt + open))
+done < <(awk -v n="$n" -v mode=match -v items="$items" -f "$span" "$tasks")
+[ "$cnt" -gt 0 ] || { echo "nothing to tick in section $n for '${items:-all open items}'; nothing written" >&2; exit 3; }
+tmp=$(mktemp "$tasks.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+awk -v n="$n" -v mode=tick -v items="$items" -f "$span" "$tasks" > "$tmp"
+chmod --reference="$tasks" "$tmp"
 printf '%s\n' "$line" >> "$ledger"
-tmp=$(mktemp)
-awk -v n="$n" -v mode=tick -v items="$items" -f "$span" "$tasks" > "$tmp" && mv "$tmp" "$tasks"
+mv -f "$tmp" "$tasks"
+trap - EXIT
 echo "ledger +1; ticked ${cnt} item(s) in section ${n}"

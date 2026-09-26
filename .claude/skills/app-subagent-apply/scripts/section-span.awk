@@ -3,8 +3,8 @@
 # so the two scripts can never disagree about what a section holds.
 #
 # A section runs from its "## N." heading to the next level-2 heading of any
-# kind outside a ``` fence. A checkbox item is "- [ ]" or "- [x]" at any
-# indent; a line inside a fence is never an item, whatever it looks like.
+# kind outside a ``` or ~~~ fence. A checkbox item is "- [ ]" or "- [x]" at
+# any indent; a line inside a fence is never an item, whatever it looks like.
 #
 # Variables (-v):
 #   n      section id: digits with an optional lowercase letter (3, 2b)
@@ -14,8 +14,11 @@
 # Output:
 #   print  the span, verbatim
 #   count  "<open> <ticked>": checkbox lines in the span outside fences
-#   match  one "<id> <open-count>" line per item, or "* <open-count>" when
-#          items is empty; a count of 0 means nothing to tick for that id
+#   match  one "<id> <open-count> <any-count>" line per item, or
+#          "* <open-count> <open-count>" when items is empty; an any-count
+#          of 0 means the section has no checkbox line with that id at all,
+#          an open-count of 0 with an any-count above it means the item is
+#          already ticked
 #   tick   the whole file, with every matching unticked line ticked
 
 BEGIN {
@@ -31,11 +34,12 @@ BEGIN {
             gsub(/\./, "[.]", it)
             alt = alt (alt == "" ? "" : "|") it
             want[arr[i]] = 0
+            seen[arr[i]] = 0
         }
-        itempat = "^[[:blank:]]*- \\[ \\][[:blank:]]+(" alt ")[[:blank:]]"
+        itempat = "^[[:blank:]]*- \\[[ xX]\\][[:blank:]]+(" alt ")[[:blank:]]"
     }
 }
-/^```/ { infence = !infence }
+/^(```|~~~)/ { infence = !infence }
 !infence && /^##[ \t]/ { insec = ($0 ~ head) }
 {
     hit = 0
@@ -48,10 +52,14 @@ BEGIN {
                 hit = ($0 ~ openpat)
             } else if ($0 ~ itempat) {
                 line = $0
-                sub(/^[[:blank:]]*- \[ \][[:blank:]]+/, "", line)
+                isopen = ($0 ~ openpat)
+                sub(/^[[:blank:]]*- \[[ xX]\][[:blank:]]+/, "", line)
                 split(line, tok, /[[:blank:]]/)
                 id = tok[1]
-                if (id in want) { want[id]++; hit = 1 }
+                if (id in want) {
+                    seen[id]++
+                    if (isopen) { want[id]++; hit = 1 }
+                }
             }
         }
     }
@@ -65,7 +73,7 @@ BEGIN {
 END {
     if (mode == "count") print open + 0, ticked + 0
     if (mode == "match") {
-        if (items == "") print "*", nhit + 0
-        else for (i = 1; i <= m; i++) print arr[i], want[arr[i]] + 0
+        if (items == "") print "*", nhit + 0, nhit + 0
+        else for (i = 1; i <= m; i++) print arr[i], want[arr[i]] + 0, seen[arr[i]] + 0
     }
 }

@@ -9,14 +9,15 @@ the final message.
   the brief is `final-brief.md`, then stop. Never start another unit; never
   edit code, the task file or the source's spec documents yourself.
 - **Ledger.** Read `progress.md` as `head -n 3`, then
-  `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Open before merge):|: (complete|parked)'`,
+  `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Open before merge|Final phase):|: (complete|parked|blocked)'`,
   then `tail -n 20`; never the whole file. Append your unit's lines to it as
   you go: each dispatch, each verdict, each fix round, each deferred minor.
   Append them in the same call as the action they record (the dispatch,
   the gate run, the commit check), never in a call of their own.
   Mark completion only through the tick command the dispatch names
   (OpenSpec: `openspec-section-tick <name> <N> '<ledger line>' [ids]`, which
-  writes the ledger line and then the ticks); a plan source uses the
+  validates the ids, then writes the ticks and the ledger line together;
+  exit 5 means an id is not in the section and nothing was written); a plan source uses the
   sub-skill's own marking. Never hand-edit the task file.
 - **Subagent types and tiers.** Implementers dispatch as
   `app-sdd-implementer`; task reviewers and re-reviewers as
@@ -39,8 +40,10 @@ the final message.
   report and review paths and "A prior implementer built this unit and ran
   R-1 fix rounds; you own it now." A round is any message asking for code;
   after the fifth re-review, rule and ledger, never a sixth. A re-review
-  that reopens a finding the previous round closed, or that leaves the
-  open count no lower than the round before, ends the loop: return
+  that reopens a finding the previous round closed, or that leaves both
+  the Critical count and the Important count no lower than the round
+  before (a Critical traded for an Important is progress; like for like
+  is not), ends the loop: return
   `needs-ruling` with the two rounds' ids; under hands-off, ledger
   `Ruling:` and return `parked`.
 - **Gates.** Before the unit's `complete` line: the project's own lint,
@@ -53,7 +56,11 @@ the final message.
   to `final-review.md`; ONE fix dispatch with the whole Critical and
   Important list; ONE scoped re-review; the gates again. Leftovers:
   `Open before merge: <finding>. Ruling: <decision>. Cost if wrong: <what>`;
-  no second wave.
+  no second wave. Before your `complete`, ledger `Final phase: complete
+  <sha7>` with the HEAD the review and the last gate run saw; a gate that
+  fails after the re-review, or a Critical the fix wave did not close and
+  no ruling covers, returns `failed` with the reason ledgered, never
+  `complete`.
 - **Rulings.** A question only a human can answer (the source and the code
   disagree, a finding contradicts the source, an external side effect is
   needed): without `Mode: hands-off` in your dispatch, stop and return
