@@ -128,6 +128,9 @@ unset file
 # NVM (NVM_DIR is exported by .exports above)
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+# Let require() resolve the global npm packages (default-packages) from any
+# directory: nvm exports NVM_BIN for the active Node but never NODE_PATH.
+[ -n "${NVM_BIN:-}" ] && export NODE_PATH="${NVM_BIN%/bin}/lib/node_modules"
 
 # GPG TTY: must be re-evaluated per interactive shell, so it cannot live
 # in .exports (which is also sourced once at graphical login with no tty).

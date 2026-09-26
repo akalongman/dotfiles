@@ -2,3 +2,10 @@
 @modelcontextprotocol/inspector
 @stripe/cli
 agent-browser
+# Document generation (docx, pptx); require()-able from any directory via NODE_PATH, set in .bashrc
+docx
+pptxgenjs
+react
+react-dom
+react-icons
+sharp
