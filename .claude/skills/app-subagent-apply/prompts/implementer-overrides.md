@@ -16,3 +16,5 @@ template your dispatch was composed from, wherever they differ.
   never push.
 - Run the tests that cover the files you changed, not the whole suite,
   unless the constraints file names the suite command as the gate.
+- Never print a secret (database password, token, key) into tool output;
+  read connection details from the environment without echoing them.

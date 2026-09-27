@@ -44,6 +44,8 @@ worktree.
   I2 for Important, M1, M2 for Minor.
 - Your final message is the verdict block only: `Ready to merge: Yes | No
   | With fixes`; one line per Critical and Important finding as
-  `C1 <one-liner> file:line`; one line per Minor as `M1 <one-liner>`;
-  then the report path. No strengths section in the message: it belongs
+  `C1 <one-liner> file:line`; one line per Minor as `M1 <one-liner>`; one
+  line per behavior you set aside as outside the plan or spec, as
+  `D1 <what> because <reason>`, so the controller can rule on it; then
+  the report path. No strengths section in the message: it belongs
   in the file.
