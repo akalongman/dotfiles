@@ -14,7 +14,6 @@
     "sessionUrl": false
   },
   "permissions": {
-    "defaultMode": "auto",
     "allow": [
       "Bash(sdp --help:*)",
       "Bash(sdp doctor:*)",
@@ -28,13 +27,12 @@
       "Bash(sdp tasks:*)"
     ],
     "ask": [
+      "Bash(sdp login:*)",
       "Bash(sdp task comment:*)",
       "Bash(sdp task status:*)",
       "Bash(sdp task worklog:*)"
     ],
-    "deny": [
-      "Bash(sdp login:*)"
-    ]
+    "defaultMode": "auto"
   },
   "model": "opus",
   "enableAllProjectMcpServers": true,
