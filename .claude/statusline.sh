@@ -1,4 +1,8 @@
 #!/bin/bash
+# Claude Code exports the terminal size in COLUMNS; the script's stdout is a
+# pipe, so tput cannot ask. Read before any child runs, because bash may
+# rewrite the variable once one exits.
+TERM_COLS=${COLUMNS:-}
 input=$(cat)
 
 #echo "$input" | jq '.' > /tmp/claude-statusline-dump.json
@@ -19,6 +23,8 @@ REMOTE=$(echo "$REMOTE" \
     | sed 's|git@\([^:]*\):|https://\1/|' \
     | sed 's|ssh://git@\([^/]*\)/|https://\1/|' \
     | sed 's|\.git$||')
+REPO_ICON=""
+REPO_PATH=""
 if [ -n "$REMOTE" ]; then
     REPO_PATH=${REMOTE#https://*/}
     REPO_HOST=${REMOTE#https://}
@@ -51,19 +57,15 @@ if [ -n "$REMOTE" ]; then
     elif [[ $REPO_HOST == *bitbucket* ]] || host_matches "$REPO_HOST" "${BITBUCKET_HOSTS[@]}"; then REPO_ICON='🪣'
     else REPO_ICON='🔗'
     fi
-    # Second OSC 8 link; the folder link is emitted first, so it survives renderers
-    # that keep only the first hyperlink, and the short label still auto-linkifies as
-    # a fallback (anthropics/claude-code#26356).
-    REPO_LINK=" | ${REPO_ICON} \033]8;;${REMOTE}\a\033[4m${REPO_PATH}\033[24m\033]8;;\a"
-else
-    REPO_LINK=""
 fi
 
-BRANCH=""
-WORKTREE=""
+IN_REPO=0
+IN_WORKTREE=0
+BRANCH_NAME=""
+WT_NAME=""
 if git -C "$DIR" rev-parse --git-dir > /dev/null 2>&1; then
+    IN_REPO=1
     BRANCH_NAME=$(git -C "$DIR" branch --show-current 2>/dev/null)
-    BRANCH=" | 🌿 ${BRANCH_NAME}"
 
     # A linked worktree keeps its per-worktree git dir under <common>/worktrees/<name>,
     # so when the canonicalized git dir differs from the common dir we are in one (and
@@ -72,14 +74,11 @@ if git -C "$DIR" rev-parse --git-dir > /dev/null 2>&1; then
     GIT_DIR_ABS=$(cd "$(git -C "$DIR" rev-parse --absolute-git-dir 2>/dev/null)" 2>/dev/null && pwd -P)
     COMMON_DIR_ABS=$(cd "$DIR" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)
     if [ -n "$GIT_DIR_ABS" ] && [ "$GIT_DIR_ABS" != "$COMMON_DIR_ABS" ]; then
+        IN_WORKTREE=1
         WT_NAME=$(basename "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)")
         # Drop the name when it merely echoes the branch (the usual --worktree case); 🌳
         # alone still flags "linked worktree" without repeating what 🌿 already shows.
-        if [ "$WT_NAME" = "$BRANCH_NAME" ]; then
-            WORKTREE=" | 🌳"
-        else
-            WORKTREE=" | 🌳 ${WT_NAME}"
-        fi
+        [ "$WT_NAME" = "$BRANCH_NAME" ] && WT_NAME=""
     fi
 fi
 
@@ -107,9 +106,11 @@ else
 fi
 ACCT_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$ACCT_FILE" 2>/dev/null)
 if [ -n "$ACCT_EMAIL" ]; then
-    ACCT_SEG="${ACCT_COLOR}[👤 ${ACCT_EMAIL}]${RESET} "
+    ACCT_TEXT="[👤 ${ACCT_EMAIL}]"
+    ACCT_SEG="${ACCT_COLOR}${ACCT_TEXT}${RESET} "
 else
-    ACCT_SEG="${RED}[👤 not logged in]${RESET} "
+    ACCT_TEXT="[👤 not logged in]"
+    ACCT_SEG="${RED}${ACCT_TEXT}${RESET} "
 fi
 
 # Pick bar color based on context usage
@@ -151,36 +152,136 @@ url_encode_path() {
     REPLY="$out"
 }
 
-format_path() {
-    local path="${1/#$HOME/'~'}"
-    local width=60
-    local len=${#path}
-    if [ "$len" -le "$width" ]; then
-        printf '%s' "$path"
+# Cuts from the middle: both ends of a path, a branch or a repo slug carry
+# meaning (root and leaf, ticket prefix and topic, owner and name).
+shorten() {
+    local text="$1" width="$2"
+    if [ "${#text}" -le "$width" ]; then
+        REPLY="$text"
+        return
+    fi
+    local keep=$(( width > 3 ? width - 3 : 0 ))
+    local left=$(( (keep + 1) / 2 ))
+    local right=$(( keep / 2 ))
+    # ${text: -0} would expand to the whole string, so a zero tail is spelled out.
+    if [ "$right" -gt 0 ]; then
+        REPLY="${text:0:$left}...${text: -$right}"
     else
-        local keep=$((width - 3))
-        local left=$(( (keep + 1) / 2 ))
-        local right=$(( keep / 2 ))
-        printf '%s...%s' "${path:0:$left}" "${path: -$right}"
+        REPLY="${text:0:$left}..."
     fi
 }
 
-DIR_DISP=$(format_path "$DIR")
+# Layout of the name rows. Row 1 holds the badge, the model and the path; row 2
+# holds the git names and exists only inside a repository. On each row the
+# names share whatever the terminal leaves after the fixed parts, so a row
+# fills a wide terminal and still fits a narrow one.
+LINE_RESERVE=4      # the interface's own margins, plus slack for icon widths
+NAME_FLOOR=10       # below this a name says little, so segments collapse first
+NAME_MIN=6          # last resort once nothing is left to collapse
+FALLBACK_COLS=120   # COLUMNS is absent when Claude Code has no terminal
+if ! [[ $TERM_COLS =~ ^[0-9]+$ ]] || [ "$TERM_COLS" -eq 0 ]; then
+    TERM_COLS=$FALLBACK_COLS
+fi
+
+# fit_names <floor> <fixed cells> <name>...
+# Finds the largest common cap under which the names of one row fit, so short
+# names stay whole and only the long ones give way. Fails when the floor is
+# still too wide. Empty names are skipped; every other one also costs the
+# space that separates it from its icon.
+fit_names() {
+    local floor=$1 avail=$(( TERM_COLS - LINE_RESERVE - $2 )) len total name
+    local lens=()
+    shift 2
+    for name in "$@"; do
+        [ -n "$name" ] || continue
+        lens+=("${#name}")
+        avail=$(( avail - 1 ))
+    done
+    NAME_CAP=0
+    for len in "${lens[@]}"; do
+        [ "$len" -gt "$NAME_CAP" ] && NAME_CAP=$len
+    done
+    while :; do
+        total=0
+        for len in "${lens[@]}"; do
+            total=$(( total + (len < NAME_CAP ? len : NAME_CAP) ))
+        done
+        [ "$total" -le "$avail" ] && return 0
+        [ "$NAME_CAP" -le "$floor" ] && return 1
+        NAME_CAP=$(( NAME_CAP - 1 ))
+    done
+}
+
+# Fixed cells: ${#} counts characters and each icon is two cells wide, hence
+# one extra per icon.
+DIR_NAME="${DIR/#$HOME/'~'}"
+ROW1_FIXED=$(( ${#ACCT_TEXT} + 1 + 1 + ${#MODEL} + 2 + 5 ))    # badge, [model], " | 📁"
+
+# Effort and output style describe how the model answers, so they sit next to it.
+MODE_SEG=""
+if [ -n "$EFFORT" ]; then
+    MODE_SEG+=" | 🧠 ${CYAN}${EFFORT}${RESET}"
+    ROW1_FIXED=$(( ROW1_FIXED + 6 + ${#EFFORT} ))
+fi
+MODE_SEG+=" | 🎨 ${YELLOW}${OUTPUT_STYLE}${RESET}"
+ROW1_FIXED=$(( ROW1_FIXED + 6 + ${#OUTPUT_STYLE} ))
+
+# A row that is still too long at the minimum is left for the terminal to clip.
+fit_names "$NAME_FLOOR" "$ROW1_FIXED" "$DIR_NAME" \
+    || fit_names "$NAME_MIN" "$ROW1_FIXED" "$DIR_NAME"
+
 url_encode_path "$DIR"
 DIR_URI="file://$REPLY"
-printf -v DIR_PAD '%*s' "$(( 60 - ${#DIR_DISP} > 0 ? 60 - ${#DIR_DISP} : 0 ))" ''
 
 # BEL terminator (\a), not ST (\e\\): Claude Code's status line renderer passes the
 # BEL form through to the terminal but drops ST (anthropics/claude-code#26356).
-DIR_LINK="\033]8;;${DIR_URI}\a\033[4m${DIR_DISP}\033[24m\033]8;;\a${DIR_PAD}"
+# A link always points at the full target, however short its label was cut.
+shorten "$DIR_NAME" "$NAME_CAP"
+echo -e "${ACCT_SEG}${CYAN}[$MODEL]${RESET}${MODE_SEG} | 📁 \033]8;;${DIR_URI}\a\033[4m${REPLY}\033[24m\033]8;;\a"
 
-echo -e "${ACCT_SEG}${CYAN}[$MODEL]${RESET} | 📁 ${DIR_LINK} $BRANCH$WORKTREE $REPO_LINK"
-COST_FMT=$(printf '$%.2f' "$COST")
+if [ "$IN_REPO" = 1 ]; then
+    REPO_NAME="$REPO_PATH"
+    ROW2_FIXED=2                                                # "🌿"
+    [ "$IN_WORKTREE" = 1 ] && ROW2_FIXED=$(( ROW2_FIXED + 5 ))  # " | 🌳"
+    [ -n "$REPO_ICON" ] && ROW2_FIXED=$(( ROW2_FIXED + 5 ))     # " | 🐙"
 
-EFFORT_SEG=""
-if [ -n "$EFFORT" ]; then
-    EFFORT_SEG=" 🧠 ${CYAN}${EFFORT}${RESET} |"
+    # When the floor does not fit, the repo falls back to its icon (which then
+    # carries the link), after that the worktree loses its name, and what
+    # remains is cut down to the minimum.
+    fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME" "$WT_NAME" "$REPO_NAME" \
+        || { REPO_NAME=""; fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME" "$WT_NAME"; } \
+        || { WT_NAME=""; fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME"; } \
+        || fit_names "$NAME_MIN" "$ROW2_FIXED" "$BRANCH_NAME"
+
+    ROW2="🌿"
+    if [ -n "$BRANCH_NAME" ]; then
+        shorten "$BRANCH_NAME" "$NAME_CAP"
+        ROW2+=" ${REPLY}"
+    fi
+
+    if [ "$IN_WORKTREE" = 1 ]; then
+        ROW2+=" | 🌳"
+        if [ -n "$WT_NAME" ]; then
+            shorten "$WT_NAME" "$NAME_CAP"
+            ROW2+=" ${REPLY}"
+        fi
+    fi
+
+    # Second OSC 8 link; the folder link is emitted first, so it survives renderers
+    # that keep only the first hyperlink, and the short label still auto-linkifies as
+    # a fallback (anthropics/claude-code#26356).
+    if [ -n "$REPO_ICON" ]; then
+        if [ -n "$REPO_NAME" ]; then
+            shorten "$REPO_NAME" "$NAME_CAP"
+            ROW2+=" | ${REPO_ICON} \033]8;;${REMOTE}\a\033[4m${REPLY}\033[24m\033]8;;\a"
+        else
+            ROW2+=" | \033]8;;${REMOTE}\a${REPO_ICON}\033]8;;\a"
+        fi
+    fi
+
+    echo -e "$ROW2"
 fi
+COST_FMT=$(printf '$%.2f' "$COST")
 
 rl_color() {
     if [ "$1" -ge 90 ]; then printf '%s' "$RED"
@@ -253,4 +354,4 @@ if [ -n "$RL_5H" ] || [ -n "$RL_7D" ] || [ ${#RL_PARTS[@]} -gt 0 ]; then
 fi
 
 #echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% | ${YELLOW}${COST_FMT}${RESET} | ⏱️ ${DURATION}"
-echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% | 🎨 ${YELLOW}${OUTPUT_STYLE}${RESET} |${EFFORT_SEG}${RL_SEG} ⏱️ ${DURATION}"
+echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% |${RL_SEG} ⏱️ ${DURATION}"
