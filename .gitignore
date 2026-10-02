@@ -133,6 +133,11 @@ __pycache__/
 !.local/share/openspec
 .local/share/openspec/*
 !.local/share/openspec/schemas
+!.local/share/nautilus-python
+.local/share/nautilus-python/*
+!.local/share/nautilus-python/extensions
+.local/share/nautilus-python/extensions/*
+!.local/share/nautilus-python/extensions/copy-path.py
 
 # ~/.config tree: most subdirs are app state, not config. Allowlist
 # specific subdirs and explicitly exclude known secret-bearing files.
