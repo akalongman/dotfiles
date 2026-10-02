@@ -10,6 +10,10 @@ Context menu
   Open In          submenu on a single selected folder and on the folder
                    background: Zed, Sublime Text, PhpStorm. An entry is
                    shown only when its launcher exists on this machine.
+  Quick Open       submenu on the folder background for files edited often:
+                   hosts (through admin:// in GNOME Text Editor), SSH config
+                   and shell exports (default editor). Missing files are
+                   hidden.
 
 Properties window
   Checksums        a page on a single regular file with MD5, SHA-1, SHA-256
@@ -40,6 +44,16 @@ EDITORS = [
     ("Zed", HOME / ".local/bin/zed"),
     ("Sublime Text", Path("/usr/bin/subl")),
     ("PhpStorm", HOME / ".local/share/JetBrains/Toolbox/scripts/phpstorm"),
+]
+
+# label, file, opener. "admin" opens the file through the GVFS admin backend
+# in GNOME Text Editor (PolicyKit asks for the password on save); "default"
+# opens it with the desktop's default handler for its type.
+ADMIN_EDITOR = Path("/usr/bin/gnome-text-editor")
+QUICK_OPEN = [
+    ("hosts", Path("/etc/hosts"), "admin"),
+    ("SSH config", HOME / ".ssh/config", "default"),
+    ("Shell exports", HOME / ".exports", "default"),
 ]
 
 HASHES = [("MD5", "md5"), ("SHA-1", "sha1"), ("SHA-256", "sha256"), ("SHA-512", "sha512")]
@@ -78,6 +92,27 @@ def _available_editors():
     return [(label, str(path)) for label, path in EDITORS if os.access(path, os.X_OK)]
 
 
+def _available_quick_open():
+    entries = []
+    for label, path, opener in QUICK_OPEN:
+        if not path.is_file():
+            continue
+        if opener == "admin" and not os.access(ADMIN_EDITOR, os.X_OK):
+            continue
+        entries.append((label, str(path), opener))
+    return entries
+
+
+def _quick_open(path, opener):
+    if opener == "admin":
+        _launch([str(ADMIN_EDITOR), f"admin://{path}"])
+        return
+    try:
+        Gio.AppInfo.launch_default_for_uri(Gio.File.new_for_path(path).get_uri(), None)
+    except GLib.Error as error:
+        print(f"files-extras: cannot open {path}: {error.message}")
+
+
 class ContextMenu(GObject.GObject, Nautilus.MenuProvider):
     def _copy_item(self, name, files):
         item = Nautilus.MenuItem(
@@ -102,6 +137,19 @@ class ContextMenu(GObject.GObject, Nautilus.MenuProvider):
         parent.set_submenu(submenu)
         return parent
 
+    def _quick_open_item(self, name):
+        entries = _available_quick_open()
+        if not entries:
+            return None
+        parent = Nautilus.MenuItem(name=name, label="Quick Open")
+        submenu = Nautilus.Menu()
+        for label, path, opener in entries:
+            entry = Nautilus.MenuItem(name=f"{name}::{label}", label=label, tip=path)
+            entry.connect("activate", lambda _i, p=path, o=opener: _quick_open(p, o))
+            submenu.append_item(entry)
+        parent.set_submenu(submenu)
+        return parent
+
     def get_file_items(self, files):
         if not files:
             return []
@@ -114,9 +162,9 @@ class ContextMenu(GObject.GObject, Nautilus.MenuProvider):
 
     def get_background_items(self, folder):
         items = [self._copy_item("FilesExtras::copy-bg", [folder])]
-        item = self._open_in_item("FilesExtras::open-in-bg", folder)
-        if item:
-            items.append(item)
+        for item in (self._open_in_item("FilesExtras::open-in-bg", folder), self._quick_open_item("FilesExtras::quick-open")):
+            if item:
+                items.append(item)
         return items
 
 
