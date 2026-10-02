@@ -129,6 +129,12 @@
         "source": "github",
         "repo": "jetbrains/phpstorm-claude-marketplace"
       }
+    },
+    "akalongman": {
+      "source": {
+        "source": "directory",
+        "path": "/home/longman/projects/repositories/akalongman/claude-plugins"
+      }
     }
   },
   "outputStyle": "Explanatory",
