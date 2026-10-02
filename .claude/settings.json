@@ -30,7 +30,8 @@
       "Bash(sdp login:*)",
       "Bash(sdp task comment:*)",
       "Bash(sdp task status:*)",
-      "Bash(sdp task worklog:*)"
+      "Bash(sdp task worklog:*)",
+      "Bash(secrets:*)"
     ],
     "defaultMode": "auto"
   },
