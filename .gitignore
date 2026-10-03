@@ -134,6 +134,9 @@ __pycache__/
 !.local/share/openspec
 .local/share/openspec/*
 !.local/share/openspec/schemas
+!.local/share/gtksourceview-5
+.local/share/gtksourceview-5/*
+!.local/share/gtksourceview-5/styles
 !.local/share/nautilus-python
 .local/share/nautilus-python/*
 !.local/share/nautilus-python/extensions
