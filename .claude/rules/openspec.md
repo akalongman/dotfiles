@@ -136,26 +136,26 @@ When setting up OpenSpec in a new or existing project:
 
 ## Precedent is not a waiver for the OpenSpec cycle
 
-A behavior or contract change goes through `/opsx:propose`, and that INCLUDES a
+A behavior or contract change goes through `/opsx:propose`, and that includes a
 bugfix that tightens the contract (turning a previously-succeeding request into a
 rejection, or fixing a 500 into a new 422 while also newly requiring a field). The
 absence of an existing spec line for the area is not an exemption; the cycle is what
 creates the spec home. Only genuinely mechanical work (typo, dependency bump,
 contract-neutral rename) is exempt.
 
-A prior commit that shipped a similar change WITHOUT running the cycle is
-descriptive of past practice, not a waiver. Do NOT cite it as precedent to skip the
+A prior commit that shipped a similar change without running the cycle is
+descriptive of past practice, not a waiver. Do not cite it as precedent to skip the
 cycle again. When genuinely unsure whether a change is mechanical or a contract
 change, put propose-vs-direct to the user as an explicit choice rather than resolving
 it to "skip" yourself.
 
 ## OpenSpec phases are user-gated
 
-The `/opsx:*` and `/openspec-*` commands are discrete, user-invoked checkpoints, not a single pipeline to run end to end. After completing one phase, STOP and wait for the user to invoke the next.
+The `/opsx:*` and `/openspec-*` commands are discrete, user-invoked checkpoints, not a single pipeline to run end to end. After completing one phase, stop and wait for the user to invoke the next.
 
 - **Starting implementation must be initiated by the user.** Unless the user has explicitly mandated otherwise, do not begin writing or editing implementation code until the user explicitly invokes `/opsx:apply` (or otherwise clearly tells you to start implementing). Generating proposal artifacts is never, by itself, permission to implement them.
-- After `/opsx:propose` completes, hand control back to the user (the propose flow itself ends by telling the user to run `/opsx:apply`). Do NOT self-invoke `/opsx:apply` or `/opsx:archive`, and do NOT start coding, on your own initiative.
-- "Use the OpenSpec flow" (and equivalents like "follow the openspec process", "do this via openspec") means follow the gated workflow **including its stops**. It is NOT authorization to run `propose → apply → archive` autonomously in one turn.
+- After `/opsx:propose` completes, hand control back to the user (the propose flow itself ends by telling the user to run `/opsx:apply`). Do not self-invoke `/opsx:apply` or `/opsx:archive`, and do not start coding, on your own initiative.
+- "Use the OpenSpec flow" (and equivalents like "follow the openspec process", "do this via openspec") means follow the gated workflow **including its stops**. It is not authorization to run `propose → apply → archive` autonomously in one turn.
 - The only ways past a gate are: the user explicitly invokes that phase's command, or the user explicitly mandates autonomous continuation in the same instruction (e.g. "propose then apply without stopping"). Inferring "they probably want me to continue" from context is a violation.
 
 ### Why
@@ -164,13 +164,13 @@ Each gate is a review point the user relies on. The propose→apply gate lets th
 
 ## Warn before merging an MR while its change is unarchived
 
-Merging (or arming merge-when-pipeline-succeeds / auto-merge on) an MR that implements an OpenSpec change WITHOUT first archiving that change is a process defect. `openspec/specs/<capability>/spec.md` is only updated when the change is archived, so a merge-without-archive lands the implementation on the target branch while the spec deltas stay stranded in `openspec/changes/<name>/`. The canonical specs then silently fall behind the merged code, and the change lingers as "active" on the trunk.
+Merging (or arming merge-when-pipeline-succeeds / auto-merge on) an MR that implements an OpenSpec change without first archiving that change is a process defect. `openspec/specs/<capability>/spec.md` is only updated when the change is archived, so a merge-without-archive lands the implementation on the target branch while the spec deltas stay stranded in `openspec/changes/<name>/`. The canonical specs then silently fall behind the merged code, and the change lingers as "active" on the trunk.
 
-Before merging an MR (or arming auto-merge) that corresponds to an OpenSpec change, verify the change has been archived: its directory has moved to `openspec/changes/archive/<date>-<name>/` and its spec deltas are folded into `openspec/specs/`. If the change is still active in `openspec/changes/`, STOP and warn the user before proceeding, recommending that `/opsx:archive` run and the archive be committed into the MR first, so the merged branch's specs match its code. Do not merge until the archive is committed. Where the project's own OpenSpec workflow requires archive-before-merge, a remaining post-merge task is moved to the merge request description's `### Post-merge checks` checklist by a pre-merge task, and then the change is archived.
+Before merging an MR (or arming auto-merge) that corresponds to an OpenSpec change, verify the change has been archived: its directory has moved to `openspec/changes/archive/<date>-<name>/` and its spec deltas are folded into `openspec/specs/`. If the change is still active in `openspec/changes/`, stop and warn the user before proceeding, recommending that `/opsx:archive` run and the archive be committed into the MR first, so the merged branch's specs match its code. Do not merge until the archive is committed. Where the project's own OpenSpec workflow requires archive-before-merge, a remaining post-merge task is moved to the merge request description's `### Post-merge checks` checklist by a pre-merge task, and then the change is archived.
 
 ## /opsx:propose and /openspec-propose: always interview first
 
-When the user invokes `/opsx:propose` or `/openspec-propose`, you MUST run a clarification interview before generating any proposal artifacts (proposal.md, design.md, tasks.md, specs/). No exceptions. "The request seems clear" is not a valid reason to skip; clarity is what the interview proves, not what you assume.
+When the user invokes `/opsx:propose` or `/openspec-propose`, run a clarification interview before generating any proposal artifacts (proposal.md, design.md, tasks.md, specs/). "The request seems clear" is not a valid reason to skip; clarity is what the interview proves, not what you assume.
 
 ### Protocol
 

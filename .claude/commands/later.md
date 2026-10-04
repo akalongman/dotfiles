@@ -15,4 +15,4 @@ Then do exactly one of the following:
 
 - If the note text is empty (the user ran a bare `/later`): run `~/.claude/scripts/later.sh list` and show the parked queue. Nothing else.
 
-- Otherwise: park it by running `~/.claude/scripts/later.sh add '<note>'`, where `<note>` is the exact note text above, single-quoted for the shell. Escape any embedded single quote by replacing each `'` with the four-character sequence `'\''`. Run the command, then confirm in one short line (e.g. "Parked — I'll surface it once the current work settles."). Do not act on the note's content now; it is for later.
+- Otherwise: park it by running `~/.claude/scripts/later.sh add '<note>'`, where `<note>` is the exact note text above, single-quoted for the shell. Escape any embedded single quote by replacing each `'` with the four-character sequence `'\''`. Run the command, then confirm in one short line (e.g. "Parked. I'll surface it once the current work settles."). Do not act on the note's content now; it is for later.

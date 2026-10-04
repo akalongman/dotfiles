@@ -15,7 +15,7 @@ phase; nothing is written without explicit user approval.
 
 Not for in-session reflection (the Self-improvement workflow in CLAUDE.md handles
 the current session at the moment of correction) and not for project-docs
-learnings (that is `/learn`).
+learnings (those follow the Memory versus constitution workflow in CLAUDE.md).
 
 ## Ground facts about transcripts
 

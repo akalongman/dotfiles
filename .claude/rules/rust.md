@@ -14,7 +14,7 @@ paths:
 Architecture-first Rust standards. The burden of proof is on the more complex form: at every fork, justify structure by what the domain models, never by today's implementation count. These rules describe properties the code must have, not a house style to apply mechanically.
 
 ## Architecture foundations
-These are language-agnostic principles the Rust-specific gates below depend on. Your training data is heavily object-oriented (class hierarchies, dependency injection, shared mutable state). Those instincts produce poor Rust. Prefer the following.
+These are language-agnostic principles the Rust-specific gates below depend on. Object-oriented habits (class hierarchies, dependency injection, shared mutable state) produce poor Rust; prefer the following.
 
 1. Ownership. Every value has one owner. Design data flow around who creates, who consumes, who stores. When data seems to be needed in two places, ask "who is the real owner?" before reaching for shared state. Most sharing is unnecessary: data can flow through function parameters.
 2. Functional core, imperative shell. Pure logic (parsing, validation, transformation, selection) is separated from side effects (I/O, network, database, UI). A file is entirely pure or entirely effectful. Pure files must not import effectful files. This is an architectural boundary, not a suggestion.
@@ -22,14 +22,14 @@ These are language-agnostic principles the Rust-specific gates below depend on. 
 4. Make illegal states unrepresentable. Use the type system to prevent invalid states at compile time: wrapper types with private fields and fallible constructors over raw primitives, enums over booleans, typestate for multi-phase objects, and "parse, don't validate" (validate at boundaries, carry proof in types).
 5. Escalation hierarchy: `concrete type` to `enum (closed set)` to `narrow trait` to `dynamic dispatch`. Each models a different domain reality. Pick the form that matches the domain, not the form that matches today's implementation count. If the domain models a capability, the trait exists even with one implementor.
 
-### LLM failure modes to watch in your own output
+### Smells to reject
 1. Coordinator objects with no invariant: a type with a vague method (`process`, `handle`, `execute`) that orchestrates others but owns no state worth protecting. If it enforces no invariant, it is indirection.
 2. Counting implementations to decide on traits: the count is irrelevant. The question is whether the domain models a capability.
 3. Shared-state-as-architecture: reaching for shared mutable state as the first design instead of the last resort.
 4. Clone or copy to silence the compiler: copying data to satisfy the borrow checker instead of asking "who should own this?"
 5. Marking things async or concurrent "for future use" when no concurrent work happens.
 6. Unjustified builders: a builder for a type where simple construction is perfectly clear.
-7. Reinventing code that already exists in the codebase because training data is easier to reach than reading the project.
+7. Reinventing code that already exists in the codebase instead of reading the project first.
 
 ## Decision gates
 At each architecture fork, pick the correct Rust form. The burden of proof is on the complex form.
@@ -100,7 +100,7 @@ Right fix versus wrong fix for the most common lint failures.
 - Docs. Backtick identifiers: ``[`FrameRef`]``. End paragraphs with punctuation. `/// # Errors` on every public `Result` function.
 - Imports. All paths in a `use` block at the top. `format!("{x}")`, not `format!("{}", x)`. `use Trait as _` for method-only imports. Inline `std::time::Duration` in a function body is wrong.
 - Trait impls. Parameter names must exactly match the trait definition. Renaming `f` to `writer` in `fn fmt` is wrong.
-- One impl block. One `impl Type` per type per file. Find the existing block and add to it. Appending a second `impl Type` at the bottom is a reflexive LLM habit; do not.
+- One impl block. One `impl Type` per type per file. Find the existing block and add to it rather than appending a second `impl Type` at the bottom.
 
 ## Lint suppression
 `#[allow]` is banned; enforce via `clippy::allow_attributes`. All suppressions go through `#[expect]` with a mandatory reason; enforce via `clippy::allow_attributes_without_reason`.

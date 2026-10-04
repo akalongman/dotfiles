@@ -15,7 +15,7 @@ Review a project thoroughly by reading entire project.
 
 2. Locate or clone the repository:
    - If the current working directory is already a checkout of the target repository (`git remote get-url origin` matches `$ARGUMENTS`), review it in place and skip cloning.
-   - Otherwise ask the user for their projects path (the directory where clones should live), then clone into it:
+   - Otherwise clone into the matching `~/projects/<type>` subfolder as `<projects-path>` (layout in `~/.claude/rules/environment.md`; a repository the user does not otherwise work on goes under `~/projects/repositories`):
      - **GitLab:** `glab repo clone <namespace/repo> <projects-path>/{namespace}/{repo}`
      - **GitHub:** `gh repo clone <owner/repo> <projects-path>/{owner}/{repo}`
    - If that target directory already contains the clone, reuse it and pull the default branch instead of recloning.
@@ -26,13 +26,13 @@ Review a project thoroughly by reading entire project.
 
 5. Write the review. Structure it as:
 
-    **Already flagged** — issues already noted in existing comments (acknowledge but do not duplicate).
+    **Already flagged:** issues already noted in existing comments (acknowledge but do not duplicate).
 
-    **Additional issues** — new issues you found, each with:
+    **Additional issues:** new issues you found, each with:
     - File path and line reference
     - Clear description of the problem
     - Concrete suggestion for the fix
 
-    **Positives** — what is done well.
+    **Positives:** what is done well.
 
     Be critical and specific. Do not praise generic things. Focus on correctness, architecture consistency with the rest of the codebase, adherence to project patterns, security, and test quality.

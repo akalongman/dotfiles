@@ -62,14 +62,14 @@ Why it is the default, not dogma: the framework versions are usually multibyte-s
 - Use one-line docblocks when possible: `/** @var string */`
 - Add inline `/** @var \FQCN $variable */` annotations for variable assignments where the IDE / static analysis cannot infer the concrete type. Common triggers: `Collection::first()` / `firstOrFail()` returning generic `mixed`, factory `create()` / `make()` returning the base `Model` class, `app(Contract::class)` container resolutions, partial Mockery mocks. Place the annotation as a one-line block on its own line, immediately above the assignment, using a fully-qualified class name. Skip the annotation when the right-hand side is already typed (method return-type declared, constructor `new ConcreteClass()`, fully-typed factory call).
   ```php
-  // Add — return type is generic mixed:
+  // Add: return type is generic mixed
   /** @var \App\Models\Courses\Course $course */
   $course = FakeDataProvider::createRandomCourses()->first();
 
-  // Skip — service method's return type already declares Course:
+  // Skip: service method's return type already declares Course
   $course = $this->coursesService->findOneByIdOrFail($scope, $id);
 
-  // Skip — constructor literal is unambiguous:
+  // Skip: constructor literal is unambiguous
   $resource = new CourseEquivalencyResource($model);
   ```
 - Most common type should be first in multi-type docblocks:
@@ -169,12 +169,12 @@ return static::applyRelationTree(static::$structure, $tree);
 - Show progress for loops, summary at end
 - Put output BEFORE processing item (easier debugging):
   ```php
-  $items->each(function(Item $item) {
-      $this->info("Processing item id `{$item->id}`...");
+  $items->each(function (Item $item) {
+      $this->info('Processing item id `' . $item->id . '`...');
       $this->processItem($item);
   });
 
-  $this->comment("Processed {$items->count()} items.");
+  $this->comment('Processed ' . $items->count() . ' items.');
   ```
 
 ## Strings & Formatting

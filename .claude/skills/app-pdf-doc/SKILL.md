@@ -6,7 +6,7 @@ argument-hint: [topic and audience, e.g. "payment API contract for partner devs"
 
 # Partner-Facing PDF Documents
 
-Produce a polished PDF an external party will read and judge the company by. One fixed neutral format, strict content boundary, two to three pages.
+Produce a polished PDF an external party will read and judge the company by. One fixed neutral format, strict content boundary, and only what the partner reads or acts on.
 
 ## Workflow
 
@@ -40,7 +40,7 @@ When a fact's partner visibility is uncertain (e.g. an internal multiplier that 
 
 ## Format rules
 
-- Two to three pages. If the draft runs longer, cut subsections, not table rows.
+- Length follows what the partner must read or act on. When a draft runs long, cut prose and invented sections, never contract detail (table rows, fields, status values).
 - The template's style is fixed. Do not add CSS, colors, or logos.
 - Status line says `Draft for confirmation` until the user explicitly says the contract is final.
 - Unconfirmed contracts also get the `<div class="note">` draft banner from the template.

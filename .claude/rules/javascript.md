@@ -30,12 +30,12 @@ paths:
 - Exception: single-line arrow functions where context is obvious.
 
 ```javascript
-// Good — full names in multi-line functions
+// Good: full names in multi-line functions
 function saveUserSession(userSession) {
     // ...
 }
 
-// Acceptable — short name in single-line arrow
+// Acceptable: short name in single-line arrow
 userSessions.forEach(s => saveUserSession(s));
 ```
 
@@ -88,7 +88,7 @@ const obj = {
 // Good
 const [hours, minutes] = '12:00'.split(':');
 
-// Good — configuration objects with defaults
+// Good: configuration objects with defaults
 function createUser({ name, email, role = 'member' }) {
     // ...
 }
