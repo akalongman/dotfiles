@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 #
-# later — park a follow-up note from any terminal, concurrently with whatever
-# Claude (or anything else) is doing. Thin, safe front-end over the engine at
-# ~/.claude/scripts/later.sh.
+# later: park and manage follow-up notes from any terminal. Thin front-end
+# over the engine in the app-later skill.
 #
-# Notes are stored per-project in ./NOTES.local.md and resurfaced by Claude's
-# Stop hook once the queue settles. The ENTIRE argument string is the note, so
-# first words like "check" or "list" are parked literally, never mistaken for a
-# subcommand.
+# The whole argument string is the note unless it has the exact shape of a
+# subcommand: `all` alone, or `done` / `drop` followed only by note numbers.
+# So `later done with the migration` is parked, and `later -- all` parks the
+# literal text "all".
 
-ENGINE="$HOME/.claude/scripts/later.sh"
+ENGINE="${LATER_ENGINE:-$HOME/.claude/skills/app-later/scripts/later.sh}"
 
 if [ ! -x "$ENGINE" ]; then
     echo "later: engine not found or not executable at $ENGINE" >&2
     exit 1
 fi
+
+only_numbers() {
+    [ $# -gt 0 ] || return 1
+    local a
+    for a in "$@"; do
+        case "$a" in ''|*[!0-9]*) return 1 ;; esac
+    done
+}
 
 case "${1:-}" in
     '')
@@ -22,12 +29,30 @@ case "${1:-}" in
         ;;
     -h|--help)
         printf '%s\n' \
-            'later — park a follow-up note (front-end for later.sh)' \
+            'later: park and manage follow-up notes (front-end for later.sh)' \
             '' \
             'usage:' \
-            '  later                list parked notes for the current project' \
-            '  later <note...>      park <note...> into ./NOTES.local.md' \
-            '  later -h | --help    show this help'
+            '  later                 list parked notes for the current project' \
+            '  later <note...>       park <note...> in the project queue' \
+            '  later done <n>...     tick notes off by their list number' \
+            '  later drop <n>...     delete notes by their list number' \
+            '  later all             open notes across all projects' \
+            '  later -- <note...>    park text that looks like a subcommand' \
+            '  later -h | --help     show this help'
+        ;;
+    --)
+        shift
+        exec "$ENGINE" add "$*"
+        ;;
+    all)
+        [ $# -eq 1 ] && exec "$ENGINE" all
+        exec "$ENGINE" add "$*"
+        ;;
+    done|drop)
+        if only_numbers "${@:2}"; then
+            exec "$ENGINE" "$@"
+        fi
+        exec "$ENGINE" add "$*"
         ;;
     *)
         exec "$ENGINE" add "$*"

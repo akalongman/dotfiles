@@ -1,0 +1,6 @@
+{
+  "name": "app-later",
+  "description": "Parking lot for follow-up notes: park, list, close, and a session-start backlog reminder.",
+  "version": "1.0.0",
+  "skills": ["./"]
+}

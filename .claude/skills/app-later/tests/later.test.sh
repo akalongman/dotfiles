@@ -249,4 +249,20 @@ key="$(printf '%s' "$s/NOTES.local.md" | sha1sum | cut -d' ' -f1)"
 printf 'garbage\n\n' > "$T_CACHE/later/v2/$key"
 assert_contains "$(hook_in "$s" | ss)" "Oldest notes:" "corrupt state means never shown"
 
+# --- wrapper shapes ---------------------------------------------------
+WRAPPER="${LATER_WRAPPER:-$REAL_HOME/bin/later}"
+
+w="$(mk_repo)"
+wr() { ( cd "$w" && HOME="$T_HOME" XDG_CACHE_HOME="$T_CACHE" TZ=UTC LATER_NOW="$NOW" LATER_ENGINE="$ENGINE" bash "$WRAPPER" "$@" ); }
+assert_eq "$(wr)" "later: no parked notes" "bare later lists"
+wr first note >/dev/null
+assert_eq "$(wr done with the migration, check logs)" "later: parked -> done with the migration, check logs" "done plus words is a note"
+assert_eq "$(wr all hands meeting notes)" "later: parked -> all hands meeting notes" "all plus words is a note"
+assert_eq "$(wr -- all)" "later: parked -> all" "double dash parks a subcommand word"
+assert_eq "$(wr drop)" "later: parked -> drop" "drop with no numbers is a note"
+assert_eq "$(wr done 1)" "later: done -> first note" "done with a number closes"
+assert_eq "$(wr drop 1 2)" "$(printf 'later: dropped -> done with the migration, check logs\nlater: dropped -> all hands meeting notes')" "drop with numbers deletes"
+assert_contains "$(LATER_ROOTS="$w" wr all)" "open in 1 queues" "all alone scans"
+assert_contains "$(wr --help)" "later done <n>" "help lists the subcommands"
+
 finish

@@ -1,0 +1,17 @@
+{
+  "description": "Shows the parked-note count when a session starts",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/later.sh session-start",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

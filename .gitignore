@@ -106,10 +106,9 @@ __pycache__/
 .claude/skills/app-workstation-project
 .claude/skills/app-local-environment
 !.claude/hooks
-# scripts: the /later engine plus the worktree orchestrator and its tests
+# scripts: the worktree orchestrator and its tests
 !.claude/scripts
 .claude/scripts/*
-!.claude/scripts/later.sh
 !.claude/scripts/worktree.sh
 !.claude/scripts/tests
 
