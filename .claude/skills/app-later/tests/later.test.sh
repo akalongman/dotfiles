@@ -238,6 +238,11 @@ assert_eq "$(hook_in /nonexistent/dir | ss)" "" "missing directory: nothing"
 assert_eq "$(hook_in "$s" | ( cd / && HOME="$T_HOME" XDG_CACHE_HOME="$T_CACHE" CLAUDE_CODE_ENTRYPOINT=sdk-cli bash "$ENGINE" session-start ))" "" "headless session is ignored"
 assert_ok "malformed input exits 0" bash -c "printf 'not json' | HOME='$T_HOME' XDG_CACHE_HOME='$T_CACHE' CLAUDE_CODE_ENTRYPOINT=cli bash '$ENGINE' session-start"
 
+# An unreadable queue: nothing on stdout or stderr, and exit 0.
+ur="$(mktemp -d)"; TMPDIRS+=("$ur"); printf '%s\n' '- [ ] unreadable' > "$ur/NOTES.local.md"; chmod 000 "$ur/NOTES.local.md"
+out="$(hook_in "$ur" | ( cd / && HOME="$T_HOME" XDG_CACHE_HOME="$T_CACHE" CLAUDE_CODE_ENTRYPOINT=cli TZ=UTC LATER_NOW="$NOW" bash "$ENGINE" session-start 2>&1; echo "exit $?" ))"
+assert_eq "$out" "exit 0" "unreadable queue prints nothing on either stream and exits 0"
+
 # Unwritable state: still displays.
 ro="$(mktemp -d)"; TMPDIRS+=("$ro"); chmod 500 "$ro"
 out="$(hook_in "$s" | ( cd / && HOME="$T_HOME" XDG_CACHE_HOME="$ro" CLAUDE_CODE_ENTRYPOINT=cli TZ=UTC LATER_NOW="$NOW" bash "$ENGINE" session-start ) | jq -r '.systemMessage // empty')"
@@ -248,6 +253,13 @@ chmod 700 "$ro"
 key="$(printf '%s' "$s/NOTES.local.md" | sha1sum | cut -d' ' -f1)"
 printf 'garbage\n\n' > "$T_CACHE/later/v2/$key"
 assert_contains "$(hook_in "$s" | ss)" "Oldest notes:" "corrupt state means never shown"
+
+# Leading-zero state reads as decimal: "08" is not valid octal and must not
+# abort the hook, and a digest written as 0<now> is recent, so no list.
+# pipefail carries the engine's exit status out of ss.
+printf '08\n0%s\n' "$NOW" > "$T_CACHE/later/v2/$key"
+out="$(hook_in "$s" | ss; echo "exit $?")"
+assert_eq "$(printf '%s\n' "$out" | sed 's/,.*//')" "later: 13 parked in $(basename "$s")"$'\n'"exit 0" "leading-zero state still displays and exits 0"
 
 # --- wrapper shapes ---------------------------------------------------
 WRAPPER="${LATER_WRAPPER:-$REAL_HOME/bin/later}"

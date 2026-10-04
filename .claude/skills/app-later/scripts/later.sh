@@ -241,7 +241,8 @@ cmd_all() {
 # that changes if the message has to go into model context instead.
 emit() { jq -n --arg m "$1" '{systemMessage: $m}'; }
 
-num_or_zero() { case "$1" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$1" ;; esac; }
+# Base 10 forced: a hand-edited "08" is not octal, and "010" is ten.
+num_or_zero() { case "$1" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$((10#$1))" ;; esac; }
 
 cmd_session_start() {
     command -v jq >/dev/null 2>&1 || return 0
@@ -304,6 +305,10 @@ case "${1:-}" in
     list)          cmd_list ;;
     done|drop)     cmd_close "$@" ;;
     all)           cmd_all ;;
-    session-start) cmd_session_start; exit 0 ;;
+    # A subshell: an expansion error discards the whole top-level command,
+    # which would skip the exit 0; inside a subshell it ends only the
+    # subshell. The handler writes stdout only through emit, once the
+    # message is complete, so a failure leaves no display or the whole one.
+    session-start) ( cmd_session_start ) 2>/dev/null; exit 0 ;;
     *)             usage >&2; exit 1 ;;
 esac
