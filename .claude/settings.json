@@ -71,16 +71,6 @@
             "async": true
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/scripts/later.sh check",
-            "timeout": 10,
-            "statusMessage": "Checking parked notes"
-          }
-        ]
       }
     ],
     "WorktreeCreate": [
