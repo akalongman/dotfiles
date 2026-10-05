@@ -4,6 +4,9 @@
 TESTS_RUN=0
 TESTS_FAILED=0
 TMPDIRS=()
+# Parent of every mk_repo directory. Callers write "$(mk_repo)", a subshell,
+# so mk_repo cannot add its directory to TMPDIRS; finish removes this root.
+TMPROOT="$(mktemp -d)"
 
 _pass() { TESTS_RUN=$((TESTS_RUN + 1)); }
 _fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); printf 'FAIL: %s\n' "$1" >&2; }
@@ -38,8 +41,7 @@ assert_nofile() { # path msg
 }
 
 mk_repo() {
-    local dir; dir="$(mktemp -d)"
-    TMPDIRS+=("$dir")
+    local dir; dir="$(mktemp -d -p "$TMPROOT")"
     git -C "$dir" init -q
     git -C "$dir" config user.email t@t.t
     git -C "$dir" config user.name t
@@ -74,5 +76,6 @@ mk_setup_target() { # dir kind
 finish() {
     printf '\n%d run, %d failed\n' "$TESTS_RUN" "$TESTS_FAILED" >&2
     for d in "${TMPDIRS[@]}"; do rm -rf "$d"; done
+    rm -rf "$TMPROOT"
     [ "$TESTS_FAILED" -eq 0 ]
 }
