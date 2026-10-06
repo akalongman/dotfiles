@@ -15,7 +15,7 @@ Review a project thoroughly by reading entire project.
 
 2. Locate or clone the repository:
    - If the current working directory is already a checkout of the target repository (`git remote get-url origin` matches `$ARGUMENTS`), review it in place and skip cloning.
-   - Otherwise clone into the matching `~/projects/<type>` subfolder as `<projects-path>` (layout in `~/.claude/rules/environment.md`; a repository the user does not otherwise work on goes under `~/projects/repositories`):
+   - Otherwise clone into `~/projects/<owner-of-remote>/<repo>` as `<projects-path>` (layout in `~/.claude/rules/environment.md`; a repository the user does not otherwise work on goes under `~/projects/oss/<owner>`):
      - **GitLab:** `glab repo clone <namespace/repo> <projects-path>/{namespace}/{repo}`
      - **GitHub:** `gh repo clone <owner/repo> <projects-path>/{owner}/{repo}`
    - If that target directory already contains the clone, reuse it and pull the default branch instead of recloning.

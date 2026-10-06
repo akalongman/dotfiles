@@ -2,7 +2,7 @@
 
 - Be critical, not validating. We are equals: look for edge cases, race conditions, and performance bottlenecks instead of agreeing with my ideas.
 - For browser tasks prefer the `agent-browser` skill (or `claude-in-chrome`) over driving Playwright directly.
-- For cloning or creating projects, use the matching `~/projects/<type>` subfolder (layout in `rules/environment.md`).
+- For cloning or creating projects, use `~/projects/<owner>/<repo>`, the remote's owner (`oss/<owner>/<repo>` for other people's code; layout in `rules/environment.md`), then run `sites-link` for a web project.
 - Before writing inline shell in a hook or config file, check for an existing orchestration primitive (composer or npm scripts, Makefile, justfile) and put the logic there. The hook owns "when"; the project script owns "what". When in doubt, show the inline and extracted shapes with a recommendation.
 - When a decision has a defensible best-practice answer (design, architecture, API shape), lead with a reasoned recommendation and its rationale, not a multiple-choice menu. Reserve multiple choice for genuinely open scoping or preference calls. Asking when genuinely uncertain is welcome.
 - Do not silently rename an identifier that crosses a system boundary (environment variable, config key, database column, external API field, route name) because it looks misspelled. It is often the live contract. Surface it and ask; if a fix is wanted, prefer accepting both names over a hard rename.
@@ -22,6 +22,7 @@
 - Before writing a Dockerfile layer that installs packages on a third-party image, confirm the package manager exists in the pinned image; the check is in `rules/docker.md`.
 - Before assessing whether an external tool, library, or service fits a workflow, fetch its current docs (especially MCP, plugin, or integration pages) and skim recent releases. Tools ship several modes that look identical from a tagline. If I have to say "go research it", you skipped this step.
 - Prefer the latest LTS release of any software we run or depend on (operating systems, runtimes, databases, frameworks), and move to a new LTS deliberately when it ships rather than staying on the previous one until forced (2026-09-16, Ubuntu 24.04's OpenSSL could not offer post-quantum key exchange).
+- Before writing or reviewing a plan or spec that will create code, read the rule files in the Index for every language the plan introduces, even when the repo has no file of that type yet. Path-scoped rules do not load until such a file exists (2026-10-05, Ismino plan 1 was written and reviewed without `rules/javascript.md`).
 - Make every change reproducible and definition-first: Terraform for cloud resources, cloud-init or Ansible for server configuration, importable or exportable definitions (JSON container exports, API scripts, declarative config) for SaaS settings, instead of hand edits in consoles or over SSH. When a hand edit is unavoidable, mirror it into the definition the same day and say so.
 
 ## Stops
@@ -47,6 +48,7 @@
 |---|---|---|
 | This machine: `.test` sites, data stores, runtimes, shell gotchas | `rules/environment.md`, `rules/environment.local.md` | always |
 | Git branches, commits, GitHub and GitLab | `rules/git.md` | always |
+| SQL: ad hoc queries on live databases, locks and query plans | `rules/sql.md` | always |
 | PHP and Laravel | `rules/php.md` | PHP files |
 | JavaScript | `rules/javascript.md` | JS files |
 | Rust | `rules/rust.md` | Rust files |
