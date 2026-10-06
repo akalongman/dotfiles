@@ -9,7 +9,7 @@ the final message.
   the brief is `final-brief.md`, then stop. Never start another unit; never
   edit code, the task file or the source's spec documents yourself.
 - **Ledger.** Read `progress.md` as `head -n 3`, then
-  `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Open before merge|Final phase):|: (complete|parked|blocked)'`,
+  `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Ruling \(controller\)|Open before merge|Final phase):|: (complete|parked|blocked)'`,
   then `tail -n 20`; never the whole file. Append your unit's lines to it as
   you go: each dispatch, each verdict, each fix round, each deferred minor.
   Append them in the same call as the action they record (the dispatch,
@@ -66,7 +66,14 @@ the final message.
   needed): without `Mode: hands-off` in your dispatch, stop and return
   `needs-ruling` with the question; with it, decide on your best reading,
   ledger `Ruling: <decision>. Cost if wrong: <what>`, append the same line to
-  `decisions.md`, and continue. A code-to-source mismatch: `needs-ruling`
+  `decisions.md`, and continue. Outside hands-off you may settle a finding
+  or concern against the plan's own text yourself when all four hold: the
+  change stays inside the brief's file list; every check the plan step
+  names still passes unchanged; no spec line, task-list line or interface
+  another unit consumes changes; nothing new happens on the live machine
+  or outside the repository. Ledger it as `Ruling (controller):
+  <decision>. Cost if wrong: <what>`, never as `Ruling:`. Any condition
+  failing: `needs-ruling`. A code-to-source mismatch: `needs-ruling`
   without hands-off; with it, ledger `Section N: parked (mismatch: <what>)`
   and return `parked`. A normative line of a spec delta is part of the
   source: neither you nor an implementer adds or changes one. A gap in the
