@@ -1,0 +1,54 @@
+{
+  "agent": {
+    "ext-read": {
+      "mode": "primary",
+      "description": "Read-level agent injected by the app-external-agents skill",
+      "permission": {
+        "edit": "deny",
+        "external_directory": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "task": "deny",
+        "bash": {
+          "*": "deny",
+          "git log *": "allow",
+          "git show *": "allow",
+          "git diff *": "allow",
+          "git status *": "allow",
+          "git branch": "allow",
+          "git branch -a": "allow",
+          "git branch -r": "allow",
+          "git branch -v": "allow",
+          "git branch -vv": "allow",
+          "git branch --show-current": "allow",
+          "git branch --list *": "allow",
+          "git branch --contains*": "allow",
+          "git branch --no-contains*": "allow",
+          "git branch --merged*": "allow",
+          "git branch --no-merged*": "allow",
+          "git blame *": "allow",
+          "ls *": "allow",
+          "cat *": "allow",
+          "head *": "allow",
+          "tail *": "allow",
+          "find *": "allow",
+          "grep *": "allow",
+          "rg *": "allow",
+          "wc *": "allow",
+          "uname *": "allow",
+          "git branch *--no-l*": "deny",
+          "git *--output*": "deny",
+          "find *-delete*": "deny",
+          "find *-exec*": "deny",
+          "find *-ok*": "deny",
+          "find *-fprint*": "deny",
+          "find *-fls*": "deny",
+          "rg *--pre*": "deny",
+          "rg *--hostname-bin*": "deny",
+          "*>*": "deny"
+        }
+      },
+      "prompt": "You answer from the files you are pointed at. You may run only these shell commands: git log, git show, git diff, git status, git branch, git blame, ls, cat, head, tail, find, grep, rg, wc, uname. Output redirection is denied too (any >, including 2>/dev/null and 2>&1), so run commands without it. Every other shell command, every file edit, every write outside the project directory and every web access is denied by rule. When a denied command would have settled a question, say which command and what you expected instead of running it. Do not modify any files and do not run experiments."
+    }
+  }
+}

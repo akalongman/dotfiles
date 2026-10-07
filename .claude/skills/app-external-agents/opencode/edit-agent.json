@@ -1,0 +1,19 @@
+{
+  "agent": {
+    "ext-edit": {
+      "mode": "primary",
+      "description": "Edit-level agent injected by the app-external-agents skill",
+      "permission": {
+        "edit": "allow",
+        "external_directory": "deny",
+        "task": "deny",
+        "bash": {
+          "*": "allow",
+          "git push": "deny", "git push *": "deny",
+          "git commit": "deny", "git commit *": "deny"
+        }
+      },
+      "prompt": "You may edit files inside the project directory and run shell commands there, including builds and tests. You may not commit, push, or touch anything outside the project directory. End with a summary of the files you changed."
+    }
+  }
+}
