@@ -48,6 +48,10 @@ export NVM_DIR="$HOME/.nvm"
 # cache rather than under ~/.aws, which is synced across machines
 export AWS_LOGIN_CACHE_DIRECTORY="$HOME/.cache/aws/login"
 
+# govc: keep no logged-in vCenter session under ~/.govmomi/sessions, where a
+# later bare govc with the same URL and user would reuse it
+export GOVC_PERSIST_SESSION=false
+
 # PATH (idempotent helpers; safe to source this file multiple times)
 __prepend_path() {
     case ":$PATH:" in
@@ -75,6 +79,19 @@ __append_path() {
 # Flutter SDK (extracted to ~/development/flutter; keep it user-writable so
 # `flutter upgrade` works without sudo)
 [ -d "$HOME/development/flutter/bin" ] && __append_path "$HOME/development/flutter/bin"
+
+# .NET: one user-level root written by dotnet-install.sh from the machine
+# playbook (no apt .NET packages). DOTNET_ROOT and the PATH entry make every
+# shell and every editor find this root; global tools live under it.
+# DOTNET_BUNDLE_EXTRACT_BASE_DIR used to come from the apt package's
+# /etc/profile.d/dotnet.sh.
+if [ -d "$HOME/.dotnet" ]; then
+    export DOTNET_ROOT="$HOME/.dotnet"
+    export DOTNET_BUNDLE_EXTRACT_BASE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/dotnet_bundle_extract"
+    export DOTNET_CLI_TELEMETRY_OPTOUT=1
+    __prepend_path "$HOME/.dotnet"
+    __append_path "$HOME/.dotnet/tools"
+fi
 
 unset -f __prepend_path __append_path
 export PATH
