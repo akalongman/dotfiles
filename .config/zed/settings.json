@@ -64,10 +64,26 @@
     "dock": "left"
   },
   "git_panel": {
-    "dock": "left"
+    "dock": "left",
+    // Folder hierarchy instead of one flat list; Laravel diffs get long
+    "tree_view": true,
+    // Uncommitted-change count on the status bar icon
+    "show_count_badge": true,
+    // Warn past the 72-character commit title limit
+    "commit_title_max_length": 72
+  },
+  "title_bar": {
+    // Dirty-state indicator on the branch button
+    "show_branch_status_icon": true
   },
 
   // --- Editor behavior ---
+  "tab_bar": {
+    // Pinned tabs on their own row above the working tabs, so a handful of
+    // pins does not eat the width of the row that changes all day. The
+    // second row appears only when a pane has both pinned and unpinned tabs
+    "show_pinned_tabs_in_separate_row": true
+  },
   "middle_click_paste": false,
   "autosave": "on_focus_change",
   "tab_size": 4,
@@ -100,7 +116,12 @@
     "inline_blame": {
       "enabled": true,
       "delay_ms": 600
-    }
+    },
+    // Worktrees from the title-bar picker land in <project>/.worktrees/<name>,
+    // served at https://<name>.<project>.test (the default "../worktrees"
+    // would put them beside the project). The worktree name is the
+    // subdomain, so type the branch name instead of letting Zed pick one
+    "worktree_directory": ".worktrees"
   },
 
   // --- Terminal ---

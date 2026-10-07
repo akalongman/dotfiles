@@ -8,6 +8,11 @@
 # Personal "parking lot" notes (/later) and any *.local.md scratch files.
 *.local.md
 
+# Linked git worktrees created inside the checkout (Zed's worktree picker,
+# served at https://<name>.<project>.test). Git lists the directory as
+# untracked otherwise; nothing in it belongs to the parent checkout.
+.worktrees/
+
 # OS metadata
 .DS_Store
 Thumbs.db
