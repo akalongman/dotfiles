@@ -1,0 +1,9 @@
+{
+  // Ported from the PhpStorm live templates in Custom.xml. Zed has no
+  // $SELECTION$: type the prefix, then fill the tab stop
+  "dump and die": {
+    "prefix": "dump",
+    "body": ["dump($1);die;$0"],
+    "description": "dump(...);die;"
+  }
+}

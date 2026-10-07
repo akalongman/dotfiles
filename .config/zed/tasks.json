@@ -21,6 +21,20 @@
     "cwd": "$ZED_WORKTREE_ROOT"
   },
   {
+    // Inspections stand-in: no PHPStan language server exists for Zed, so
+    // the report lands in the terminal with clickable file:line paths
+    "label": "PHPStan: analyse",
+    "command": "vendor/bin/phpstan",
+    "args": ["analyse", "--memory-limit=1G", "--error-format=raw"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "PHPStan: analyse current file",
+    "command": "vendor/bin/phpstan",
+    "args": ["analyse", "--memory-limit=1G", "--error-format=raw", "$ZED_RELATIVE_FILE"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
     "label": "Composer: test",
     "command": "composer",
     "args": ["test"],

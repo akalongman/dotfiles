@@ -1,0 +1,8 @@
+{
+  // PhpStorm live template "phpe": PHP echo tag inside HTML
+  "php echo tag": {
+    "prefix": "phpe",
+    "body": ["<?php echo $1 ?>$0"],
+    "description": "PHP tags in HTML"
+  }
+}
