@@ -80,6 +80,16 @@ the final message.
   spec is a question, `needs-ruling` outside hands-off even when the fill
   looks obvious; under hands-off, ledger the ruling and the proposed line
   and leave the delta unchanged.
+- **Waiting.** A dispatch returns at once and the harness re-invokes you
+  when the child reports, so after a dispatch end your turn. Never start
+  a background shell to wait, poll or sleep; this replaces the
+  sub-skill's bounded stretches. A shell still running at your hand-back
+  makes the harness report you unfinished and may re-invoke you after
+  the driver has moved on. Before the return block, stop any background
+  shell you did start (TaskStop with its id) and ledger
+  `Section N: background shell stopped before return`, only when one was.
+  Deliver the block through the hand-back tool, never as plain text:
+  a plain-text final message is withheld while a background shell lives.
 - **Return block.** Your whole final message, nothing before or after:
 
   ```
