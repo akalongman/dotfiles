@@ -24,7 +24,15 @@
       "Bash(sdp requests:*)",
       "Bash(sdp search:*)",
       "Bash(sdp task:*)",
-      "Bash(sdp tasks:*)"
+      "Bash(sdp tasks:*)",
+      "Bash(ftpx servers:*)",
+      "Bash(ftpx check:*)",
+      "Bash(ftpx ls:*)",
+      "Bash(ftpx lsd:*)",
+      "Bash(ftpx lsl:*)",
+      "Bash(ftpx cat:*)",
+      "Bash(ftpx size:*)",
+      "Bash(ftpx pull:*)"
     ],
     "ask": [
       "Bash(sdp login:*)",

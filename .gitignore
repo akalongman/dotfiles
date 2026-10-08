@@ -105,6 +105,7 @@ __pycache__/
 .claude/skills/app-investigate-incident
 .claude/skills/app-workstation-project
 .claude/skills/app-local-environment
+.claude/skills/app-ftp
 !.claude/hooks
 # scripts: the worktree orchestrator and its tests
 !.claude/scripts
