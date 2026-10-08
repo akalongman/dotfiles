@@ -1,6 +1,6 @@
 ---
 name: app-later
-description: Use when the user parks a follow-up note for later, asks what is parked, or asks to act on, close or drop a parked note in the project's NOTES.local.md queue. Triggers: "/app-later <note>", "park this for later", "what is parked", "do the second parked note", "tick that note off".
+description: 'Use when the user parks a follow-up note for later, asks what is parked, or asks to act on, close or drop a parked note in the project''s NOTES.local.md queue. Triggers: "/app-later <note>", "park this for later", "what is parked", "do the second parked note", "tick that note off". To list, act on, close or drop notes, invoke without arguments; any argument is parked as a note.'
 argument-hint: "[note text; omit to list the queue]"
 allowed-tools: Bash(~/.claude/skills/app-later/scripts/later.sh add:*) Bash(~/.claude/skills/app-later/scripts/later.sh list)
 ---

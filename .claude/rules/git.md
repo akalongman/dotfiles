@@ -91,15 +91,7 @@ branch, branch first" behavior.
 
 ## Encrypted paths (git-crypt)
 
-- Secret directories are encrypted with git-crypt, one symmetric key per
-  repository: `.gitattributes` routes the directory
-  (`dir/** filter=git-crypt diff=git-crypt`), then `git-crypt init` and
-  `git-crypt export-key`; the keyfile is stored as a 1Password Document
-  titled "<Project> git-crypt key" in the Agents vault. Never
-  `git-crypt add-gpg-user` (signing is SSH, GPG is not part of the workflow).
-- Unlock a clone with
-  `git-crypt unlock <(op document get "<Project> git-crypt key" --vault Agents)`.
-- Before the first push of an encrypted directory, confirm `git-crypt status -e`
-  lists every file and a stored blob starts with `\0GITCRYPT`. Compare keys by
-  sha256, never print one. git-crypt cannot rotate keys: a leaked key means
-  re-committing under a new directory and treating the old history as exposed.
+Secret directories are encrypted with git-crypt, one symmetric keyfile per
+repository stored in 1Password. The setup, unlock command, first-push checks
+and leaked-key rule are in the `app-git-crypt` skill; invoke it before
+touching an encrypted path or its key.
