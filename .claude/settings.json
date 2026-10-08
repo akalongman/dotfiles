@@ -43,7 +43,7 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "opus",
+  "model": "fable",
   "enableAllProjectMcpServers": true,
   "skillOverrides": {
     "app-rabbitmq-guidelines": "user-invocable-only",
@@ -161,6 +161,7 @@
   "autoCompactEnabled": true,
   "switchModelsOnFlag": false,
   "showTurnDuration": true,
+  "timeFormat": "24-hour",
   "remoteControlAtStartup": true,
   "agentPushNotifEnabled": false,
   "skipAutoPermissionPrompt": true

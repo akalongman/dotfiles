@@ -19,6 +19,9 @@ the final message.
   validates the ids, then writes the ticks and the ledger line together;
   exit 5 means an id is not in the section and nothing was written); a plan source uses the
   sub-skill's own marking. Never hand-edit the task file.
+- **Workspace.** Pass every sub-skill script (`review-package` included) an
+  output path inside the dispatch's own workspace directory; a call without
+  one falls back to `.superpowers/sdd/tasks*/` and is a defect.
 - **Subagent types and tiers.** Implementers dispatch as
   `app-sdd-implementer`; task reviewers and re-reviewers as
   `app-sdd-reviewer`; on the tier the dispatch prompt names (`opus` unless

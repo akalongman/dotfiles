@@ -51,7 +51,10 @@ branch, branch first" behavior.
 - Before pushing, inspect what the push will publish (`git log @{u}..` or
   `git log origin/<branch>..HEAD`) and surface any commits beyond the one you
   intended. A push publishes the whole branch, so commits that were already
-  local-ahead ride along.
+  local-ahead ride along. A safety check run before a push must gate it
+  (`check && git push`, or an explicit abort on failure), never merely
+  precede it in a `;` chain (2026-09-29, the push ran before a tracked-file
+  check's result was read).
 - When the user is about to commit code, has finished a spec implementation, or
   asks for a commit message, suggest exactly one option, no alternatives.
 - Use a short imperative title under 72 characters.
@@ -79,6 +82,12 @@ branch, branch first" behavior.
 - Never mention Claude Code in PR or MR descriptions, PR or MR comments, or
   issue comments.
 - Do not include a "Test plan" section in PR or MR descriptions.
+- After a merge lands (direct or auto-merge), watch the target branch's
+  post-merge pipeline to its end and report its result; the merge is not done
+  until that pipeline, including any deploy job, is green, and a green MR
+  pipeline is not evidence for it. Investigate a failure there before
+  reporting the work complete (2026-09-28, sc-924: the dev pipeline failed on
+  a flaky test after I had reported the merge done).
 
 ## Encrypted paths (git-crypt)
 
