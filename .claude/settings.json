@@ -124,7 +124,8 @@
     "skill-creator@claude-plugins-official": false,
     "slack@claude-plugins-official": false,
     "human-resources@synced": false,
-    "cowork-plugin-management@synced": false
+    "cowork-plugin-management@synced": false,
+    "tmux-session-state@akalongman": true
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {
@@ -136,7 +137,7 @@
     "akalongman": {
       "source": {
         "source": "directory",
-        "path": "/home/longman/projects/repositories/akalongman/claude-plugins"
+        "path": "/home/longman/projects/akalongman/claude-plugins"
       }
     }
   },
