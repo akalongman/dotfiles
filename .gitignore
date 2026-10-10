@@ -161,6 +161,15 @@ __pycache__/
 !.config/phpactor
 !.config/zed
 !.config/nvm
+# systemd user units: only the tmux reaper pair is configuration; the
+# other units are app state, private (linked from the private repository)
+# or secret-bearing, and the *.wants directories are enable-time symlinks.
+!.config/systemd
+.config/systemd/*
+!.config/systemd/user
+.config/systemd/user/*
+!.config/systemd/user/tmux-reap.service
+!.config/systemd/user/tmux-reap.timer
 
 # htop writes a temp file next to htoprc on exit; never track it.
 .config/htop/*.tmp.*
@@ -192,6 +201,8 @@ bin/*
 !bin/listppa
 !bin/power-consumption
 !bin/power-input
+!bin/tests
+!bin/tmux-reap
 !bin/worktree
 !bin/yadm-stage-settings
 !bin/zed-term

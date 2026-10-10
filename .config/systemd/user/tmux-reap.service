@@ -1,0 +1,6 @@
+[Unit]
+Description=Reap idle tmux sessions (unattached, single-pane, no running process)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/tmux-reap --apply

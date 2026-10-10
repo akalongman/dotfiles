@@ -9,6 +9,11 @@
 # every tab would mirror the same window. Each tab therefore picks the first
 # window no attached tab is showing (restored tabs reattach to surviving
 # windows after a Zed restart) and opens a new window only when all are taken.
+#
+# The group is not always named after the holder: tmux-resurrect restores
+# the member whose id sorts first as the plain session and the others as
+# its views, so after a reboot a group often carries a tab's name. Every
+# lookup below reads the group from the sessions instead of assuming it.
 
 name="$(basename "$PWD" | tr -c 'A-Za-z0-9_-' '-')"
 base="zed-${name%-}"
@@ -16,8 +21,8 @@ base="zed-${name%-}"
 if ! tmux has-session -t "=$base" 2>/dev/null; then
     # The holder may be gone while tabs still hold the group (the reaper used
     # to kill it): join a surviving member so the shared windows are kept.
-    member=$(tmux list-sessions -F '#{session_group} #{session_name}' 2>/dev/null \
-        | awk -v g="$base" '$1 == g { print $2; exit }')
+    member=$(tmux list-sessions -F '#{session_name} #{session_group}' 2>/dev/null \
+        | awk -v p="$base" '$2 != "" && $1 ~ ("^" p "-[0-9]+$") { print $1; exit }')
     if [ -n "$member" ]; then
         tmux new-session -d -t "=$member" -s "$base" 2>/dev/null
     else
@@ -25,10 +30,15 @@ if ! tmux has-session -t "=$base" 2>/dev/null; then
     fi
 fi
 
-# Current window of every attached session in the group (list-sessions exposes
-# window_* for the session's current window).
-shown=$(tmux list-sessions -F '#{session_group} #{session_attached} #{window_id}' 2>/dev/null \
-    | awk -v g="$base" '$1 == g && $2 > 0 { print $3 }' | tr '\n' ' ')
+# Current window of every attached session in the holder's group
+# (list-sessions exposes window_* for the session's current window).
+group=$(tmux list-sessions -F '#{session_name} #{session_group}' 2>/dev/null \
+    | awk -v b="$base" '$1 == b { print $2; exit }')
+shown=""
+if [ -n "$group" ]; then
+    shown=$(tmux list-sessions -F '#{session_group} #{session_attached} #{window_id}' 2>/dev/null \
+        | awk -v g="$group" '$1 == g && $2 > 0 { print $3 }' | tr '\n' ' ')
+fi
 
 target=""
 for w in $(tmux list-windows -t "=$base" -F '#{window_id}' 2>/dev/null); do
