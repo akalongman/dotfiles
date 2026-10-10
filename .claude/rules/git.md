@@ -48,6 +48,12 @@ branch, branch first" behavior.
   autoMode block) must be committed with a plain `git commit` from the index;
   the pathspec form commits the working-tree version and bypasses the filtered
   blob (2026-09-21).
+- Before committing a file other sessions also edit (CLAUDE.md, rule files,
+  skills), read `git diff -- <path>` and confirm every hunk is yours; the
+  path-limited form commits the whole working-tree file, including another
+  session's uncommitted edits. Compare the post-commit stat with the change
+  you made before pushing (2026-10-10, a CLAUDE.md commit published another
+  session's rule).
 - Before pushing, inspect what the push will publish (`git log @{u}..` or
   `git log origin/<branch>..HEAD`) and surface any commits beyond the one you
   intended. A push publishes the whole branch, so commits that were already
