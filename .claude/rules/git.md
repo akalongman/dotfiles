@@ -74,6 +74,7 @@ branch, branch first" behavior.
 
 ## GitHub and GitLab
 
+- When creating a repository, protect its default branch before the first push.
 - For anything on GitHub, use the `gh` tool.
 - Edit a PR title or body with `gh api -X PATCH repos/<owner>/<repo>/pulls/<n>`,
   not `gh pr edit` (it fails on repos with classic project cards), and read the
@@ -88,6 +89,14 @@ branch, branch first" behavior.
   pipeline is not evidence for it. Investigate a failure there before
   reporting the work complete (2026-09-28, sc-924: the dev pipeline failed on
   a flaky test after I had reported the merge done).
+- `gh run list --commit` matches only a full 40-character SHA; a short one
+  returns an empty list, not an error. Resolve it with `git rev-parse` first,
+  and make a wait loop fail when the list stays empty for two minutes
+  (2026-10-10, a CI wait idled 30 minutes).
+- When auto mode blocks a release-tag push the user already asked for, say so
+  and ask for an explicit go-ahead in their words, then rerun the same checked
+  command; hand over a `! bash <path>` script only if it is blocked again
+  (2026-10-10, v0.3.0).
 
 ## Encrypted paths (git-crypt)
 
