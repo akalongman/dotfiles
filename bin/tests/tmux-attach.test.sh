@@ -252,5 +252,29 @@ tab "$G"
 assert_eq "$(views_of sgp-sgp | grep -c .)" "2" "lone view: the ungrouped survivor and the terminal are the holder's members"
 assert_eq "$(windows_of sgp-sgp)" "2" "lone view: the holder shares the survivor's windows"
 
+# --- Task 6: the .bashrc sequence of finding 4, and a dotted directory
+# Terminal 1 and 2 at ~, terminal 1 exits its shell and closes, terminal 3
+# opens: it must not mirror terminal 2 and main must stay unattached.
+tab "$H"; tab "$H"
+m1=$(views_of main | head -1); m2=$(views_of main | tail -1)
+w2=$(window_of "$m2")
+tmux send-keys -t "=$m1:" 'exit' Enter
+sleep 1
+tmux kill-session -t "=$m1"
+sleep 1
+tab "$H"
+m3=$(views_of main | grep -v "^$m2$")
+assert_eq "$(printf '%s\n' "$m3" | grep -c .)" "1" "bashrc sequence: terminal 3 is one view"
+assert_eq "$(window_of "$m2")" "$w2" "bashrc sequence: terminal 2 kept its window"
+case "$(window_of "$m3")" in "$w2") assert_eq "$(window_of "$m3")" "another window" "bashrc sequence: terminal 3 does not mirror terminal 2" ;; *) assert_eq 1 1 "bashrc sequence: terminal 3 does not mirror terminal 2" ;; esac
+assert_eq "$(attached main)" "0" "bashrc sequence: main is never attached directly"
+
+# A dotted directory gets a view, not a direct attach.
+tab "$H/.dotfiles-private/machine"
+d=$(views_of dotfiles-private)
+assert_eq "${d%_*}" "dotfiles-private" "dotted directory: the view is named after the key"
+assert_eq "$(attached "$d")" "1" "dotted directory: the view is attached"
+assert_eq "$(attached dotfiles-private)" "0" "dotted directory: the holder is not"
+
 teardown
 finish
