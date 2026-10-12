@@ -13,44 +13,85 @@ T="$(mktemp -d)"; TMPDIRS+=("$T")
 mkdir "$T/bin"
 printf '#!/bin/sh\nexec /usr/bin/tmux -f /dev/null -S "%s/sock" "$@"\n' "$T" > "$T/bin/tmux"
 chmod +x "$T/bin/tmux"
-export PATH="$T/bin:$PATH" SHELL=/bin/sh
+export PATH="$T/bin:$PATH" SHELL=/bin/sh XDG_RUNTIME_DIR="$T"
 unset TMUX TMUX_PANE
 # script(1) copies its stdin into the pty and types the EOF character
 # when stdin ends, which would close the shell a tab lands on; a FIFO
 # opened read-write never ends.
 mkfifo "$T/keep"
-trap 'tmux kill-server 2>/dev/null' EXIT
+# The shim by path: once finish has removed $T, the trap's call fails instead of reaching the real tmux.
+trap '"$T/bin/tmux" kill-server 2>/dev/null' EXIT
 
 # A client that stays attached: script(1) gives tmux a pty and keeps it
 # until the server goes away.
 attach() { script -q -f -c "tmux $1" /dev/null <> "$T/keep" >/dev/null 2>&1 & }
 names() { tmux list-sessions -F '#{session_name}' 2>/dev/null | sort | tr '\n' ' '; }
 attached() { tmux list-sessions -F '#{session_name} #{session_attached}' | awk -v n="$1" '$1 == n { print $2 }'; }
+would() { "$@" | awk '/would kill/ { print $3 }' | sort | tr '\n' ' '; }
 
 # hold: a holder with two windows, two restored views (detached, without
 # destroy-unattached, exactly what tmux-resurrect recreates) and one live view.
 tmux new-session -d -s hold
 tmux new-window -t =hold
-tmux new-session -d -t =hold -s hold-40
-tmux new-session -d -t =hold -s hold-41
-attach 'new-session -t =hold -s hold-99 \; set-option destroy-unattached on'
-# orphan: a group whose holder is gone; nothing says which member owns it.
-tmux new-session -d -s orphan-1
-tmux new-window -t =orphan-1
-tmux new-session -d -t =orphan-1 -s orphan-2
+tmux new-session -d -t =hold -s hold_40
+tmux new-session -d -t =hold -s hold_41
+attach 'new-session -t =hold -s hold_99 \; set-option destroy-unattached on'
+# orphan: a group whose holder is gone; both members are views.
+tmux new-session -d -s orphan_1
+tmux new-window -t =orphan_1
+tmux new-session -d -t =orphan_1 -s orphan_2
+# nested: a view whose parent is itself a view (the focus script used to
+# name views after whichever member tmux resolved).
+tmux new-session -d -s nest
+tmux new-window -t =nest
+tmux new-session -d -t =nest -s nest_7
+tmux new-session -d -t =nest_7 -s nest_7_8
 # idle: unattached, one idle shell. busy: the same, but something is running.
 tmux new-session -d -s idle
 tmux new-session -d -s busy
 tmux send-keys -t busy 'sleep 300' Enter
 sleep 1
-assert_eq "$(attached hold-99)" "1" "precondition: the live view is attached"
+assert_eq "$(attached hold_99)" "1" "precondition: the live view is attached"
 
-would="$("$REAPER" | awk '/would kill/ { print $3 }' | sort | tr '\n' ' ')"
-assert_eq "$would" "hold-40 hold-41 idle " "dry run names the restored views and the idle shell"
+# Everything above is seconds old: under the default grace nothing goes.
+assert_eq "$(would "$REAPER")" "" "default grace: fresh views and holders are kept"
+
+export TMUX_REAP_GRACE=0
+assert_eq "$(would "$REAPER")" "hold_40 hold_41 idle nest_7 nest_7_8 orphan_1 " "no grace: dry run names the restored views, the nested views, one orphan and the idle shell"
 
 "$REAPER" --apply >/dev/null
-assert_eq "$(names)" "busy hold hold-99 orphan-1 orphan-2 " "apply keeps the holder, the live view, the orphans and the busy shell"
+assert_eq "$(names)" "busy hold hold_99 nest orphan_2 " "apply keeps the holder, the live view, the surviving orphan, nest and the busy shell"
 assert_eq "$(tmux list-windows -t =hold -F '#{window_id}' | wc -l)" "2" "killing views leaves the shared windows"
+assert_eq "$(tmux list-windows -t =orphan_2 -F '#{window_id}' | wc -l)" "2" "the surviving orphan keeps both windows"
+assert_eq "$(tmux list-windows -t =nest -F '#{window_id}' | wc -l)" "2" "nest keeps both windows"
 
-tmux kill-server 2>/dev/null; wait
+# A holder older than the grace and a view between its claim and its
+# attach: idle, unattached, but the view is younger than the grace, which
+# protects both. Grace 3 keeps the test short.
+export TMUX_REAP_GRACE=3
+tmux new-session -d -s fresh
+sleep 4
+tmux new-session -d -t =fresh -s fresh_5
+assert_eq "$(would "$REAPER")" "" "grace: an old holder is kept while its view is younger than the grace"
+sleep 4
+assert_eq "$(would "$REAPER")" "fresh fresh_5 " "grace passed: the idle pair goes"
+unset TMUX_REAP_GRACE
+assert_eq "$(would "$REAPER")" "" "default grace: a pair seconds old is kept"
+TMUX_REAP_GRACE=0 "$REAPER" --apply >/dev/null
+assert_eq "$(names)" "busy hold hold_99 nest orphan_2 " "no grace: the fresh pair is idle and goes"
+
+# The reaper defers to tmux-attach: while a terminal holds a key's lock
+# (holder check, pick, claim), nothing of that key is killed.
+tmux new-session -d -s locked
+tmux new-session -d -t =locked -s locked_3
+flock -o "$XDG_RUNTIME_DIR/tmux-attach-locked.lock" sleep 8 &
+lock_pid=$!
+sleep 0.5
+TMUX_REAP_GRACE=0 "$REAPER" --apply >/dev/null
+assert_eq "$(names)" "busy hold hold_99 locked locked_3 nest orphan_2 " "lock held: the key's sessions are kept"
+kill "$lock_pid"; wait "$lock_pid" 2>/dev/null
+TMUX_REAP_GRACE=0 "$REAPER" --apply >/dev/null
+assert_eq "$(names)" "busy hold hold_99 nest orphan_2 " "lock free: the idle pair goes"
+
+"$T/bin/tmux" kill-server 2>/dev/null; wait
 finish

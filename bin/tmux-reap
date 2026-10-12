@@ -2,21 +2,29 @@
 #
 # Kill tmux sessions that are provably doing nothing:
 #   - a view that no client is attached to. A view is a grouped session
-#     named <member>-<digits> after another member of its group: zed-term's
-#     zed-<project>-<pid> tabs and the main-<id> sessions .bashrc opens. A
-#     live view carries destroy-unattached and vanishes with its client;
-#     tmux-resurrect restores views without it, so an unattached one is a
-#     leftover of an earlier boot, and its windows live on in the member it
-#     is named after.
+#     named <key>_<digits>: the terminals tmux-attach opens, and the tabs
+#     the Claude session focus script opens. A live view carries
+#     destroy-unattached and vanishes with its client; tmux-resurrect
+#     restores views without it, so an unattached one older than the grace
+#     is a leftover of an earlier boot. It is killed only while another
+#     member of its group survives this run, so the windows live on.
 #   - any other session that is
 #     - not attached to any client
 #     - single window, single pane
 #     - the pane's shell has no child process (nothing running)
 #     - no other session in its group has a client attached (a detached
-#       holder such as zed-term's zed-<project> base keeps the shared windows
-#       alive for the attached tabs; killing it would let the last tab's
-#       destroy-unattached take the windows down with it)
+#       holder keeps the shared windows alive for the attached views;
+#       killing it would let the last view's destroy-unattached take the
+#       windows down with it)
+#     - neither it nor a member of its group is younger than the grace (a
+#       view is created unattached and attaches a moment later; its holder
+#       has no client in between)
 #
+# The grace is 60 seconds, read from TMUX_REAP_GRACE for the tests.
+# Before a kill the session is read again under its key's tmux-attach lock
+# (same name, same creation time, still no client, no group member younger
+# than the grace), so a terminal opening at that moment is never undercut;
+# a busy lock keeps the session.
 # Never touches a session with work in it. Pass --apply to actually kill;
 # default is a dry run.
 
@@ -25,38 +33,82 @@ set -uo pipefail
 apply=0
 [ "${1:-}" = "--apply" ] && apply=1
 
+grace=${TMUX_REAP_GRACE:-60}
+now=$(date +%s)
 killed=0
 kept=0
+reaped=""
 
-sessions=$(tmux list-sessions -F '#{session_name}|#{session_attached}|#{session_windows}|#{session_group}|#{session_group_attached}' 2>/dev/null)
+sessions=$(tmux list-sessions -F '#{session_name}|#{session_attached}|#{session_windows}|#{session_group}|#{session_group_attached}|#{session_created}' 2>/dev/null)
 
-is_view() { # name group: the group has a member named <name minus its -digits suffix>
-    local suffix="${1##*-}" base="${1%-*}"
-    case "$suffix" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$base" = "$1" ] && return 1
+is_view() { # name group: name ends in _<digits> and another member of the group survives this run
+    case "$1" in *_*) ;; *) return 1 ;; esac
+    case "${1##*_}" in ''|*[!0-9]*) return 1 ;; esac
     printf '%s\n' "$sessions" \
-        | awk -F'|' -v b="$base" -v g="$2" '$1 == b && $4 == g { found = 1 } END { exit !found }'
+        | awk -F'|' -v n="$1" -v g="$2" -v r="$reaped" '
+            BEGIN { split(r, a, "\n"); for (i in a) gone[a[i]] = 1 }
+            $4 == g && $1 != n && !($1 in gone) { found = 1 }
+            END { exit !found }'
 }
 
-reap() { # name
-    local path
-    path=$(tmux list-panes -t "$1" -F '#{pane_current_path}' 2>/dev/null | head -1)
+young() { # name group: the session, or a member of its group when group is set, is younger than the grace
+    printf '%s\n' "$sessions" \
+        | awk -F'|' -v n="$1" -v g="$2" -v now="$now" -v grace="$grace" '
+            ($1 == n || (g != "" && $4 == g)) && now - $6 < grace { found = 1 }
+            END { exit !found }'
+}
+
+still_idle() { # name created: the session still exists with that creation time, has no client, and no member of its group is younger than the grace
+    tmux list-sessions -F '#{session_name}|#{session_attached}|#{session_group}|#{session_created}' 2>/dev/null \
+        | awk -F'|' -v n="$1" -v c="$2" -v now="$(date +%s)" -v grace="$grace" '
+            { att[NR] = $2; grp[NR] = $3; born[NR] = $4 }
+            $1 == n { seen = NR }
+            END {
+                if (!seen || att[seen] != "0" || born[seen] != c) exit 1
+                for (i = 1; i <= NR; i++)
+                    if (i != seen && grp[seen] != "" && grp[i] == grp[seen] && now - born[i] < grace) exit 1
+                exit 0
+            }'
+}
+
+reap() { # name created
+    local path lock ok=0
+    path=$(tmux list-panes -t "=$1:" -F '#{pane_current_path}' 2>/dev/null | head -1)
     if [ "$apply" -eq 1 ]; then
-        tmux kill-session -t "=$1" 2>/dev/null && killed=$((killed + 1))
+        # Under the key's lock (a view's key is its name up to the first _)
+        # read the session again: the snapshot may predate a client, a view
+        # joining its group, or a replacement of the same name. The lock is
+        # taken on a command group, not with exec, so an unwritable lock
+        # file fails the kill instead of the script.
+        lock="${XDG_RUNTIME_DIR:-/tmp}/tmux-attach-${1%%_*}.lock"
+        {
+            if flock -w 2 9 && still_idle "$1" "$2"; then
+                tmux kill-session -t "=$1" 2>/dev/null && ok=1
+            fi
+        } 9>"$lock" 2>/dev/null
+        if [ "$ok" -eq 0 ]; then
+            kept=$((kept + 1))
+            return
+        fi
+        killed=$((killed + 1))
     else
         printf '  would kill  %-6s  (%s)\n' "$1" "$path"
         killed=$((killed + 1))
     fi
+    reaped="$reaped$1"$'\n'
 }
 
-while IFS='|' read -r name attached windows group group_attached; do
+while IFS='|' read -r name attached windows group group_attached created; do
     [ -z "$name" ] && continue
 
     if [ "$attached" != "0" ]; then
         kept=$((kept + 1)); continue
     fi
     if [ -n "$group" ] && is_view "$name" "$group"; then
-        reap "$name"; continue
+        if young "$name" ""; then
+            kept=$((kept + 1)); continue
+        fi
+        reap "$name" "$created"; continue
     fi
     if [ "${group_attached:-0}" != "0" ]; then
         kept=$((kept + 1)); continue
@@ -64,8 +116,11 @@ while IFS='|' read -r name attached windows group group_attached; do
     if [ "$windows" != "1" ]; then
         kept=$((kept + 1)); continue
     fi
+    if young "$name" "$group"; then
+        kept=$((kept + 1)); continue
+    fi
 
-    panes=$(tmux list-panes -t "$name" -F '#{pane_pid}' 2>/dev/null)
+    panes=$(tmux list-panes -t "=$name:" -F '#{pane_pid}' 2>/dev/null)
     if [ "$(printf '%s\n' "$panes" | grep -c .)" != "1" ]; then
         kept=$((kept + 1)); continue
     fi
@@ -74,7 +129,7 @@ while IFS='|' read -r name attached windows group group_attached; do
         kept=$((kept + 1)); continue
     fi
 
-    reap "$name"
+    reap "$name" "$created"
 done <<< "$sessions"
 
 if [ "$apply" -eq 1 ]; then
