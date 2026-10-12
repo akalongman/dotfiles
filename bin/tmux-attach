@@ -84,9 +84,13 @@ if ! tmux list-sessions >/dev/null 2>&1; then
 fi
 
 # The lock: holder creation, pick and claim of one key run one at a time.
-# The fd is opened after the server is up, so the server never inherits it.
+# No tmux process inherits the fd, so the lock ends when this script closes it.
 lock="${XDG_RUNTIME_DIR:-/tmp}/tmux-attach-$key.lock"
 exec 9>"$lock" || fallback "cannot open $lock"
+# From here tmux runs with fd 9 closed: if the server checked above has
+# exited, a new-session starts a new one, which would otherwise keep the
+# lock for its whole life.
+tmux() { command tmux "$@" 9>&-; }
 flock -w 5 9 || fallback "the lock $lock is busy"
 
 # The holder, created detached in the terminal's directory when missing.

@@ -203,5 +203,23 @@ assert_eq "$(grep -c 'lock' "$T/fallback.err")" "1" "busy lock: the message name
 assert_eq "$(views_of tsmu-iac | grep -c .)" "3" "busy lock: no view was created"
 rm -f "$T/shell.env"
 
+# A server started under the lock must not keep it. A second shim on its
+# own socket answers the bare server check while no server runs there, so
+# the holder's new-session starts the server inside the locked region.
+mkdir "$T/bin2"
+cat > "$T/bin2/tmux" <<SHIM
+#!/bin/sh
+[ "\$*" = list-sessions ] && exit 0
+exec /usr/bin/tmux -f "$T/tmux.conf" -S "$T/sock2" "\$@"
+SHIM
+chmod +x "$T/bin2/tmux"
+O="$H/projects/oss/laravel/framework"
+PATH="$T/bin2:$PATH" fake_client "$O" "$ATTACH"
+sleep 1
+assert_eq "$("$T/bin2/tmux" list-sessions -F '#{session_name} #{session_attached}' 2>/dev/null | awk '$1 ~ /^oss-laravel-framework_/ { print $2 }')" "1" "server under the lock: the terminal is attached to its view"
+flock -n "$T/tmux-attach-oss-laravel-framework.lock" true
+assert_eq "$?" "0" "server under the lock: the lock is free once the view exists"
+"$T/bin2/tmux" kill-server 2>/dev/null
+
 teardown
 finish
