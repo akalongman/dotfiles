@@ -66,6 +66,7 @@ esac
 # fallback [message]: give the terminal a plain shell instead of a dead tab.
 fallback() {
     [ -z "${1:-}" ] || printf 'tmux-attach: %s; starting a plain shell\n' "$1" >&2
+    exec 9>&-
     NO_TMUX=1 exec "${SHELL:-/bin/bash}"
 }
 
@@ -81,6 +82,12 @@ if ! tmux list-sessions >/dev/null 2>&1; then
     tmux new-session -d -s tmux-attach_boot -c / 2>/dev/null && boot=1
     tmux list-sessions >/dev/null 2>&1 || fallback "cannot start the tmux server"
 fi
+
+# The lock: holder creation, pick and claim of one key run one at a time.
+# The fd is opened after the server is up, so the server never inherits it.
+lock="${XDG_RUNTIME_DIR:-/tmp}/tmux-attach-$key.lock"
+exec 9>"$lock" || fallback "cannot open $lock"
+flock -w 5 9 || fallback "the lock $lock is busy"
 
 # The holder, created detached in the terminal's directory when missing.
 if ! tmux has-session -t "=$key" 2>/dev/null; then
@@ -125,5 +132,6 @@ else
     tmux new-session -d -t "=$key" -s "$view" \; set-option -t "=$view:" @view 1 \; new-window -t "=$view:" -c "$dir"
 fi 2>/dev/null || fallback "cannot create the view $view"
 [ "$boot" -eq 0 ] || tmux kill-session -t =tmux-attach_boot 2>/dev/null
+exec 9>&-
 
 exec tmux attach-session -t "=$view" \; set-option -t "=$view:" destroy-unattached on

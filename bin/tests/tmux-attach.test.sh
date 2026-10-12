@@ -181,5 +181,27 @@ assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "stale view outside the 
 assert_eq "$(grep -c 'exists' "$T/fallback.err")" "1" "stale view outside the group: the message names the cause"
 rm -f "$T/shell.env"
 
+# --- Task 4: terminals that open together never share a window
+A="$H/projects/tsmu/iac"
+tmux new-session -d -s tsmu-iac -c "$A"
+touch "$T/delay"
+export TMUX_ATTACH_TEST_DELAY="$T/delay"
+tab_now "$A"; tab_now "$A"; tab_now "$A"
+sleep 10
+unset TMUX_ATTACH_TEST_DELAY; rm -f "$T/delay"
+n_tabs_n_windows tsmu-iac 3
+assert_eq "$(windows_of tsmu-iac)" "3" "race: the holder has exactly three windows"
+
+# The lock stays busy: a plain shell, never an unlocked pick.
+flock -o "$T/tmux-attach-tsmu-iac.lock" sleep 20 &
+holder_pid=$!
+sleep 0.5
+( cd "$A" && SHELL="$T/fakeshell" "$ATTACH" 2>"$T/fallback.err" )
+kill "$holder_pid" 2>/dev/null; wait "$holder_pid" 2>/dev/null
+assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "busy lock: the plain shell runs with NO_TMUX=1"
+assert_eq "$(grep -c 'lock' "$T/fallback.err")" "1" "busy lock: the message names the lock"
+assert_eq "$(views_of tsmu-iac | grep -c .)" "3" "busy lock: no view was created"
+rm -f "$T/shell.env"
+
 teardown
 finish
