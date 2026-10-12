@@ -63,5 +63,51 @@ case "${1:-}" in
     *) printf 'usage: tmux-attach [--key [dir]]\n' >&2; exit 2 ;;
 esac
 
-printf 'tmux-attach: attaching is not implemented yet\n' >&2
-exit 1
+# fallback [message]: give the terminal a plain shell instead of a dead tab.
+fallback() {
+    [ -z "${1:-}" ] || printf 'tmux-attach: %s; starting a plain shell\n' "$1" >&2
+    NO_TMUX=1 exec "${SHELL:-/bin/bash}"
+}
+
+[ -z "${TMUX:-}" ] || fallback
+dir=$(pwd)
+key=$(key_for "$dir") || fallback "no session key for $dir"
+view="${key}_$$"
+
+# The server. It exits when it has no sessions, so a terminal that finds no
+# server starts it with a throwaway session, killed once the view exists.
+boot=0
+if ! tmux list-sessions >/dev/null 2>&1; then
+    tmux new-session -d -s tmux-attach_boot -c / 2>/dev/null && boot=1
+    tmux list-sessions >/dev/null 2>&1 || fallback "cannot start the tmux server"
+fi
+
+# The holder, created detached in the terminal's directory when missing.
+if ! tmux has-session -t "=$key" 2>/dev/null; then
+    tmux new-session -d -s "$key" -c "$dir" 2>/dev/null || fallback "cannot create the session $key"
+fi
+
+# The pick: the first holder window that is not the current window of the
+# holder itself when a client attached it by hand, or of an attached member
+# of its group.
+group=$(tmux display -p -t "=$key:" '#{session_group}' 2>/dev/null)
+taken=$(tmux list-sessions -F '#{session_name}|#{session_group}|#{session_attached}|#{window_id}' 2>/dev/null \
+    | awk -F'|' -v k="$key" -v g="$group" '($1 == k || (g != "" && $2 == g)) && $3 > 0 { print $4 }' | paste -sd '|')
+target=""
+for w in $(tmux list-windows -t "=$key" -F '#{window_id}' 2>/dev/null); do
+    case "|$taken|" in
+        *"|$w|"*) ;;
+        *) target=$w; break ;;
+    esac
+done
+
+# The claim: a detached view on the picked window, or on a new window in
+# the terminal's directory when every window is shown.
+if [ -n "$target" ]; then
+    tmux new-session -d -t "=$key" -s "$view" \; select-window -t "=$view:$target"
+else
+    tmux new-session -d -t "=$key" -s "$view" \; new-window -t "=$view:" -c "$dir"
+fi 2>/dev/null || fallback "cannot create the view $view"
+[ "$boot" -eq 0 ] || tmux kill-session -t =tmux-attach_boot 2>/dev/null
+
+exec tmux attach-session -t "=$view" \; set-option -t "=$view:" destroy-unattached on

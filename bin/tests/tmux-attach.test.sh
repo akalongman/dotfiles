@@ -101,5 +101,54 @@ assert_eq "$(cd "$H/projects/tsmu/iac/ansible" && "$ATTACH" --key)" "tsmu-iac" "
 assert_eq "$(key "$H/___" 2>/dev/null)" "" "key: the error prints nothing on stdout"
 "$ATTACH" --key "$H/gone" >/dev/null 2>&1; assert_eq "$?" "1" "key: a missing directory exits 1"
 
+# --- Task 2: first, second and third terminal
+P="$H/projects/tsmu/tsmulms"
+tab "$P"
+assert_eq "$(attached tsmu-tsmulms)" "0" "first terminal: the holder stays unattached"
+v1=$(views_of tsmu-tsmulms)
+assert_eq "$(printf '%s\n' "$v1" | grep -c .)" "1" "first terminal: one view"
+assert_eq "${v1%_*}" "tsmu-tsmulms" "first terminal: the view is named after the key"
+case "${v1##*_}" in ''|*[!0-9]*) assert_eq "${v1##*_}" "digits" "first terminal: the view suffix is a pid" ;; *) assert_eq 1 1 "first terminal: the view suffix is a pid" ;; esac
+assert_eq "$(attached "$v1")" "1" "first terminal: the view is attached"
+assert_eq "$(tmux show-option -t "=$v1:" -v destroy-unattached)" "on" "first terminal: the view destroys itself on detach"
+assert_eq "$(window_of "$v1")" "$(tmux list-windows -t =tsmu-tsmulms -F '#{window_id}' | head -1)" "first terminal: the view shows the holder's first window"
+assert_eq "$(path_of "$v1")" "$P" "first terminal: the holder's window is in the project directory"
+tmux new-window -d -t =tsmu-tsmulms: -c "$P"
+tab "$P"
+n_tabs_n_windows tsmu-tsmulms 2
+assert_eq "$(windows_of tsmu-tsmulms)" "2" "second terminal: the free window is reused, none added"
+tab "$P/src"
+n_tabs_n_windows tsmu-tsmulms 3
+assert_eq "$(windows_of tsmu-tsmulms)" "3" "third terminal: no window was free, one was added"
+v3=$(views_of tsmu-tsmulms | tail -1)
+assert_eq "$(path_of "$v3")" "$P/src" "third terminal: the new window opens in the terminal's directory"
+
+# A legacy direct client on the holder (tmux attach by hand) takes its
+# window, even before any view has made the holder a group.
+tmux new-session -d -s personal-iac -c "$H/projects/personal/iac"
+tmux new-window -d -t =personal-iac: -c "$H/projects/personal/iac"
+fake_client "$H" "tmux attach-session -t =personal-iac"
+sleep 1
+tab "$H/projects/personal/iac"
+assert_eq "$(attached personal-iac)" "1" "direct client: the holder stays attached by hand"
+v=$(views_of personal-iac)
+assert_eq "$(tmux list-sessions -F '#{session_name} #{window_id}' | awk -v a=personal-iac -v b="$v" '$1 == a || $1 == b { print $2 }' | sort -u | wc -l)" "2" "direct client: the terminal does not share its window"
+assert_eq "$(windows_of personal-iac)" "2" "direct client: the second window was free"
+
+# No tmux: the terminal gets a plain shell with NO_TMUX=1, not a dead tab.
+mkdir "$T/broken"
+printf '#!/bin/sh\nexit 1\n' > "$T/broken/tmux"; chmod +x "$T/broken/tmux"
+( cd "$P" && PATH="$T/broken:$PATH" SHELL="$T/fakeshell" "$ATTACH" 2>"$T/fallback.err" )
+assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "no server: the plain shell runs with NO_TMUX=1"
+assert_eq "$(grep -c 'tmux-attach:' "$T/fallback.err")" "1" "no server: one line explains the fallback"
+rm -f "$T/shell.env"
+( cd "$P" && TMUX=fake SHELL="$T/fakeshell" "$ATTACH" 2>"$T/fallback.err" )
+assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "inside tmux: the plain shell runs with NO_TMUX=1"
+assert_eq "$(wc -c < "$T/fallback.err")" "0" "inside tmux: no message"
+rm -f "$T/shell.env"
+( cd "$H/___" && SHELL="$T/fakeshell" "$ATTACH" 2>"$T/fallback.err" )
+assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "empty key: the plain shell runs with NO_TMUX=1"
+rm -f "$T/shell.env"
+
 teardown
 finish
