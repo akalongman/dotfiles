@@ -111,6 +111,7 @@ assert_eq "${v1%_*}" "tsmu-tsmulms" "first terminal: the view is named after the
 case "${v1##*_}" in ''|*[!0-9]*) assert_eq "${v1##*_}" "digits" "first terminal: the view suffix is a pid" ;; *) assert_eq 1 1 "first terminal: the view suffix is a pid" ;; esac
 assert_eq "$(attached "$v1")" "1" "first terminal: the view is attached"
 assert_eq "$(tmux show-option -t "=$v1:" -v destroy-unattached)" "on" "first terminal: the view destroys itself on detach"
+assert_eq "$(tmux show-option -t "=$v1:" -qv @view)" "1" "first terminal: the view carries the claim marker"
 assert_eq "$(window_of "$v1")" "$(tmux list-windows -t =tsmu-tsmulms -F '#{window_id}' | head -1)" "first terminal: the view shows the holder's first window"
 assert_eq "$(path_of "$v1")" "$P" "first terminal: the holder's window is in the project directory"
 tmux new-window -d -t =tsmu-tsmulms: -c "$P"
@@ -148,6 +149,36 @@ assert_eq "$(wc -c < "$T/fallback.err")" "0" "inside tmux: no message"
 rm -f "$T/shell.env"
 ( cd "$H/___" && SHELL="$T/fakeshell" "$ATTACH" 2>"$T/fallback.err" )
 assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "empty key: the plain shell runs with NO_TMUX=1"
+rm -f "$T/shell.env"
+
+# --- Task 3: a claimed window is taken before its client attaches
+C="$H/projects/longisoft/company"
+tmux new-session -d -s longisoft-company -c "$C"
+tmux new-window -d -t =longisoft-company: -c "$C"
+touch "$T/pause"
+TMUX_ATTACH_TEST_PAUSE="$T/pause" fake_client "$C" "$ATTACH"
+sleep 1
+assert_eq "$(views_of longisoft-company | grep -c .)" "1" "paused claim: the first view exists before it attaches"
+assert_eq "$(tmux list-sessions -F '#{session_name} #{session_attached}' | awk -v g="$(group_of longisoft-company)" -v h=longisoft-company '$1 != h && $1 ~ "^longisoft-company_" { print $2 }')" "0" "paused claim: the first view is not attached yet"
+tab "$C"
+sleep 3
+n_tabs_n_windows longisoft-company 2
+assert_eq "$(windows_of longisoft-company)" "2" "paused claim: the second terminal took the other free window"
+rm -f "$T/pause"
+
+# A stale view with this terminal's pid (pids repeat after a reboot): an
+# unattached one in the holder's group gives way, and the window it marked
+# as claimed is free again; anything else falls back.
+I="$H/projects/inex/inex-smpp"
+tmux new-session -d -s inex-inex-smpp -c "$I"
+fake_client "$I" "sh -c 'tmux new-session -d -t =inex-inex-smpp -s inex-inex-smpp_\$\$ \\; set-option -t =inex-inex-smpp_\$\$: @view 1; exec $ATTACH'"
+sleep 2
+assert_eq "$(views_of inex-inex-smpp | grep -c .)" "1" "stale view: one view of that pid remains"
+assert_eq "$(attached "$(views_of inex-inex-smpp)")" "1" "stale view: the remaining view is the live one"
+assert_eq "$(windows_of inex-inex-smpp)" "1" "stale view: its claimed window was free again, none added"
+( cd "$H/projects/personal/iac" && SHELL="$T/fakeshell" sh -c 'tmux new-session -d -s personal-iac_$$; exec "$0"' "$ATTACH" 2>"$T/fallback.err" )
+assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "stale view outside the group: the plain shell runs"
+assert_eq "$(grep -c 'exists' "$T/fallback.err")" "1" "stale view outside the group: the message names the cause"
 rm -f "$T/shell.env"
 
 teardown

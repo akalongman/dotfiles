@@ -87,12 +87,27 @@ if ! tmux has-session -t "=$key" 2>/dev/null; then
     tmux new-session -d -s "$key" -c "$dir" 2>/dev/null || fallback "cannot create the session $key"
 fi
 
-# The pick: the first holder window that is not the current window of the
-# holder itself when a client attached it by hand, or of an attached member
-# of its group.
+# The stale name: a session that already carries this terminal's view name
+# is a restored view from before a reboot whose pid the kernel reused.
+# Unattached and in the holder's group it gives way before the pick, so the
+# window it may have claimed counts as free (the holder keeps the windows);
+# anything else is left alone and the terminal gets a plain shell.
 group=$(tmux display -p -t "=$key:" '#{session_group}' 2>/dev/null)
-taken=$(tmux list-sessions -F '#{session_name}|#{session_group}|#{session_attached}|#{window_id}' 2>/dev/null \
-    | awk -F'|' -v k="$key" -v g="$group" '($1 == k || (g != "" && $2 == g)) && $3 > 0 { print $4 }' | paste -sd '|')
+stale=$(tmux list-sessions -F '#{session_name}|#{session_attached}|#{session_group}' 2>/dev/null \
+    | awk -F'|' -v v="$view" '$1 == v { print $2 "|" $3 }')
+if [ -n "$stale" ]; then
+    if [ -n "$group" ] && [ "$stale" = "0|$group" ]; then
+        tmux kill-session -t "=$view" 2>/dev/null
+    else
+        fallback "a session named $view exists"
+    fi
+fi
+
+# The pick: the first holder window that is not the current window of the
+# holder itself when a client attached it by hand, or of a group member
+# that is attached or marked @view (claimed, not yet attached).
+taken=$(tmux list-sessions -F '#{session_name}|#{session_group}|#{session_attached}|#{@view}|#{window_id}' 2>/dev/null \
+    | awk -F'|' -v k="$key" -v g="$group" '($1 == k || (g != "" && $2 == g)) && ($3 > 0 || $4 == "1") { print $5 }' | paste -sd '|')
 target=""
 for w in $(tmux list-windows -t "=$key" -F '#{window_id}' 2>/dev/null); do
     case "|$taken|" in
@@ -102,11 +117,12 @@ for w in $(tmux list-windows -t "=$key" -F '#{window_id}' 2>/dev/null); do
 done
 
 # The claim: a detached view on the picked window, or on a new window in
-# the terminal's directory when every window is shown.
+# the terminal's directory when every window is shown, marked @view so the
+# next pick counts it before any client attaches.
 if [ -n "$target" ]; then
-    tmux new-session -d -t "=$key" -s "$view" \; select-window -t "=$view:$target"
+    tmux new-session -d -t "=$key" -s "$view" \; set-option -t "=$view:" @view 1 \; select-window -t "=$view:$target"
 else
-    tmux new-session -d -t "=$key" -s "$view" \; new-window -t "=$view:" -c "$dir"
+    tmux new-session -d -t "=$key" -s "$view" \; set-option -t "=$view:" @view 1 \; new-window -t "=$view:" -c "$dir"
 fi 2>/dev/null || fallback "cannot create the view $view"
 [ "$boot" -eq 0 ] || tmux kill-session -t =tmux-attach_boot 2>/dev/null
 
