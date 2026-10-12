@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# One tmux terminal, one window of its project.
+#
+# Every terminal (Zed's terminal.shell.program, the tmux block at the end of
+# ~/.bashrc) runs this script in its working directory. The directory maps to
+# a session key (key_for below); the key names a detached holder session that
+# owns the project's windows and is never attached. Each terminal is a grouped
+# view <key>_<pid> of the holder, shown on one window no other terminal shows,
+# and destroys itself when its client closes while the window lives on in the
+# holder. The pick and the claim run under a per-key lock, so terminals that
+# open together never land on one window.
+#
+# When tmux cannot be used, the terminal gets a plain shell with NO_TMUX=1
+# set, so the shell's own startup does not try again.
+#
+# Design: ~/.claude/docs/specs/2026-10-10-tmux-attach-design.md.
+#
+# Usage: tmux-attach              attach this terminal (replaces the process)
+#        tmux-attach --key [dir]  print the session key of dir (default: .)
+
+set -u
+
+# key_for dir: the session key on stdout; status 1 when there is none.
+# ~ is main; under ~/projects the first two path components (three under
+# oss) joined with -; elsewhere the basename of the git top level unless
+# that is ~ (the yadm gitlink), else the directory's basename. Everything
+# outside A-Z a-z 0-9 - becomes -, so a key never contains _, which is
+# what separates a view's pid from its key.
+key_for() {
+    local dir rel p1 p2 p3 rest key="" top
+    dir=$(cd -- "$1" 2>/dev/null && pwd) || return 1
+    if [ "$dir" = "$HOME" ]; then
+        printf 'main\n'
+        return 0
+    fi
+    case "$dir" in
+        "$HOME"/projects/?*)
+            rel=${dir#"$HOME"/projects/}
+            IFS=/ read -r p1 p2 p3 rest <<< "$rel"
+            if [ "$p1" = oss ] && [ -n "$p3" ]; then
+                key="$p1-$p2-$p3"
+            elif [ -n "$p2" ]; then
+                key="$p1-$p2"
+            fi
+            ;;
+    esac
+    if [ -z "$key" ]; then
+        top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)
+        if [ -n "$top" ] && [ "$top" != "$HOME" ]; then
+            key=${top##*/}
+        else
+            key=${dir##*/}
+        fi
+    fi
+    key=$(printf '%s' "$key" | tr -c 'A-Za-z0-9-' '-' | sed 's/^-*//; s/-*$//')
+    [ -n "$key" ] || return 1
+    printf '%s\n' "$key"
+}
+
+case "${1:-}" in
+    --key) key_for "${2:-.}"; exit ;;
+    '') ;;
+    *) printf 'usage: tmux-attach [--key [dir]]\n' >&2; exit 2 ;;
+esac
+
+printf 'tmux-attach: attaching is not implemented yet\n' >&2
+exit 1

@@ -202,6 +202,7 @@ bin/*
 !bin/power-consumption
 !bin/power-input
 !bin/tests
+!bin/tmux-attach
 !bin/tmux-reap
 !bin/worktree
 !bin/yadm-stage-settings
