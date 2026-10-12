@@ -262,6 +262,7 @@ tmux send-keys -t "=$m1:" 'exit' Enter
 sleep 1
 tmux kill-session -t "=$m1"
 sleep 1
+assert_eq "$(windows_of main)" "1" "precondition: terminal 1's window is gone"
 tab "$H"
 m3=$(views_of main | grep -v "^$m2$")
 assert_eq "$(printf '%s\n' "$m3" | grep -c .)" "1" "bashrc sequence: terminal 3 is one view"
