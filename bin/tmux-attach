@@ -83,6 +83,29 @@ if ! tmux list-sessions >/dev/null 2>&1; then
     tmux list-sessions >/dev/null 2>&1 || fallback "cannot start the tmux server"
 fi
 
+# The continuum restore runs a second after the plugins load, through a
+# wrapper that sleeps first and then runs the resurrect script. A holder
+# created before it would make the restore skip the saved member of that
+# name and leave its windows in a second group, so while the restore is on,
+# wait until the server is 3 seconds old and neither script runs. A restore
+# still running after 30 seconds is nothing to create a holder into: the
+# terminal gets the plain shell (and a throwaway session this run created
+# goes, since the restore keeps the server alive).
+restore_running() {
+    pgrep -u "$UID" -f 'tmux-(continuum/scripts/continuum_restore|resurrect/scripts/restore)\.sh' >/dev/null 2>&1
+}
+if [ "$(tmux show-option -gqv @continuum-restore 2>/dev/null)" = on ] && [ ! -f "$HOME/tmux_no_auto_restore" ]; then
+    started=$(tmux display -p '#{start_time}' 2>/dev/null)
+    deadline=$((SECONDS + 30))
+    while [ $(( $(date +%s) - ${started:-0} )) -lt 3 ] || restore_running; do
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            [ "$boot" -eq 0 ] || tmux kill-session -t =tmux-attach_boot 2>/dev/null
+            fallback "the tmux restore did not finish in 30 seconds"
+        fi
+        sleep 0.2
+    done
+fi
+
 # The lock: holder creation, pick and claim of one key run one at a time.
 # No tmux process inherits the fd, so the lock ends when this script closes it.
 lock="${XDG_RUNTIME_DIR:-/tmp}/tmux-attach-$key.lock"

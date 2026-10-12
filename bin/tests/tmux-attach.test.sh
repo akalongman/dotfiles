@@ -277,5 +277,44 @@ assert_eq "${d%_*}" "dotfiles-private" "dotted directory: the view is named afte
 assert_eq "$(attached "$d")" "1" "dotted directory: the view is attached"
 assert_eq "$(attached dotfiles-private)" "0" "dotted directory: the holder is not"
 
+# --- Task 7: the first terminals after a boot wait for the continuum restore
+# The fake restore scripts outlast the 3-second age guard, so a wait that
+# looked at the server's age alone would create the holder too early.
+mkdir -p "$T/tmux-resurrect/scripts" "$T/tmux-continuum/scripts"
+printf '#!/bin/sh\nsleep 6\n' > "$T/tmux-resurrect/scripts/restore.sh"
+printf '#!/bin/sh\nsleep 6\n' > "$T/tmux-continuum/scripts/continuum_restore.sh"
+chmod +x "$T/tmux-resurrect/scripts/restore.sh" "$T/tmux-continuum/scripts/continuum_restore.sh"
+R="$H/projects/akalongman/nbg-rates-mcp"; mkdir -p "$R"
+# Server running (a seed session), restore on, the resurrect script running.
+teardown
+tmux new-session -d -s seed
+tmux set-option -g @continuum-restore on
+bash "$T/tmux-resurrect/scripts/restore.sh" &
+restore_pid=$!
+tab_now "$R"
+sleep 4.5
+assert_fail "startup wait: no holder while the restore runs past the age guard" tmux has-session -t =akalongman-nbg-rates-mcp
+wait "$restore_pid"
+sleep 2
+assert_ok "startup wait: the holder exists once the restore ended" tmux has-session -t =akalongman-nbg-rates-mcp
+assert_eq "$(views_of akalongman-nbg-rates-mcp | grep -c .)" "1" "startup wait: the terminal attached afterwards"
+# No server at all: the terminal starts it with a throwaway session, the
+# option comes from the configuration file, the continuum wrapper (which
+# sleeps before it starts the resurrect script) counts as a running
+# restore, and the throwaway is gone after.
+teardown
+printf 'set -g @continuum-restore on\n' > "$T/tmux.conf"
+bash "$T/tmux-continuum/scripts/continuum_restore.sh" &
+restore_pid=$!
+tab_now "$R"
+sleep 4.5
+assert_eq "$(tmux list-sessions -F '#{session_name}' | tr '\n' ' ')" "tmux-attach_boot " "boot: only the throwaway session exists while the restore runs"
+wait "$restore_pid"
+sleep 2
+assert_ok "boot: the holder exists once the restore ended" tmux has-session -t =akalongman-nbg-rates-mcp
+assert_fail "boot: the throwaway session is gone" tmux has-session -t =tmux-attach_boot
+assert_eq "$(views_of akalongman-nbg-rates-mcp | grep -c .)" "1" "boot: the terminal attached afterwards"
+: > "$T/tmux.conf"
+
 teardown
 finish
