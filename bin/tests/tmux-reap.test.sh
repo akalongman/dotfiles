@@ -93,5 +93,27 @@ kill "$lock_pid"; wait "$lock_pid" 2>/dev/null
 TMUX_REAP_GRACE=0 "$REAPER" --apply >/dev/null
 assert_eq "$(names)" "busy hold hold_99 nest orphan_2 " "lock free: the idle pair goes"
 
+# A group without a holder whose other member goes while the reaper waits
+# on the key's lock: the view is now the group's last member, so it is
+# kept with its windows and its work. The lock is held on a test-shell fd
+# that the reaper does not inherit, and released well inside the reaper's
+# lock wait, so the view is kept by the re-read, not by a busy lock.
+tmux new-session -d -s lone_1
+tmux new-window -t =lone_1
+tmux send-keys -t =lone_1: 'sleep 300' Enter
+tmux new-session -d -t =lone_1 -s lone_2
+exec 8>"$XDG_RUNTIME_DIR/tmux-attach-lone.lock"
+flock 8
+TMUX_REAP_GRACE=0 "$REAPER" --apply >/dev/null 8>&- &
+reaper_pid=$!
+sleep 0.5
+assert_ok "precondition: the reaper waits on the lock" kill -0 "$reaper_pid"
+tmux kill-session -t =lone_2
+exec 8>&-
+wait "$reaper_pid"
+assert_eq "$(names)" "busy hold hold_99 lone_1 nest orphan_2 " "member gone under the lock: the last view is kept"
+assert_eq "$(tmux list-windows -t =lone_1 -F '#{window_id}' 2>/dev/null | wc -l)" "2" "the last view keeps both windows"
+tmux kill-session -t =lone_1 2>/dev/null
+
 "$T/bin/tmux" kill-server 2>/dev/null; wait
 finish

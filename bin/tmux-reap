@@ -23,8 +23,11 @@
 # The grace is 60 seconds, read from TMUX_REAP_GRACE for the tests.
 # Before a kill the session is read again under its key's tmux-attach lock
 # (same name, same creation time, still no client, no group member younger
-# than the grace), so a terminal opening at that moment is never undercut;
-# a busy lock keeps the session.
+# than the grace, and for a view another member of its group still there),
+# so a terminal opening at that moment is never undercut; a busy lock keeps
+# the session. A view's kill runs in one tmux command sequence behind a
+# has-session on that member, and a failing command stops the rest of the
+# sequence, so a member gone by the kill keeps the view.
 # Never touches a session with work in it. Pass --apply to actually kill;
 # default is a dry run.
 
@@ -58,32 +61,42 @@ young() { # name group: the session, or a member of its group when group is set,
             END { exit !found }'
 }
 
-still_idle() { # name created: the session still exists with that creation time, has no client, and no member of its group is younger than the grace
+still_idle() { # name created rule: the session still exists with that creation time, has no client, and no member of its group is younger than the grace; for the view rule another member of its group still exists, and its name is printed
     tmux list-sessions -F '#{session_name}|#{session_attached}|#{session_group}|#{session_created}' 2>/dev/null \
-        | awk -F'|' -v n="$1" -v c="$2" -v now="$(date +%s)" -v grace="$grace" '
-            { att[NR] = $2; grp[NR] = $3; born[NR] = $4 }
+        | awk -F'|' -v n="$1" -v c="$2" -v rule="$3" -v now="$(date +%s)" -v grace="$grace" '
+            { nm[NR] = $1; att[NR] = $2; grp[NR] = $3; born[NR] = $4 }
             $1 == n { seen = NR }
             END {
                 if (!seen || att[seen] != "0" || born[seen] != c) exit 1
                 for (i = 1; i <= NR; i++)
                     if (i != seen && grp[seen] != "" && grp[i] == grp[seen] && now - born[i] < grace) exit 1
-                exit 0
+                if (rule != "view") exit 0
+                for (i = 1; i <= NR; i++)
+                    if (i != seen && grp[seen] != "" && grp[i] == grp[seen]) { print nm[i]; exit 0 }
+                exit 1
             }'
 }
 
-reap() { # name created
-    local path lock ok=0
+reap() { # name created rule
+    local path lock member ok=0
     path=$(tmux list-panes -t "=$1:" -F '#{pane_current_path}' 2>/dev/null | head -1)
     if [ "$apply" -eq 1 ]; then
         # Under the key's lock (a view's key is its name up to the first _)
         # read the session again: the snapshot may predate a client, a view
-        # joining its group, or a replacement of the same name. The lock is
-        # taken on a command group, not with exec, so an unwritable lock
-        # file fails the kill instead of the script.
+        # joining its group, a replacement of the same name, or, for a view,
+        # the last other member of its group going away. The lock is taken
+        # on a command group, not with exec, so an unwritable lock file
+        # fails the kill instead of the script.
         lock="${XDG_RUNTIME_DIR:-/tmp}/tmux-attach-${1%%_*}.lock"
         {
-            if flock -w 2 9 && still_idle "$1" "$2"; then
-                tmux kill-session -t "=$1" 2>/dev/null && ok=1
+            if flock -w 2 9 && member=$(still_idle "$1" "$2" "$3"); then
+                if [ "$3" = "view" ]; then
+                    # has-session fails once the member is gone, and the
+                    # failure stops the sequence before the kill.
+                    tmux has-session -t "=$member" \; kill-session -t "=$1" 2>/dev/null && ok=1
+                else
+                    tmux kill-session -t "=$1" 2>/dev/null && ok=1
+                fi
             fi
         } 9>"$lock" 2>/dev/null
         if [ "$ok" -eq 0 ]; then
@@ -108,7 +121,7 @@ while IFS='|' read -r name attached windows group group_attached created; do
         if young "$name" ""; then
             kept=$((kept + 1)); continue
         fi
-        reap "$name" "$created"; continue
+        reap "$name" "$created" view; continue
     fi
     if [ "${group_attached:-0}" != "0" ]; then
         kept=$((kept + 1)); continue
@@ -129,7 +142,7 @@ while IFS='|' read -r name attached windows group group_attached created; do
         kept=$((kept + 1)); continue
     fi
 
-    reap "$name" "$created"
+    reap "$name" "$created" idle
 done <<< "$sessions"
 
 if [ "$apply" -eq 1 ]; then
