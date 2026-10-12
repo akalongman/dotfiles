@@ -154,11 +154,12 @@
     "font_weight": 400,
     "font_fallbacks": ["Hack Nerd Font Mono"],
     "working_directory": "first_project_directory",
-    // Persistent per-project tmux session (zed-<project>): terminal
-    // processes survive Zed restarts. The wrapper needs the
-    // working_directory setting above to derive the session name
+    // Every terminal runs tmux-attach: one detached tmux holder session per
+    // project, one grouped view per terminal, so processes survive Zed
+    // restarts and two terminals never mirror one window. The script reads
+    // the working_directory setting above to derive the session key.
     "shell": {
-      "program": "/home/longman/bin/zed-term"
+      "program": "/home/longman/bin/tmux-attach"
     },
     "copy_on_select": false,
     // Show the title the shell sets (tmux forwards the window name, which

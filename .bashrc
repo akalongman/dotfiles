@@ -162,13 +162,10 @@ command -v direnv &> /dev/null && eval "$(direnv hook bash)"
 # environment capture at project open, where exec tmux would fail with
 # "open terminal failed: not a terminal" and abort the whole env probe.
 #
-# Terminals opened in $HOME attach to (or create) `main`; terminals opened in
-# a project directory attach to a session named after the directory, creating
-# it if absent. If the target session already has a client, the new terminal
-# gets a grouped session (`new-session -t`) opened on a fresh window: the
-# window list is shared, but the view is independent rather than a mirror.
-# The grouped session self-destructs when its client closes; its windows
-# (and anything running in them) live on in the named session.
+# The terminal becomes a view of its project's detached holder session, on a
+# window no other terminal shows (~/bin/tmux-attach; the design it cites
+# explains the holder model). The script falls back to a plain shell with
+# NO_TMUX=1 when tmux cannot be used.
 if command -v tmux >/dev/null 2>&1 \
     && [ -n "$PS1" ] \
     && [ -t 0 ] \
@@ -177,15 +174,7 @@ if command -v tmux >/dev/null 2>&1 \
     && [ -z "$NO_TMUX" ] \
     && [ -z "$TERMINAL_EMULATOR" ] \
     && [ "$TERM_PROGRAM" != "vscode" ] \
-    && [ "$TERM_PROGRAM" != "zed" ]; then
-    if [ "$PWD" = "$HOME" ]; then
-        sess=main
-    else
-        sess=$(basename "$PWD")
-    fi
-    if tmux has-session -t "=$sess" 2>/dev/null && [ -n "$(tmux list-clients -t "=$sess" 2>/dev/null)" ]; then
-        exec tmux new-session -t "=$sess" \; set-option destroy-unattached on \; new-window
-    else
-        exec tmux new-session -A -s "$sess"
-    fi
+    && [ "$TERM_PROGRAM" != "zed" ] \
+    && [ -x "$HOME/bin/tmux-attach" ]; then
+    exec "$HOME/bin/tmux-attach"
 fi

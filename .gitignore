@@ -206,4 +206,3 @@ bin/*
 !bin/tmux-reap
 !bin/worktree
 !bin/yadm-stage-settings
-!bin/zed-term
