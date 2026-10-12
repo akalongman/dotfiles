@@ -38,7 +38,8 @@ printf '#!/bin/sh\nenv > "%s/shell.env"\n' "$T" > "$T/fakeshell"; chmod +x "$T/f
 # by pid (fake_client records them) before it waits.
 mkfifo "$T/keep"
 TABS=()
-teardown() { tmux kill-server 2>/dev/null; [ "${#TABS[@]}" -eq 0 ] || kill "${TABS[@]}" 2>/dev/null; wait; TABS=(); }
+# The shim by path: once finish has removed $T, the trap's call fails instead of reaching the real tmux.
+teardown() { "$T/bin/tmux" kill-server 2>/dev/null; [ "${#TABS[@]}" -eq 0 ] || kill "${TABS[@]}" 2>/dev/null; wait; TABS=(); }
 trap teardown EXIT
 
 # A home tree: a repository at its root (the yadm gitlink makes every
