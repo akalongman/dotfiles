@@ -93,9 +93,20 @@ exec 9>"$lock" || fallback "cannot open $lock"
 tmux() { command tmux "$@" 9>&-; }
 flock -w 5 9 || fallback "the lock $lock is busy"
 
-# The holder, created detached in the terminal's directory when missing.
+# The holder, created detached in the terminal's directory when missing. A
+# surviving view <key>_<digits> (the holder was killed by hand, or a restore
+# named the group after a view or restored a lone view without a group) is
+# joined instead, so its windows stay shared; should it vanish in between,
+# the holder starts alone.
 if ! tmux has-session -t "=$key" 2>/dev/null; then
-    tmux new-session -d -s "$key" -c "$dir" 2>/dev/null || fallback "cannot create the session $key"
+    survivor=$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
+        | awk -v k="$key" '$1 ~ ("^" k "_[0-9]+$") { print $1; exit }')
+    if [ -n "$survivor" ]; then
+        tmux new-session -d -t "=$survivor" -s "$key" 2>/dev/null
+    fi
+    if ! tmux has-session -t "=$key" 2>/dev/null; then
+        tmux new-session -d -s "$key" -c "$dir" 2>/dev/null || fallback "cannot create the session $key"
+    fi
 fi
 
 # The stale name: a session that already carries this terminal's view name

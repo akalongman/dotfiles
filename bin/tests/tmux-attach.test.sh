@@ -221,5 +221,36 @@ flock -n "$T/tmux-attach-oss-laravel-framework.lock" true
 assert_eq "$?" "0" "server under the lock: the lock is free once the view exists"
 "$T/bin2/tmux" kill-server 2>/dev/null
 
+# --- Task 5: a drifted group and a missing holder (carried over from zed-term)
+# tmux-resurrect restores a view first, so the group carries the view's
+# name and the holder is a mere member.
+L="$H/projects/personal/longmanme"; mkdir -p "$L"
+tmux new-session -d -s personal-longmanme_555 -c "$L"
+tmux new-window -d -t =personal-longmanme_555: -c "$L"
+tmux new-session -d -t =personal-longmanme_555 -s personal-longmanme
+assert_eq "$(group_of personal-longmanme)" "personal-longmanme_555" "precondition: the group carries a view's name"
+tab "$L"; tab "$L"
+n_tabs_n_windows personal-longmanme 2
+assert_eq "$(windows_of personal-longmanme)" "2" "drifted group: free windows reused, none added"
+
+# The holder is gone, two views survive under a group named after one of them.
+O="$H/projects/oss/laravel/framework"
+tmux new-session -d -s oss-laravel-framework_1 -c "$O"
+tmux new-window -d -t =oss-laravel-framework_1: -c "$O"
+tmux new-session -d -t =oss-laravel-framework_1 -s oss-laravel-framework_2
+tab "$O"
+assert_eq "$(group_of oss-laravel-framework)" "$(group_of oss-laravel-framework_1)" "missing holder: the recreated holder joins the surviving views"
+assert_eq "$(windows_of oss-laravel-framework)" "2" "missing holder: the holder shares the surviving windows"
+assert_eq "$(attached oss-laravel-framework)" "0" "missing holder: the recreated holder is not attached"
+
+# A lone surviving view with no group at all: tmux-resurrect recreates a
+# session whose group members are all gone as an ordinary session.
+G="$H/projects/sgp/sgp"; mkdir -p "$G"
+tmux new-session -d -s sgp-sgp_9 -c "$G"
+tmux new-window -d -t =sgp-sgp_9: -c "$G"
+tab "$G"
+assert_eq "$(views_of sgp-sgp | grep -c .)" "2" "lone view: the ungrouped survivor and the terminal are the holder's members"
+assert_eq "$(windows_of sgp-sgp)" "2" "lone view: the holder shares the survivor's windows"
+
 teardown
 finish
