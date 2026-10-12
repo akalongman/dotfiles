@@ -9,7 +9,13 @@ REAPER="$HERE/../tmux-reap"
 # shim first on PATH pins the socket and skips ~/.tmux.conf (plugins, the
 # continuum restore). TMUX_TMPDIR is not enough: tmux 3.4 falls back to
 # /tmp when that directory is missing.
-T="$(mktemp -d)"; TMPDIRS+=("$T")
+# Guard mktemp: with an empty $T the shim never exists, PATH gains /bin and
+# every tmux call (the kill-server included) would reach the live server.
+if ! T="$(mktemp -d)" || [ -z "$T" ] || [ ! -d "$T" ]; then
+    echo "tmux-reap.test.sh: mktemp -d failed; refusing to run against the live tmux server" >&2
+    exit 1
+fi
+TMPDIRS+=("$T")
 mkdir "$T/bin"
 printf '#!/bin/sh\nexec /usr/bin/tmux -f /dev/null -S "%s/sock" "$@"\n' "$T" > "$T/bin/tmux"
 chmod +x "$T/bin/tmux"
@@ -20,7 +26,7 @@ unset TMUX TMUX_PANE
 # opened read-write never ends.
 mkfifo "$T/keep"
 # The shim by path: once finish has removed $T, the trap's call fails instead of reaching the real tmux.
-trap '"$T/bin/tmux" kill-server 2>/dev/null' EXIT
+trap '[ -n "$T" ] && "$T/bin/tmux" kill-server 2>/dev/null' EXIT
 
 # A client that stays attached: script(1) gives tmux a pty and keeps it
 # until the server goes away.

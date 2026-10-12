@@ -14,7 +14,13 @@ ATTACH="$HERE/../tmux-attach"
 # when the file named by TMUX_ATTACH_TEST_PAUSE exists it sleeps before an
 # attach, so a test can force two terminals to read the same state or hold
 # one between its claim and its attach.
-T="$(mktemp -d)"; TMPDIRS+=("$T")
+# Guard mktemp: with an empty $T the shim never exists, PATH gains /bin and
+# every tmux call (the kill-server included) would reach the live server.
+if ! T="$(mktemp -d)" || [ -z "$T" ] || [ ! -d "$T" ]; then
+    echo "tmux-attach.test.sh: mktemp -d failed; refusing to run against the live tmux server" >&2
+    exit 1
+fi
+TMPDIRS+=("$T")
 mkdir "$T/bin"
 : > "$T/tmux.conf"
 cat > "$T/bin/tmux" <<EOF
@@ -39,7 +45,7 @@ printf '#!/bin/sh\nenv > "%s/shell.env"\n' "$T" > "$T/fakeshell"; chmod +x "$T/f
 mkfifo "$T/keep"
 TABS=()
 # The shim by path: once finish has removed $T, the trap's call fails instead of reaching the real tmux.
-teardown() { "$T/bin/tmux" kill-server 2>/dev/null; [ "${#TABS[@]}" -eq 0 ] || kill "${TABS[@]}" 2>/dev/null; wait; TABS=(); }
+teardown() { [ -n "$T" ] || return 0; "$T/bin/tmux" kill-server 2>/dev/null; [ "${#TABS[@]}" -eq 0 ] || kill "${TABS[@]}" 2>/dev/null; wait; TABS=(); }
 trap teardown EXIT
 
 # A home tree: a repository at its root (the yadm gitlink makes every
