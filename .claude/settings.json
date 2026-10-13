@@ -1,12 +1,13 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "respectGitignore": true,
+  "cleanupPeriodDays": 1825,
   "env": {
     "AZURE_MCP_COLLECT_TELEMETRY": "false",
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80",
-    "CLAUDE_CODE_NO_FLICKER": "1",
     "FORCE_HYPERLINK": "1",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "opus"
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus",
+    "BASH_DEFAULT_TIMEOUT_MS": "300000"
   },
   "attribution": {
     "commit": "",
@@ -43,7 +44,10 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "fable",
+  "model": "opus",
+  "fallbackModel": [
+    "opus"
+  ],
   "enableAllProjectMcpServers": true,
   "skillOverrides": {
     "app-rabbitmq-guidelines": "user-invocable-only",
@@ -109,13 +113,13 @@
     ]
   },
   "disableAllHooks": false,
+  "bashOutputMaxChars": 128000,
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh"
   },
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": false,
-    "superpowers@claude-plugins-official": true,
     "context7@claude-plugins-official": false,
     "phpstorm-plugin@phpstorm-marketplace": true,
     "security-guidance@claude-plugins-official": false,
@@ -125,7 +129,9 @@
     "slack@claude-plugins-official": false,
     "human-resources@synced": false,
     "cowork-plugin-management@synced": false,
-    "tmux-session-state@akalongman": true
+    "tmux-session-state@akalongman": true,
+    "cc-plugin-you-should-know@builtin": true,
+    "superpowers@superpowers-marketplace": true
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {
@@ -139,6 +145,12 @@
         "source": "directory",
         "path": "/home/longman/projects/akalongman/claude-plugins"
       }
+    },
+    "superpowers-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "obra/superpowers-marketplace"
+      }
     }
   },
   "outputStyle": "Explanatory",
@@ -149,6 +161,10 @@
     "verbs": [
       "Thinking"
     ]
+  },
+  "spellcheck": {
+    "enabled": true,
+    "language": "en_US"
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
@@ -161,10 +177,12 @@
     }
   },
   "awaySummaryEnabled": true,
+  "tui": "fullscreen",
   "timeFormat": "24-hour",
   "skipDangerousModePermissionPrompt": false,
   "skipWorkflowUsageWarning": true,
   "autoCompactEnabled": true,
+  "precomputeCompactionEnabled": true,
   "switchModelsOnFlag": false,
   "showTurnDuration": true,
   "remoteControlAtStartup": true,
