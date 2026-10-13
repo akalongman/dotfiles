@@ -99,10 +99,11 @@ branch, branch first" behavior.
   returns an empty list, not an error. Resolve it with `git rev-parse` first,
   and make a wait loop fail when the list stays empty for two minutes
   (2026-10-10, a CI wait idled 30 minutes).
-- When auto mode blocks a release-tag push the user already asked for, say so
-  and ask for an explicit go-ahead in their words, then rerun the same checked
-  command; hand over a `! bash <path>` script only if it is blocked again
-  (2026-10-10, v0.3.0).
+- When auto mode blocks an outward action the user already asked for (a
+  release-tag push, a merge, a deploy), say so and ask for an explicit
+  go-ahead in their words, then rerun the same checked command; hand over a
+  `! bash <path>` script only if it is blocked again (2026-10-10, v0.3.0;
+  2026-10-13, a staging merge).
 
 ## Encrypted paths (git-crypt)
 
