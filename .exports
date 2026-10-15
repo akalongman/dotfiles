@@ -52,6 +52,15 @@ export AWS_LOGIN_CACHE_DIRECTORY="$HOME/.cache/aws/login"
 # later bare govc with the same URL and user would reuse it
 export GOVC_PERSIST_SESSION=false
 
+# agent-browser: give Claude Code (every config dir) its own persistent
+# Chrome, independent of any claude.ai account. The profile dir is a separate
+# Chrome user data dir, so it runs beside the personal Chrome and keeps its
+# own site logins. Headed so a login or 2FA can be finished by hand. Chrome
+# locks the dir to one instance, so every slot uses the default session (a
+# named --session would try to launch a second Chrome and fail).
+export AGENT_BROWSER_PROFILE="$HOME/.local/share/agent-browser/agents-profile"
+export AGENT_BROWSER_HEADED=1
+
 # PATH (idempotent helpers; safe to source this file multiple times)
 __prepend_path() {
     case ":$PATH:" in
