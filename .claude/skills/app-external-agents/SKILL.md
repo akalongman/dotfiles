@@ -1,6 +1,6 @@
 ---
 name: app-external-agents
-description: 'Use when the user asks to run Codex, Antigravity (agy, Gemini) or OpenCode with DeepSeek, Kimi or Qwen from this session: a second opinion or review from another model, a question put to it, or a task handed to it. Triggers: "ask codex", "ask agy", "ask gemini", "ask deepseek", "ask kimi", "ask qwen", "ask the chinese models", "ask everyone", "second opinion", "what does codex think", "let codex do it", "run this through agy". Only on request, never on your own initiative.'
+description: 'Use when the user asks to run Codex, Antigravity (agy, Gemini) or OpenCode with DeepSeek, Kimi or Qwen from this session: a second opinion or review from another model, a question put to it, or a task handed to it. Also before any Bash command that runs the codex, agy or opencode CLI. Triggers: "ask codex", "ask agy", "ask gemini", "ask deepseek", "ask kimi", "ask qwen", "ask the chinese models", "ask everyone", "second opinion", "what does codex think", "let codex do it", "run this through agy", "run agy", "run codex", "run opencode". Only on request, never on your own initiative.'
 argument-hint: '[codex|agy|deepseek|kimi|qwen|all] <what to ask or do>'
 user-invocable: true
 ---
