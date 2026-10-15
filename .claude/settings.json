@@ -129,9 +129,10 @@
     "slack@claude-plugins-official": false,
     "human-resources@synced": false,
     "cowork-plugin-management@synced": false,
-    "tmux-session-state@akalongman": true,
     "cc-plugin-you-should-know@builtin": true,
-    "superpowers@superpowers-marketplace": true
+    "superpowers@superpowers-marketplace": true,
+    "later@akalongman": true,
+    "tmux-session-state@personal": true
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {
@@ -150,6 +151,12 @@
       "source": {
         "source": "github",
         "repo": "obra/superpowers-marketplace"
+      }
+    },
+    "personal": {
+      "source": {
+        "source": "directory",
+        "path": "/home/longman/projects/personal/claude-plugins"
       }
     }
   },
