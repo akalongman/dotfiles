@@ -189,6 +189,15 @@
     "typos": true
   },
 
+  // Zed classifies .env as Shell Script, so bash-language-server runs
+  // shellcheck on it and SC2034 ("appears unused") fires on every key.
+  // Pin dotenv files to the env extension's language instead; shellcheck
+  // keeps SC2034 for real shell scripts. The Laravel server still reads
+  // .env from disk for go-to-definition, it only detaches from the buffer
+  "file_types": {
+    "env": [".env", ".env.*"]
+  },
+
   // --- Languages ---
   "languages": {
     "PHP": {

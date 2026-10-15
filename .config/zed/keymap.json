@@ -30,6 +30,11 @@
       "shift-ctrl-k": "git::Push",
       // Git.Branches
       "alt-/": "branches::OpenRecent",
+      // Vcs.UpdateProject / Git.Pull: one key pulls, the other fetches
+      "alt-down": "git::Pull",
+      "alt-pagedown": "git::Fetch",
+      // PinActiveTab
+      "shift-ctrl-y": "pane::TogglePinTab",
       // SplitHorizontally / SplitVertically
       "ctrl-f11": "pane::SplitDown",
       "ctrl-f12": "pane::SplitRight",
@@ -53,6 +58,9 @@
       "shift-f6": "editor::GoToPreviousDiagnostic",
       // ReformatCode
       "ctrl-alt-f": "editor::Format",
+      // OptimizeImports (needs a language server that offers the code action)
+      "ctrl-alt-o": "editor::OrganizeImports",
+      "alt-o": "editor::OrganizeImports",
       // GotoTypeDeclaration
       "shift-ctrl-b": "editor::GoToTypeDefinition",
       // EditorDeleteLine
@@ -88,16 +96,34 @@
       "shift-ctrl-w": "pane::CloseAllItems",
       // ReplaceInPath
       "shift-ctrl-h": ["pane::DeploySearch", { "replace_enabled": true }],
+      // SelectInProjectView / ScrollFromSource: reveal the file in the tree
+      "alt-a": "pane::RevealInProjectPanel",
       // CheckinFiles: must shadow the default alt-up (editor::MoveLineUp)
       // here, or the editor swallows the key before the Workspace binding;
       // the PhpStorm keymap had MoveLineUp unbound too
       "alt-up": "git_panel::ToggleFocus",
+      // Vcs.UpdateProject / Git.Pull: shadow editor::MoveLineDown and
+      // editor::PageDown the same way
+      "alt-down": "git::Pull",
+      "alt-pagedown": "git::Fetch",
       // Same shadowing story: Editor-context defaults beat Workspace
       // bindings while typing, so these repeat here to win focus
       "ctrl-|": "task::Spawn",
       // Sublime base binds shift-ctrl-k to editor::DeleteLine; push wins
       // (deleting lines stays on shift-ctrl-delete)
       "shift-ctrl-k": "git::Push"
+    }
+  },
+  {
+    "context": "GitPanel",
+    "bindings": {
+      "ctrl-shift-down": "git::Fetch"
+    }
+  },
+  {
+    "context": "GitPanel",
+    "unbind": {
+      "ctrl-g ctrl-g": "git::Fetch"
     }
   }
 ]
