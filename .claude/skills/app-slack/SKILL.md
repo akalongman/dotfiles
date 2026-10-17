@@ -121,7 +121,7 @@ After finding relevant messages:
 - **Boolean operators don't work.** `AND`, `OR`, `NOT` are not supported. Use spaces (implicit AND) and `-` for exclusion. (Repeating the same modifier, e.g. two `from:`, ORs those values together.)
 - **Parentheses don't work.** Don't try to group search terms with `()`.
 - **Search is not real-time.** Very recent messages (last few seconds) may not appear in search results. Use `slack_read_channel` for the most recent messages.
-- **Private channel access.** Use `slack_search_public_and_private` when you need to include private channels, but note this requires user consent.
+- **Public search proves nothing about private channels.** `slack_search_public` never sees private channels, DMs or group DMs, and a team's working channel is often private. Before concluding a message was not sent, read the channel you expect it in with `slack_read_channel` (`slack_search_channels` with `channel_types=public_channel,private_channel` finds its id), or ask for consent and use `slack_search_public_and_private` (2026-10-17, a question posted in a private project channel was reported as never asked).
 
 # Part 2: Messaging
 
@@ -177,7 +177,7 @@ The one thing that does **not** embed in a message: inline images (`![alt](url)`
 ## Thread vs. Channel Etiquette
 
 - **Reply in threads** when responding to a specific message to keep the main channel clean.
-- **Use `reply_broadcast`** (also post to channel) only when the reply contains information everyone needs to see.
+- **Set `reply_broadcast: true` on every thread reply** (also post to channel), unless the user asks for a thread-only reply. The user wants thread replies visible in the channel; a thread-only reply goes unseen by everyone not following the thread (2026-10-16, the requests to the lead in `#proj-entra-auth`).
 - **Post in the channel** (not a thread) when starting a new topic, making an announcement, or asking a question to the whole group.
 - **Don't start a new thread** to continue an existing conversation; find and reply to the original message.
 
