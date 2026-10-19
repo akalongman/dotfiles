@@ -9,7 +9,7 @@ the final message.
   the brief is `final-brief.md`, then stop. Never start another unit; never
   edit code, the task file or the source's spec documents yourself.
 - **Ledger.** Read `progress.md` as `head -n 3`, then
-  `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Ruling \(controller\)|Open before merge|Final phase):|: (complete|parked|blocked)'`,
+  `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Ruling \(controller\)|Open before merge|Final phase):|: (complete|parked|blocked|paused)|stopped by hand'`,
   then `tail -n 20`; never the whole file. Append your unit's lines to it as
   you go: each dispatch, each verdict, each fix round, each deferred minor.
   Append them in the same call as the action they record (the dispatch,
@@ -83,6 +83,57 @@ the final message.
   spec is a question, `needs-ruling` outside hands-off even when the fill
   looks obvious; under hands-off, ledger the ruling and the proposed line
   and leave the delta unchanged.
+- **Pause.** A message saying pause is honoured at the next point with no
+  child in flight: if a child is in flight, let it end and ledger its
+  result as usual; then dispatch nothing more, take the checkpoint, ledger
+  `Section N: paused (<point>; HEAD <sha7>, tree <hash>)` and return
+  `paused`. Never stop a child to pause. While a pause is pending, every
+  way the child can end leads to `paused`: a report; an API error, a cut
+  stream or a usage-limit failure, in which case ledger the failure and
+  the fallback or retry you would have made (`Model fallback:` included)
+  and make it on continue, not now. A `continue` that arrives while a
+  pause is pending cancels it: ledger `Section N: pause cancelled` and
+  carry on as if no pause had come. A child you dispatched whose
+  notification carries `<status>killed</status>`, a summary ending
+  `was stopped by Claude` and no `<result>` was stopped by hand, not
+  failed: it is a pause signal, under hands-off too, because the owner
+  acted. Ledger `Section N: <role> stopped by hand (<state of its work>)`,
+  take the checkpoint, dispatch nothing, return `paused`. A notification
+  for a child id that is not the current dispatch (a child of an earlier
+  round) is ledgered and consumed; it changes nothing. Every other way a
+  child ends without a report, with no pause pending, keeps today's
+  handling: the fallback or retry these overrides define, and `failed`
+  when those are spent. The rule is narrow on purpose: a crash in an
+  unattended run must not wait forever for a `continue` nobody types.
+  On continue, replace a stopped role: dispatch the same role for the
+  same stage with the same paths and ids (the review file, the open
+  finding ids, the brief and report), framed "the prior <role> was
+  stopped mid-work; read `git diff --stat` on the unit's paths
+  (implementer) or the partial review file (reviewer) before anything
+  else, and adopt what you find". It retries the interrupted stage: the
+  fix-round count does not advance, and a stopped round-5 implementer's
+  replacement is still round 5. Nothing is discarded. The checkpoint is
+  HEAD and `tree <hash>`, the hash being `sha256` over the concatenation
+  of `git diff HEAD -- <unit paths>` and
+  `git status --short --untracked-files=all -- <unit paths>`, the unit
+  paths being the brief's file list. The ledger's `paused` line carries
+  both, so a fresh controller after a lost session can read them too.
+  A resume message recomputes the checkpoint: if it differs, ledger the
+  difference (`Section N: drift on resume: HEAD <a> -> <b>, tree
+  <changed paths>`) and return `needs-ruling` with the question "the tree
+  changed while paused; continue on it, or stop?"; a ruling to continue
+  makes you take a new checkpoint, ledger `Ruling:` and
+  `Section N: resumed`, and go on, with the unit's next review covering
+  the changed files. If the
+  checkpoint is equal, ledger `Section N: resumed` and go on. You alone
+  write the `resumed` line, and only after the check. A child's report
+  that arrives after a pause message and would itself end the unit
+  (`needs-ruling`, `failed`, or the final tick) takes precedence: return
+  that status, not `paused`; the driver holds any return that follows a
+  pause request. A pause that arrives when the unit is already complete
+  is not a pause for you: return `complete`; the driver handles it. In
+  the final phase these rules use `Final phase:` as the ledger prefix in
+  place of `Section N:`.
 - **Waiting.** A dispatch returns at once and the harness re-invokes you
   when the child reports, so after a dispatch end your turn. Never start
   a background shell to wait, poll or sleep; this replaces the
@@ -97,11 +148,12 @@ the final message.
 
   ```
   Unit: <id>
-  Status: complete | parked | needs-ruling | failed
+  Status: complete | parked | needs-ruling | failed | paused
   Commits: <range or none>
   Ledger: <number of lines you appended>
   Denied: <tool and command, one per line, only when a permission was denied>
   Question: <one paragraph, only with needs-ruling>
+  Point: <one line, only with paused>
   ```
 
   `failed` means the unit cannot proceed (an implementer died twice, the
