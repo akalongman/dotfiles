@@ -105,16 +105,18 @@ the final message.
   `Section N: paused (<point>; HEAD <sha7>, tree <hash>)`, dispatch
   nothing, return `paused`. A notification for any other child id is
   ledgered and consumed; it changes nothing. Every other way a
-  child ends without a report, with no pause pending, keeps today's
-  handling: the fallback or retry these overrides define, and `failed`
-  when those are spent. The rule is narrow on purpose: a crash in an
-  unattended run must not wait forever for a `continue` nobody types.
-  On continue, replace a stopped role: dispatch the same role for the
-  same stage with the same paths and ids (the review file, the open
-  finding ids, the brief and report), framed "the prior <role> was
-  stopped mid-work; read `git diff --stat` on the unit's paths
-  (implementer) or the partial review file (reviewer) before anything
-  else, and adopt what you find". It retries the interrupted stage: the
+  child ends without a report, with no pause pending, keeps the
+  handling it had before this rule: the fallback or retry these
+  overrides define, and `failed` when those are spent. The rule is
+  narrow on purpose: a crash in an unattended run must not wait
+  forever for a `continue` nobody types.
+  On continue, after the resume check below, replace a stopped role:
+  dispatch the same role for the same stage with the same paths and
+  ids (the review file, the open finding ids, the brief and report),
+  framed "the prior <role> was stopped mid-work; read
+  `git diff --stat` on the unit's paths (implementer) or the partial
+  review file (reviewer) before anything else, and adopt what you
+  find". It retries the interrupted stage: the
   fix-round count does not advance, and a stopped round-5 implementer's
   replacement is still round 5. Nothing is discarded. The checkpoint is
   HEAD and `tree <hash>`, the hash being `sha256` over the concatenation
@@ -135,10 +137,14 @@ the final message.
   checkpoint is equal, ledger `Section N: resumed` and go on. You alone
   write the `resumed` line, and only after the check. A child's report
   that arrives after a pause message and would itself end the unit
-  (`needs-ruling`, `failed`, or the final tick) takes precedence: return
-  that status, not `paused`; the driver holds any return that follows a
-  pause request. A pause that arrives when the unit is already complete
-  is not a pause for you: return `complete`; the driver handles it. In
+  (`needs-ruling`, `parked`, `failed`, or the final tick) takes
+  precedence: return that status, not `paused`; the driver holds any
+  return that follows a pause request. A pause that arrives when the
+  unit is already complete is not a pause for you: return `complete`;
+  the driver handles it. Likewise a notification that reaches you after
+  you returned a unit-ending status (`complete`, `parked`, `failed`), a
+  child's stop notification included, is ledgered and consumed, never
+  a pause signal: return that status again, never `paused`. In
   the final phase these rules use `Final phase:` as the ledger prefix in
   place of `Section N:`.
 - **Waiting.** A dispatch returns at once and the harness re-invokes you
