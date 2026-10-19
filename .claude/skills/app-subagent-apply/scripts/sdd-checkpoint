@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Checkpoint for this skill's pause rule: one line that a paused unit's
+# ledger entry carries and a resume recomputes, so a difference shows that
+# the unit's files moved while it was paused. It exists because iteration 1
+# carried the checkpoint as a prose shell recipe, which failed on paths
+# outside the project's git repository (this skill's own yadm files) and
+# piped into `xargs -0 sha256sum` without `-r`, so an empty untracked list
+# still hashed an empty stdin. The prompt files name only this script; it
+# is the definition.
+#
+# Usage: sdd-checkpoint PATH...
+#   PATH is the unit's brief's file list (the final phase passes the union of
+#   the units' lists), never the whole work tree, which would take in other
+#   sessions' untracked files. Paths that do not exist are allowed.
+# Output, one line on stdout:
+#   heads <name> <sha7>[, <name> <sha7>...]; tree <hash>
+#   One head per repository in first-seen path order: <name> is the basename
+#   of its top level, <sha7> the last commit touching its paths (`none` when
+#   no commit does), so an unrelated commit does not read as drift. A path in
+#   no repository is hashed as a plain file (the sha256sum of its contents,
+#   or `missing`) under the name `files`, whose head is `none`. <hash> is the
+#   first 16 hex characters of sha256 over, per repository, `git diff HEAD`,
+#   `git status --short --untracked-files=all` and the sha256sum of each
+#   untracked file, each followed by a `--` line.
+# Exit codes: 2 usage (no paths); 3 a path lies in no repository and exists
+#   but is not a regular file (nothing printed); any other non-zero is git's
+#   own failure, with its message on stderr.
+set -euo pipefail
+shopt -s inherit_errexit
+
+if [ $# -eq 0 ]; then
+  echo "usage: sdd-checkpoint PATH..." >&2
+  exit 2
+fi
+
+# git status refreshes the index under index.lock by default, and a commit
+# another session runs in the same checkout at that moment would fail.
+export GIT_OPTIONAL_LOCKS=0
+
+# Groups are repository top levels, or `files` for the plain-file branch, in
+# first-seen order; each path joins one group as a pathspec relative to the
+# top level (the path itself in the plain-file branch).
+groups=() tools=() member_group=() member_spec=()
+declare -A group_of=()
+
+join_group() { # KEY TOOL SPEC
+  if [ -z "${group_of[$1]+set}" ]; then
+    group_of[$1]=${#groups[@]}
+    groups+=("$1")
+    tools+=("$2")
+  fi
+  member_group+=("${group_of[$1]}")
+  member_spec+=("$3")
+}
+
+for path in "$@"; do
+  # The directory, not the path, so a file the unit deleted still resolves.
+  dir=$(dirname -- "$path")
+  if top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
+    prefix=$(git -C "$dir" rev-parse --show-prefix)
+    join_group "$top" git "$prefix$(basename -- "$path")"
+    continue
+  fi
+  case $path in
+    /*) abs=$path ;;
+    *) abs=$PWD/$path ;;
+  esac
+  if [[ $abs == "$HOME"/* ]] && command -v yadm >/dev/null &&
+     top=$(yadm rev-parse --show-toplevel 2>/dev/null); then
+    join_group "$top" yadm "${abs#"$top"/}"
+    continue
+  fi
+  if [ -f "$path" ] || [ ! -e "$path" ]; then
+    join_group files plain "$path"
+  else
+    echo "sdd-checkpoint: in no repository and not a regular file: $path" >&2
+    exit 3
+  fi
+done
+
+# Set specs to group G's pathspecs, in path order.
+specs_of() {
+  specs=()
+  local i
+  for i in "${!member_group[@]}"; do
+    if [ "${member_group[$i]}" -eq "$1" ]; then
+      specs+=("${member_spec[$i]}")
+    fi
+  done
+}
+
+# Print every group's uncommitted state, the input of the tree hash. The git
+# commands run from the top level, where `ls-files` paths are relative to.
+state() {
+  local g p
+  for g in "${!groups[@]}"; do
+    specs_of "$g"
+    if [ "${tools[$g]}" = plain ]; then
+      for p in "${specs[@]}"; do
+        if [ -f "$p" ]; then sha256sum < "$p"; else echo missing; fi
+        echo --
+      done
+      continue
+    fi
+    (
+      cd "${groups[$g]}"
+      vcs=${tools[$g]}
+      "$vcs" diff HEAD -- "${specs[@]}"
+      echo --
+      "$vcs" status --short --untracked-files=all -- "${specs[@]}"
+      echo --
+      "$vcs" ls-files --others --exclude-standard -z -- "${specs[@]}" |
+        xargs -0r sha256sum
+      echo --
+    )
+  done
+}
+
+heads=()
+for g in "${!groups[@]}"; do
+  if [ "${tools[$g]}" = plain ]; then
+    heads+=("files none")
+    continue
+  fi
+  specs_of "$g"
+  sha=$(cd "${groups[$g]}" && "${tools[$g]}" log -n 1 --format=%h -- "${specs[@]}")
+  heads+=("$(basename -- "${groups[$g]}") ${sha:-none}")
+done
+tree=$(state | sha256sum | cut -c1-16)
+
+line="heads ${heads[0]}"
+for h in "${heads[@]:1}"; do
+  line+=", $h"
+done
+printf '%s; tree %s\n' "$line" "$tree"
