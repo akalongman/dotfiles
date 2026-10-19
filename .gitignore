@@ -160,6 +160,13 @@ __pycache__/
 !.config/htop
 !.config/phpactor
 !.config/zed
+# Intelephense: only the global config file. The directory also holds the
+# workspace state caches and a file named after the licence key.
+!.config/intelephense
+.config/intelephense/*
+!.config/intelephense/global
+.config/intelephense/global/*
+!.config/intelephense/global/intelephense.config.json
 !.config/nvm
 # systemd user units: only the tmux reaper pair is configuration; the
 # other units are app state, private (linked from the private repository)

@@ -277,6 +277,9 @@
           // Default 1MB skips large generated files (_ide_helper.php and
           // friends in Laravel projects)
           "maxSize": 5000000,
+          // Same list as ~/.config/intelephense/global/intelephense.config.json,
+          // which serves clients that cannot be pulled from (Claude Code). Zed
+          // pulls, so it reads this copy; keep the two identical.
           // Overriding files.exclude REPLACES intelephense's defaults, so the
           // default globs are restated here. The .worktrees entry keeps
           // per-branch worktree copies (this machine's convention:
