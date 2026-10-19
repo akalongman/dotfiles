@@ -151,16 +151,27 @@ the final message.
   `Section N: background shell stopped before return`, only when one was.
   Deliver the block through the hand-back tool, never as plain text:
   a plain-text final message is withheld while a background shell lives.
+  A child notification saying the child is waiting on its own background
+  work is interim, not the child's end: end your turn; the same task id
+  notifies again. A forced hand-back (the harness's
+  `[handback-send-enforce]` message) while a child of yours is still in
+  flight is answered with `Status: waiting` and
+  `Child: <id> <role> <report path>`; never `paused`, which is the
+  owner's word alone. A pending pause is honoured after the relay, as for
+  any child in flight. A resume message that relays that child's
+  hand-back (its status, its report path) continues the unit from there,
+  as if the notification had reached you.
 - **Return block.** Your whole final message, nothing before or after:
 
   ```
   Unit: <id>
-  Status: complete | parked | needs-ruling | failed | paused
+  Status: complete | parked | needs-ruling | failed | paused | waiting
   Commits: <range or none>
   Ledger: <number of lines you appended>
   Denied: <tool and command, one per line, only when a permission was denied>
   Question: <one paragraph, only with needs-ruling>
   Point: <one line, only with paused>
+  Child: <id> <role> <report path>, only with waiting
   ```
 
   `failed` means the unit cannot proceed (an implementer died twice, the
