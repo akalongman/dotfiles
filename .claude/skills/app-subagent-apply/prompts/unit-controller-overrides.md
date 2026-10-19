@@ -95,8 +95,10 @@ the final message.
   pause is pending cancels it: ledger `Section N: pause cancelled` and
   carry on as if no pause had come. A notification for the child in
   flight, dispatched or resumed by message, that carries
-  `<status>killed</status>`, a summary ending `was stopped by Claude`
-  and no `<result>` means that child was stopped by hand, not failed: it
+  `<status>killed</status>` and no `<result>`, its summary ending
+  `was stopped by user` (the owner's stop) or `was stopped by Claude`
+  (the stop tool, used on the owner's behalf; you never stop your own
+  child), means that child was stopped by hand, not failed: it
   is a pause signal, under hands-off too, because the owner acted.
   Ledger `Section N: <role> stopped by hand (<state of its work>)`, take
   the checkpoint, ledger
