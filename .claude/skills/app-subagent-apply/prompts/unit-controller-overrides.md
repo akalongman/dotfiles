@@ -93,15 +93,16 @@ the final message.
   the fallback or retry you would have made (`Model fallback:` included)
   and make it on continue, not now. A `continue` that arrives while a
   pause is pending cancels it: ledger `Section N: pause cancelled` and
-  carry on as if no pause had come. A notification for the current
-  dispatch that carries `<status>killed</status>`, a summary ending
-  `was stopped by Claude` and no `<result>` means that child was
-  stopped by hand, not failed: it is a pause signal, under hands-off
-  too, because the owner acted.
-  Ledger `Section N: <role> stopped by hand (<state of its work>)`,
-  take the checkpoint, dispatch nothing, return `paused`. A notification
-  for a child id that is not the current dispatch (a child of an earlier
-  round) is ledgered and consumed; it changes nothing. Every other way a
+  carry on as if no pause had come. A notification for the child in
+  flight, dispatched or resumed by message, that carries
+  `<status>killed</status>`, a summary ending `was stopped by Claude`
+  and no `<result>` means that child was stopped by hand, not failed: it
+  is a pause signal, under hands-off too, because the owner acted.
+  Ledger `Section N: <role> stopped by hand (<state of its work>)`, take
+  the checkpoint, ledger
+  `Section N: paused (<point>; HEAD <sha7>, tree <hash>)`, dispatch
+  nothing, return `paused`. A notification for any other child id is
+  ledgered and consumed; it changes nothing. Every other way a
   child ends without a report, with no pause pending, keeps today's
   handling: the fallback or retry these overrides define, and `failed`
   when those are spent. The rule is narrow on purpose: a crash in an
@@ -115,10 +116,13 @@ the final message.
   fix-round count does not advance, and a stopped round-5 implementer's
   replacement is still round 5. Nothing is discarded. The checkpoint is
   HEAD and `tree <hash>`, the hash being `sha256` over the concatenation
-  of `git diff HEAD -- <unit paths>` and
-  `git status --short --untracked-files=all -- <unit paths>`, the unit
-  paths being the brief's file list. The ledger's `paused` line carries
-  both, so a fresh controller after a lost session can read them too.
+  of `git diff HEAD -- <unit paths>`,
+  `git status --short --untracked-files=all -- <unit paths>` and
+  `git ls-files --others --exclude-standard -z -- <unit paths> | xargs -0 sha256sum`
+  (the last covers the contents of untracked files, which the first two
+  do not see), the unit paths being the brief's file list. The ledger's
+  `paused` line carries both, so a fresh controller after a lost session
+  can read them too.
   A resume message recomputes the checkpoint: if it differs, ledger the
   difference (`Section N: drift on resume: HEAD <a> -> <b>, tree
   <changed paths>`) and return `needs-ruling` with the question "the tree
