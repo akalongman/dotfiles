@@ -48,7 +48,7 @@
   "fallbackModel": [
     "opus"
   ],
-  "enableAllProjectMcpServers": true,
+  "enableAllProjectMcpServers": false,
   "skillOverrides": {
     "app-rabbitmq-guidelines": "user-invocable-only",
     "app-socratic-probe": "off",
