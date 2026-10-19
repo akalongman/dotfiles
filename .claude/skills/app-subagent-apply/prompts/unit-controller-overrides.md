@@ -93,11 +93,12 @@ the final message.
   the fallback or retry you would have made (`Model fallback:` included)
   and make it on continue, not now. A `continue` that arrives while a
   pause is pending cancels it: ledger `Section N: pause cancelled` and
-  carry on as if no pause had come. A child you dispatched whose
-  notification carries `<status>killed</status>`, a summary ending
-  `was stopped by Claude` and no `<result>` was stopped by hand, not
-  failed: it is a pause signal, under hands-off too, because the owner
-  acted. Ledger `Section N: <role> stopped by hand (<state of its work>)`,
+  carry on as if no pause had come. A notification for the current
+  dispatch that carries `<status>killed</status>`, a summary ending
+  `was stopped by Claude` and no `<result>` means that child was
+  stopped by hand, not failed: it is a pause signal, under hands-off
+  too, because the owner acted.
+  Ledger `Section N: <role> stopped by hand (<state of its work>)`,
   take the checkpoint, dispatch nothing, return `paused`. A notification
   for a child id that is not the current dispatch (a child of an earlier
   round) is ledgered and consumed; it changes nothing. Every other way a
