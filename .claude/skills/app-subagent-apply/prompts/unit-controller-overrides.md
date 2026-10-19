@@ -84,13 +84,16 @@ the final message.
   looks obvious; under hands-off, ledger the ruling and the proposed line
   and leave the delta unchanged.
 - **Pause.** A pause reaches you through the ledger, never by message.
-  Before every dispatch and every resume of a child, run this with your
-  unit's own prefix (`Section 3`, `Task 2`) in place of `Section N`:
+  Before every dispatch, every resume of a child and every `needs-ruling`
+  return, run this with your unit's own prefix (`Section 3`, `Task 2`)
+  in place of `Section N`:
   `grep -nE '^(Section N|Final phase): (pause (requested|released)|owner note)' <ws>/progress.md`.
-  Requested or released, the unit's latest pause line wins. Every
-  `owner note:` line below the latest `owner note applied` is not yet
-  applied: carry it in the dispatch or resume that follows and ledger
-  `Section N: owner note applied` in the same call. A latest pause line
+  Requested or released, the unit's latest pause line wins. Read owner
+  notes by count, not position: with k `owner note applied` lines for
+  the unit, its first k `owner note:` lines are applied and the rest, in
+  order, are not. Carry each unapplied note in the dispatch or resume
+  that follows and ledger one `Section N: owner note applied` per note,
+  in the same call. A latest pause line
   of `pause requested` is a pause in force: ledger what just ended as
   usual (the report, or the failure and the fallback or retry you would
   make, `Model fallback:` included), run
