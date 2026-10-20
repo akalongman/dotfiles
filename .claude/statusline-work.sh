@@ -12,6 +12,9 @@
 # Sourcing the file defines the work_* functions only; executing it runs
 # work_main.
 
+# Every failure path is handled explicitly, so there is no set -e.
+set -u
+
 # A token free of whitespace, quotes and backticks that ends in a change
 # directory, a plan file or an apply-run workspace directory.
 _work_seg="[^/[:space:]\"'\`]+"
@@ -349,8 +352,214 @@ work_stage() {
     return 0
 }
 
-# Entry point; a stub until the cache and the rendering exist.
+# Format version of the cache file; a cache of any other version is
+# discarded.
+readonly WORK_CACHE_VERSION=1
+
+# The run's state, shared by the functions below: the cache file and the
+# transcript it belongs to, the offset scanned so far, the transcript size
+# the last commit recorded, and the occurrences, newest first.
+_work_cache="" _work_transcript="" _work_offset=0 _work_recorded=0
+_work_rows=()
+
+# work_cache_load SIZE
+# Loads the cache file _work_cache into _work_offset, _work_recorded and
+# _work_rows. Each of these resets them to offset 0 and no occurrences
+# instead: no cache file, another version, another transcript path than
+# _work_transcript, a recorded size above SIZE (the transcript's current
+# size; a shrink is a replacement), an offset above the recorded size, or a
+# line that does not parse.
+work_cache_load() {
+    local size="$1" header pair recorded offset row
+    local sizes=$'^(0|[1-9][0-9]{0,17})\t(0|[1-9][0-9]{0,17})$'
+    local shape=$'^(0|[1-9][0-9]{0,17})\t[01]\t[^\t]+\t[^\t]*$'
+    local -a lines=()
+    _work_offset=0 _work_recorded=0 _work_rows=()
+    [ -f "$_work_cache" ] || return 0
+    mapfile -t lines 2>/dev/null < "$_work_cache" || return 0
+    header="${lines[0]:-}"
+    [[ $header == "$WORK_CACHE_VERSION"$'\t'"$_work_transcript"$'\t'* ]] || return 0
+    pair="${header#"$WORK_CACHE_VERSION"$'\t'"$_work_transcript"$'\t'}"
+    [[ $pair =~ $sizes ]] || return 0
+    recorded="${BASH_REMATCH[1]}" offset="${BASH_REMATCH[2]}"
+    (( offset <= recorded && recorded <= size )) || return 0
+    for row in "${lines[@]:1}"; do
+        [[ $row =~ $shape ]] || return 0
+    done
+    _work_offset="$offset" _work_recorded="$recorded" _work_rows=("${lines[@]:1}")
+}
+
+# work_cache_commit OFFSET
+# Writes the header, recording _work_recorded as the transcript size and
+# OFFSET as the offset scanned, and the occurrences in _work_rows to a temp
+# file unique to this process, then renames it over the cache, so the
+# offset and the occurrences are replaced together. Exits 1, leaving the
+# cache as it was, when the temp file cannot be written or renamed.
+work_cache_commit() {
+    local tmp="${_work_cache%.tsv}.tmp.$$"
+    {
+        printf '%s\t%s\t%s\t%s\n' "$WORK_CACHE_VERSION" "$_work_transcript" "$_work_recorded" "$1" \
+            && if [ "${#_work_rows[@]}" -gt 0 ]; then printf '%s\n' "${_work_rows[@]}"; fi
+    } 2>/dev/null > "$tmp" && mv -f -- "$tmp" "$_work_cache" 2>/dev/null && return 0
+    rm -f -- "$tmp" 2>/dev/null
+    return 1
+}
+
+# _work_chunk_end VAR FROM ENDPOINT CHUNK
+# Sets VAR to the end of the chunk of _work_transcript that starts at FROM,
+# a line start: just past the first newline at least CHUNK bytes on, so no record
+# is split, or, when ENDPOINT comes first or no newline follows before it,
+# just past the last newline before ENDPOINT. VAR is FROM when the bytes
+# from FROM to ENDPOINT hold no newline: a partial line waits for a later
+# run.
+_work_chunk_end() {
+    local _e_from="$2" _e_end="$3" _e_at=$(($2 + $4)) _e_lines="" _e_bytes=""
+    if [ "$_e_at" -lt "$_e_end" ]; then
+        # The line holding the chunk's last byte, cut after its newline.
+        read -r _e_lines _e_bytes < <(tail -c +"$_e_at" -- "$_work_transcript" 2>/dev/null \
+            | head -c "$((_e_end - _e_at + 1))" | head -n 1 | wc -lc)
+        if [ "$_e_lines" = 1 ] && [[ $_e_bytes =~ ^[0-9]+$ ]]; then
+            printf -v "$1" '%s' "$((_e_at - 1 + _e_bytes))"
+            return 0
+        fi
+    fi
+    # The last line of the bytes up to ENDPOINT counts one line when it ends
+    # in a newline; otherwise it is the partial line of _e_bytes bytes.
+    read -r _e_lines _e_bytes < <(tail -c +"$((_e_from + 1))" -- "$_work_transcript" 2>/dev/null \
+        | head -c "$((_e_end - _e_from))" | tail -n 1 | wc -lc)
+    if [ "$_e_lines" = 1 ]; then
+        printf -v "$1" '%s' "$_e_end"
+    elif [ "$_e_lines" = 0 ] && [[ $_e_bytes =~ ^[0-9]+$ ]]; then
+        printf -v "$1" '%s' "$((_e_end - _e_bytes))"
+    else
+        printf -v "$1" '%s' "$_e_from"
+    fi
+}
+
+# work_scan_chunks ENDPOINT
+# Scans the transcript from _work_offset towards ENDPOINT, its size at the
+# run's start, in chunks of WORK_CHUNK bytes (4 MiB), each extended to a
+# line end. A chunk's occurrences go on top of _work_rows, newest first,
+# and the newest ten with distinct raw matches are kept; each chunk is then
+# committed, recording ENDPOINT as the transcript size (a commit that fails
+# leaves the progress in memory for this run only). Exits 0 once the
+# offset reaches the last line end before ENDPOINT, and 1 when the work
+# budget of WORK_BUDGET_MS milliseconds (1500) ran out first. The budget is
+# checked only after a chunk, so every run makes progress.
+work_scan_chunks() {
+    local endpoint="$1" chunk="${WORK_CHUNK:-}" budget="${WORK_BUDGET_MS:-}"
+    local start to="" scanned=0 i row raw seen_raw
+    local -a found=() newest=() kept=() seen=()
+    [[ $chunk =~ ^[1-9][0-9]{0,9}$ ]] || chunk=4194304
+    [[ $budget =~ ^[0-9]{1,9}$ ]] || budget=1500
+    start="${EPOCHREALTIME//[!0-9]/}"
+    while [ "$_work_offset" -lt "$endpoint" ]; do
+        _work_chunk_end to "$_work_offset" "$endpoint" "$chunk"
+        [ "$to" -gt "$_work_offset" ] || return 0
+        if [ "$scanned" = 1 ] && [ $(( ${EPOCHREALTIME//[!0-9]/} - start )) -gt $(( budget * 1000 )) ]; then
+            return 1
+        fi
+        mapfile -t found < <(work_scan_range "$_work_transcript" "$_work_offset" "$to")
+        # This chunk's occurrences from its last, then the older ones.
+        newest=()
+        for (( i = ${#found[@]} - 1; i >= 0; i-- )); do newest+=("${found[i]}"); done
+        newest+=("${_work_rows[@]}")
+        kept=() seen=()
+        for row in "${newest[@]}"; do
+            [ "${#kept[@]}" -lt 10 ] || break
+            raw="${row#*$'\t'*$'\t'}"
+            raw="${raw%%$'\t'*}"
+            for seen_raw in "${seen[@]}"; do
+                [ "$seen_raw" != "$raw" ] || continue 2
+            done
+            kept+=("$row") seen+=("$raw")
+        done
+        _work_rows=("${kept[@]}") _work_offset="$to" _work_recorded="$endpoint"
+        work_cache_commit "$to"
+        scanned=1
+    done
+    return 0
+}
+
+# work_render
+# Prints the subject of the newest occurrence in _work_rows that resolves,
+# as "kind<TAB>name<TAB>open<TAB>stage", the stage possibly empty. Invalid
+# evidence (work_resolve exit 1) passes the walk on to the next older
+# occurrence; a valid subject whose file is gone (exit 2) ends it with
+# nothing printed, since an older subject is never shown in its place.
+work_render() {
+    local row abs raw cwd subject kind name open ws
+    for row in "${_work_rows[@]}"; do
+        IFS=$'\t' read -r _ abs raw cwd <<<"$row"
+        subject="$(work_resolve "$raw" "$abs" "$cwd")"
+        case $? in
+            0)
+                IFS=$'\t' read -r kind name open ws <<<"$subject"
+                printf '%s\t%s\t%s\t%s\n' "$kind" "$name" "$open" "$(work_stage "$kind" "$open" "$ws")"
+                return 0
+                ;;
+            2) return 0 ;;
+        esac
+    done
+    return 0
+}
+
+# work_prune DIR
+# At most once a day, deletes the caches in DIR (work-*.tsv) not modified
+# for more than WORK_PRUNE_DAYS days (14), counted in whole days as find
+# -mtime counts them. The stamp file work-prune.stamp holds the epoch
+# second of the last prune. Lock and temp files are never touched.
+work_prune() {
+    local dir="$1" stamp="$1/work-prune.stamp" days="${WORK_PRUNE_DAYS:-}" last=""
+    [[ $days =~ ^[0-9]{1,5}$ ]] || days=14
+    read -r last 2>/dev/null < "$stamp"
+    if [[ $last =~ ^[0-9]{1,18}$ ]] && (( last <= EPOCHSECONDS && EPOCHSECONDS - last < 86400 )); then
+        return 0
+    fi
+    printf '%s\n' "$EPOCHSECONDS" 2>/dev/null > "$stamp" || return 0
+    find "$dir" -maxdepth 1 -type f -name 'work-*.tsv' -mtime +"$days" -delete 2>/dev/null
+    return 0
+}
+
+# work_main SESSION_ID TRANSCRIPT_PATH CURRENT_DIR
+# Prints the session's subject as "kind<TAB>name<TAB>open<TAB>stage", or
+# nothing, and exits 0 either way. CURRENT_DIR is accepted and unused:
+# every occurrence resolves against its own record's cwd. The cache, lock,
+# temp and stamp files live in WORK_CACHE_DIR (by default
+# ${XDG_CACHE_HOME:-$HOME/.cache}/claude-statusline), named after the
+# session id, so an id that is empty or holds a slash, or a transcript path
+# that is empty or holds a newline (the cache header could not hold it),
+# prints nothing and writes nothing; so does a missing transcript.
+# A run takes the session's lock without waiting, loads the cache, scans
+# the transcript up to its size at the start, prints the subject once the
+# scan has caught up and nothing while it has not, and prunes old caches.
+# When another run holds the lock, it renders from the cache without
+# scanning, and prints nothing while the cached offset is below the size
+# the last commit recorded, since a catch-up is then in flight. The lock is
+# held on descriptor 9 for the call only, so a shell that sources this file
+# holds no lock once work_main returns.
 work_main() {
+    local id="${1:-}" transcript="${2:-}" size="" locked=0
+    local dir="${WORK_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME:-}/.cache}/claude-statusline}"
+    [[ -n $id && $id != */* && -n $transcript && $transcript != *$'\n'* ]] || return 0
+    [ -f "$transcript" ] || return 0
+    [ -d "$dir" ] || mkdir -p -- "$dir" 2>/dev/null || return 0
+    _work_cache="$dir/work-$id.tsv" _work_transcript="$transcript"
+    {
+        # The size and the cache are read after the lock is taken: a run
+        # that loaded before another run's commit could otherwise commit an
+        # older offset over it.
+        flock -n 9 && locked=1
+        size="$(stat -L -c %s -- "$transcript")"
+        [[ $size =~ ^(0|[1-9][0-9]{0,17})$ ]] || return 0
+        work_cache_load "$size"
+        if [ "$locked" = 1 ]; then
+            if work_scan_chunks "$size"; then work_render; fi
+            work_prune "$dir"
+        elif [ "$_work_offset" -ge "$_work_recorded" ]; then
+            work_render
+        fi
+    } 2>/dev/null 9>"$dir/work-$id.lock"
     return 0
 }
 

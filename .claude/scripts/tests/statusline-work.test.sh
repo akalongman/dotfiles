@@ -398,4 +398,182 @@ assert_eq "$?" 0 "a FIFO ledger is not opened"
 timeout 5 bash -c "source '$HELPER'; work_stage change '$f/tasks.md' ''" >/dev/null 2>&1
 assert_eq "$?" 0 "a FIFO task list is not opened"
 
+# Task 4: cache, lock, chunked scan and the entry point
+# The cache directory is exported, so a helper run as a command (under
+# timeout) shares it with the runs made in this shell.
+WORK_CACHE_DIR="$(mktemp -d -p "$TMPROOT")"; export WORK_CACHE_DIR
+t="$(mktemp -p "$TMPROOT")"
+{
+    mk_record Read file_path "$R/docs/superpowers/plans/2026-01-01-alpha.md" "$R"
+    mk_record Bash command 'cat openspec/changes/add-groups/tasks.md' "$R"
+    mk_record Write file_path "$R/docs/x.md" "$R" content 'see docs/plans/quoted.md'
+    mk_record Bash command 'cd /other && cat docs/plans/elsewhere.md' "$R"
+    mk_record Agent prompt 'Read .superpowers/sdd/add-groups/progress.md first' "$R"
+    mk_record Bash command 'ls openspec/changes/archive/old-one/' "$R"
+    printf 'not json\n'
+} > "$t"
+
+# full scan, subject, cache written
+out="$(work_main s1 "$t" "$R")"
+assert_eq "$out" $'change\tadd-groups\t'"$R"$'/openspec/changes/add-groups/tasks.md\t' "newest valid occurrence is the subject"
+assert_file "$WORK_CACHE_DIR/work-s1.tsv" "cache written"
+assert_eq "$(head -1 "$WORK_CACHE_DIR/work-s1.tsv" | cut -f1,4)" $'1\t'"$(stat -c %s "$t")" "offset at end of transcript"
+# incremental: append a Read of a plan, only new bytes scanned, subject changes
+mk_record Read file_path "$R/docs/plans/beta.md" "$R" >> "$t"
+assert_eq "$(work_main s1 "$t" "$R" | cut -f1,2)" $'plan\tbeta' "appended evidence replaces the subject"
+# retirement: remove the plan, segment blank, older subject not resurrected
+rm "$R/docs/plans/beta.md"
+assert_eq "$(work_main s1 "$t" "$R")" "" "vanished subject blanks the segment"
+# late resolution: a workspace mentioned before its ledger exists
+mk_record Agent prompt "read .superpowers/sdd/late/progress.md" "$R" >> "$t"
+assert_eq "$(work_main s1 "$t" "$R")" "" "unresolved workspace shows nothing"
+mkdir -p "$R/.superpowers/sdd/late"; printf '# SDD ledger: plan docs/superpowers/plans/2026-01-01-alpha.md\nTask 1: complete\n' > "$R/.superpowers/sdd/late/progress.md"
+assert_eq "$(work_main s1 "$t" "$R" | cut -f2,4)" $'2026-01-01-alpha\tTask 1 complete' "resolved on a later run without a rescan"
+# invalidation
+sed -i '1s/^1\t/9\t/' "$WORK_CACHE_DIR/work-s1.tsv"
+assert_eq "$(work_main s1 "$t" "$R" | cut -f2)" "2026-01-01-alpha" "stale version restarts from zero and still resolves"
+printf '1\t%s\t1\t999999999\n' "$t" > "$WORK_CACHE_DIR/work-s1.tsv"
+assert_eq "$(work_main s1 "$t" "$R" | cut -f2)" "2026-01-01-alpha" "offset beyond size restarts from zero"
+# missing transcript, odd ids
+assert_eq "$(work_main s2 "$TMPROOT/does not exist.jsonl" "$R")" "" "missing transcript prints nothing"
+assert_ok "missing transcript exits 0" work_main s2 "$TMPROOT/does not exist.jsonl" "$R"
+sp="$(mktemp -d -p "$TMPROOT" 'dir with space.XXXX')"; cp "$t" "$sp/t.jsonl"
+assert_eq "$(work_main 'id with space' "$sp/t.jsonl" "$R" | cut -f2)" "2026-01-01-alpha" "paths with spaces work"
+# lock contention: second run renders from cache and does not scan
+( exec 9>"$WORK_CACHE_DIR/work-s1.lock"; flock 9; sleep 2 ) & lp=$!; sleep 0.2
+mk_record Read file_path "$R/docs/superpowers/plans/2026-01-01-alpha.md" "$R" >> "$t"
+before="$(head -1 "$WORK_CACHE_DIR/work-s1.tsv")"
+work_main s1 "$t" "$R" >/dev/null
+assert_eq "$(head -1 "$WORK_CACHE_DIR/work-s1.tsv")" "$before" "held lock leaves the cache untouched"
+# The cached subject came through the late workspace and carries its stage;
+# the appended Read, had it been scanned, would give the plan without one.
+assert_eq "$(work_main s1 "$t" "$R" | cut -f2,4)" $'2026-01-01-alpha\tTask 1 complete' "held lock renders from the cache"
+# While the cached offset is below the size the last commit recorded, a
+# catch-up is in flight, and a run that finds the lock held prints nothing.
+printf '1\t%s\t%s\t0\n0\t1\t%s\t\n' "$t" "$(stat -c %s "$t")" "$R/docs/superpowers/plans/2026-01-01-alpha.md" > "$WORK_CACHE_DIR/work-s1.tsv"
+assert_eq "$(work_main s1 "$t" "$R")" "" "held lock during a catch-up prints nothing"
+wait "$lp"
+# A call in this shell leaves no descriptor holding the lock.
+work_main s1 "$t" "$R" >/dev/null
+assert_ok "the lock is released when work_main returns" flock -n "$WORK_CACHE_DIR/work-s1.lock" true
+
+# The cache header records the size seen at the run's start and the offset
+# of the last newline; a partial last line is read once it is complete.
+pl="$(mktemp -p "$TMPROOT")"
+mk_record Read file_path "$R/docs/superpowers/plans/2026-01-01-alpha.md" "$R" > "$pl"
+whole="$(stat -c %s "$pl")"
+rec="$(mk_record Read file_path "$R/openspec/changes/add-groups/tasks.md" "$R")"
+printf '%s' "${rec:0:40}" >> "$pl"
+assert_eq "$(work_main s6 "$pl" "$R" | cut -f2)" "2026-01-01-alpha" "a partial last line leaves the subject of the whole lines"
+assert_eq "$(head -1 "$WORK_CACHE_DIR/work-s6.tsv" | cut -f3,4)" "$(stat -c %s "$pl")"$'\t'"$whole" "the offset stops after the last newline"
+printf '%s\n' "${rec:40}" >> "$pl"
+assert_eq "$(work_main s6 "$pl" "$R" | cut -f2)" "add-groups" "the completed line is read on the next run"
+
+# A transcript shorter than the size the cache recorded was replaced, and a
+# cache line that does not parse discards the cache: both restart from zero
+# rather than rendering the cached add-groups occurrence.
+sh="$(mktemp -p "$TMPROOT")"
+mk_record Read file_path "$R/docs/superpowers/plans/2026-01-01-alpha.md" "$R" > "$sh"
+n="$(stat -c %s "$sh")"
+printf '1\t%s\t%s\t%s\n0\t1\t%s\t\n' "$sh" "$((n + 100))" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
+assert_eq "$(work_main s7 "$sh" "$R" | cut -f2)" "2026-01-01-alpha" "a shrunk transcript restarts from zero"
+printf '1\t%s\t%s\t%s\n0\t1\t%s\t\nnot a row\n' "$sh" "$n" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
+assert_eq "$(work_main s7 "$sh" "$R" | cut -f2)" "2026-01-01-alpha" "a cache line that does not parse restarts from zero"
+
+# An id that is empty or holds a slash, or an empty transcript path, prints
+# nothing and writes no file: the id becomes part of a file name.
+odd="$(mktemp -d -p "$TMPROOT")"
+assert_eq "$(WORK_CACHE_DIR="$odd" work_main '' "$t" "$R")" "" "an empty session id prints nothing"
+assert_eq "$(WORK_CACHE_DIR="$odd" work_main '../x' "$t" "$R")" "" "a session id holding a slash prints nothing"
+assert_eq "$(WORK_CACHE_DIR="$odd" work_main s8 '' "$R")" "" "an empty transcript path prints nothing"
+assert_eq "$(ls -A "$odd")" "" "an unusable id or path writes no file"
+assert_ok "an empty session id exits 0" work_main '' "$t" "$R"
+assert_ok "no arguments exit 0" work_main
+
+# Catch-up and cancellation: 64 KiB chunks over about 300 KiB of records,
+# each run killed after 50 ms. The offset only grows and no run prints
+# before the scan has caught up. The loop is capped, so a scan that never
+# converges fails instead of hanging.
+: > "$R/docs/plans/beta.md"
+filler="$(jq -nc --arg c "$R" --arg x "$(printf '%01000d' 0)" '{type: "user", cwd: $c, message: {role: "user", content: $x}}')"
+cu="$(mktemp -p "$TMPROOT")"
+{
+    for _ in $(seq 140); do printf '%s\n' "$filler"; done
+    mk_record Read file_path "$R/docs/plans/beta.md" "$R"
+    for _ in $(seq 140); do printf '%s\n' "$filler"; done
+} > "$cu"
+beta=$'plan\tbeta\t'"$R"$'/docs/plans/beta.md\t'
+runs=0 prev=0 early="" backwards="" out=""
+while [ "$runs" -lt 200 ]; do
+    runs=$((runs + 1))
+    out="$(WORK_CHUNK=65536 timeout -s KILL 0.05 bash "$HELPER" s3 "$cu" "$R")"; rc=$?
+    cur="$(head -1 "$WORK_CACHE_DIR/work-s3.tsv" 2>/dev/null | cut -f4)"; cur="${cur:-0}"
+    [ "$cur" -ge "$prev" ] || backwards+="$prev>$cur "
+    prev="$cur"
+    if [ "$rc" = 0 ] && [ -n "$out" ]; then break; fi
+    early+="$out"
+done
+assert_eq "$out" "$beta" "a scan killed every 50 ms still reaches the subject"
+assert_eq "$backwards" "" "the committed offset never moves backwards"
+assert_eq "$early" "" "no run prints before the scan has caught up"
+
+# With the work budget spent, a run stops after one chunk and prints
+# nothing, though that chunk already holds the subject; the next run
+# continues from the committed offset.
+cb="$(mktemp -p "$TMPROOT")"
+{
+    mk_record Read file_path "$R/docs/plans/beta.md" "$R"
+    for _ in $(seq 280); do printf '%s\n' "$filler"; done
+} > "$cb"
+out="$(WORK_CHUNK=65536 WORK_BUDGET_MS=0 work_main s9 "$cb" "$R")"
+first="$(head -1 "$WORK_CACHE_DIR/work-s9.tsv" | cut -f4)"
+assert_eq "$out" "" "a run stopped by the budget prints nothing"
+assert_ok "a run stopped by the budget commits its first chunk" test "${first:-0}" -ge 65536
+assert_ok "a run stopped by the budget commits one chunk only" test "${first:-0}" -lt 131072
+runs=1
+while [ -z "$out" ] && [ "$runs" -lt 20 ]; do
+    runs=$((runs + 1))
+    out="$(WORK_CHUNK=65536 WORK_BUDGET_MS=0 work_main s9 "$cb" "$R")"
+done
+assert_eq "$out" "$beta" "each run continues from the committed offset"
+assert_eq "$(head -1 "$WORK_CACHE_DIR/work-s9.tsv" | cut -f4)" "$(stat -c %s "$cb")" "the last run ends at the transcript's end"
+
+# The cache keeps the newest ten occurrences with distinct raw matches:
+# repeats of one archive mention take one slot, so the older plan stays
+# reachable behind it; ten newer distinct workspaces then push it out.
+dd="$(mktemp -p "$TMPROOT")"
+{
+    mk_record Read file_path "$R/docs/superpowers/plans/2026-01-01-alpha.md" "$R"
+    for _ in $(seq 11); do mk_record Bash command 'ls openspec/changes/archive/old-one/' "$R"; done
+} > "$dd"
+assert_eq "$(work_main s10 "$dd" "$R" | cut -f2)" "2026-01-01-alpha" "repeated raw matches take one slot"
+assert_eq "$(tail -n +2 "$WORK_CACHE_DIR/work-s10.tsv" | cut -f3 | tr '\n' ' ')" "openspec/changes/archive/ $R/docs/superpowers/plans/2026-01-01-alpha.md " "occurrences are kept newest first"
+for i in $(seq 10); do mk_record Agent prompt "see .superpowers/sdd/none-$i/" "$R"; done >> "$dd"
+assert_eq "$(work_main s10 "$dd" "$R")" "" "ten newer invalid occurrences push the plan out"
+assert_eq "$(tail -n +2 "$WORK_CACHE_DIR/work-s10.tsv" | cut -f3 | tr '\n' ' ')" "$(for i in $(seq 10 -1 1); do printf '.superpowers/sdd/none-%s/ ' "$i"; done)" "at most ten occurrences are kept"
+
+# A record longer than a chunk grows the chunk to its newline: the scan
+# neither stalls nor splits it, so the record's own evidence is kept.
+big="$(mktemp -p "$TMPROOT")"
+{
+    mk_record Bash command "echo $(printf '%0102400d' 0); cat docs/plans/inside-big.md" "$R"
+    mk_record Read file_path "$R/docs/superpowers/plans/2026-01-01-alpha.md" "$R"
+} > "$big"
+assert_eq "$(WORK_CHUNK=65536 work_main s4 "$big" "$R" | cut -f1,2)" $'plan\t2026-01-01-alpha' "a record longer than a chunk does not stall the scan"
+assert_eq "$(sed -n 3p "$WORK_CACHE_DIR/work-s4.tsv" | cut -f3)" "docs/plans/inside-big.md" "a record longer than a chunk is read whole"
+
+# Pruning runs at most once a day and deletes caches untouched for 14 days;
+# lock and temp files stay.
+pd="$(mktemp -d -p "$TMPROOT")"
+touch -d '20 days ago' "$pd/work-old.tsv" "$pd/work-old.lock" "$pd/work-old.tmp.1"
+touch "$pd/work-new.tsv"
+WORK_CACHE_DIR="$pd" work_main s5 "$t" "$R" >/dev/null
+assert_nofile "$pd/work-old.tsv" "a cache untouched for 20 days is pruned"
+assert_file "$pd/work-new.tsv" "a recent cache is kept"
+assert_file "$pd/work-old.lock" "a lock file is never pruned"
+assert_file "$pd/work-old.tmp.1" "a temp file is never pruned"
+touch -d '20 days ago' "$pd/work-old2.tsv"
+WORK_CACHE_DIR="$pd" work_main s5 "$t" "$R" >/dev/null
+assert_file "$pd/work-old2.tsv" "a second run within the day does not prune"
+
 finish
