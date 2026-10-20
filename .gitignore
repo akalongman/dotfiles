@@ -142,6 +142,9 @@ __pycache__/
 !.local/share/nautilus-python/extensions
 .local/share/nautilus-python/extensions/*
 !.local/share/nautilus-python/extensions/files-extras.py
+!.local/share/org.gnome.Ptyxis
+.local/share/org.gnome.Ptyxis/*
+!.local/share/org.gnome.Ptyxis/palettes
 
 # ~/.config tree: most subdirs are app state, not config. Allowlist
 # specific subdirs and explicitly exclude known secret-bearing files.
