@@ -353,12 +353,16 @@ work_stage() {
 }
 
 # Format version of the cache file; a cache of any other version is
-# discarded.
-readonly WORK_CACHE_VERSION=1
+# discarded. Version 2 keys each occurrence by its record's position in the
+# file (see work_scan_chunks); version 1 stored the record's index in the
+# bytes its run scanned, which records of different runs shared.
+readonly WORK_CACHE_VERSION=2
 
 # The run's state, shared by the functions below: the cache file and the
 # transcript it belongs to, the offset scanned so far, the transcript size
-# the last commit recorded, and the occurrences, newest first.
+# the last commit recorded, and the occurrences, newest first, as
+# "pos<TAB>abs<TAB>raw<TAB>cwd" with pos the record's position in the file
+# (see work_scan_chunks).
 _work_cache="" _work_transcript="" _work_offset=0 _work_recorded=0
 _work_rows=()
 
@@ -440,15 +444,19 @@ _work_chunk_end() {
 # Scans the transcript from _work_offset towards ENDPOINT, its size at the
 # run's start, in chunks of WORK_CHUNK bytes (4 MiB), each extended to a
 # line end. A chunk's occurrences go on top of _work_rows, newest first,
-# and the newest ten with distinct raw matches are kept; each chunk is then
-# committed, recording ENDPOINT as the transcript size (a commit that fails
-# leaves the progress in memory for this run only). Exits 0 once the
-# offset reaches the last line end before ENDPOINT, and 1 when the work
-# budget of WORK_BUDGET_MS milliseconds (1500) ran out first. The budget is
-# checked only after a chunk, so every run makes progress.
+# each with its pos made the record's position in the file: the chunk's
+# start offset plus the record's line index in the chunk, which every
+# occurrence of one record shares and no other record has, since each line
+# holds at least its newline byte. The newest ten with distinct raw
+# matches are kept, and each chunk is then committed, recording ENDPOINT as
+# the transcript size (a commit that fails leaves the progress in memory
+# for this run only). Exits 0 once the offset reaches the last line end
+# before ENDPOINT, and 1 when the work budget of WORK_BUDGET_MS
+# milliseconds (1500) ran out first. The budget is checked only after a
+# chunk, so every run makes progress.
 work_scan_chunks() {
     local endpoint="$1" chunk="${WORK_CHUNK:-}" budget="${WORK_BUDGET_MS:-}"
-    local start to="" scanned=0 i row raw seen_raw
+    local start to="" scanned=0 i pos row raw seen_raw
     local -a found=() newest=() kept=() seen=()
     [[ $chunk =~ ^[1-9][0-9]{0,9}$ ]] || chunk=4194304
     [[ $budget =~ ^[0-9]{1,9}$ ]] || budget=1500
@@ -460,9 +468,14 @@ work_scan_chunks() {
             return 1
         fi
         mapfile -t found < <(work_scan_range "$_work_transcript" "$_work_offset" "$to")
-        # This chunk's occurrences from its last, then the older ones.
+        # This chunk's occurrences from its last, then the older ones. A pos
+        # reaches shell arithmetic, so anything but a number is dropped.
         newest=()
-        for (( i = ${#found[@]} - 1; i >= 0; i-- )); do newest+=("${found[i]}"); done
+        for (( i = ${#found[@]} - 1; i >= 0; i-- )); do
+            pos="${found[i]%%$'\t'*}"
+            [[ $pos =~ ^(0|[1-9][0-9]{0,17})$ ]] || continue
+            newest+=("$((_work_offset + pos))${found[i]#"$pos"}")
+        done
         newest+=("${_work_rows[@]}")
         kept=() seen=()
         for row in "${newest[@]}"; do
@@ -487,14 +500,35 @@ work_scan_chunks() {
 # evidence (work_resolve exit 1) passes the walk on to the next older
 # occurrence; a valid subject whose file is gone (exit 2) ends it with
 # nothing printed, since an older subject is never shown in its place.
+# One record can name a plan or change and its workspace together, as an
+# apply loop's dispatch prompt does. When the subject resolved without a
+# workspace, the other occurrences of its own record (equal pos) are
+# resolved too, and the first one that resolves (exit 0) to the same file
+# to open with a workspace lends that workspace to the stage. A sibling
+# that exits 1 or 2 or names another file changes nothing, and an
+# occurrence of another record is never consulted.
 work_render() {
-    local row abs raw cwd subject kind name open ws
-    for row in "${_work_rows[@]}"; do
-        IFS=$'\t' read -r _ abs raw cwd <<<"$row"
+    local i j pos tie_pos abs raw cwd subject kind name open ws tie tie_open tie_ws
+    for (( i = 0; i < ${#_work_rows[@]}; i++ )); do
+        IFS=$'\t' read -r pos abs raw cwd <<<"${_work_rows[i]}"
         subject="$(work_resolve "$raw" "$abs" "$cwd")"
         case $? in
             0)
                 IFS=$'\t' read -r kind name open ws <<<"$subject"
+                # The record's newer occurrences all exited 1, or the walk
+                # would have stopped there, so only the older ones can lend.
+                if [ -z "$ws" ]; then
+                    for (( j = i + 1; j < ${#_work_rows[@]}; j++ )); do
+                        IFS=$'\t' read -r tie_pos abs raw cwd <<<"${_work_rows[j]}"
+                        [ "$tie_pos" = "$pos" ] || continue
+                        tie="$(work_resolve "$raw" "$abs" "$cwd")" || continue
+                        IFS=$'\t' read -r _ _ tie_open tie_ws <<<"$tie"
+                        if [ "$tie_open" = "$open" ] && [ -n "$tie_ws" ]; then
+                            ws="$tie_ws"
+                            break
+                        fi
+                    done
+                fi
                 printf '%s\t%s\t%s\t%s\n' "$kind" "$name" "$open" "$(work_stage "$kind" "$open" "$ws")"
                 return 0
                 ;;

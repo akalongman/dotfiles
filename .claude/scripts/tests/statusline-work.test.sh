@@ -417,7 +417,7 @@ t="$(mktemp -p "$TMPROOT")"
 out="$(work_main s1 "$t" "$R")"
 assert_eq "$out" $'change\tadd-groups\t'"$R"$'/openspec/changes/add-groups/tasks.md\t' "newest valid occurrence is the subject"
 assert_file "$WORK_CACHE_DIR/work-s1.tsv" "cache written"
-assert_eq "$(head -1 "$WORK_CACHE_DIR/work-s1.tsv" | cut -f1,4)" $'1\t'"$(stat -c %s "$t")" "offset at end of transcript"
+assert_eq "$(head -1 "$WORK_CACHE_DIR/work-s1.tsv" | cut -f1,4)" "$WORK_CACHE_VERSION"$'\t'"$(stat -c %s "$t")" "offset at end of transcript"
 # incremental: append a Read of a plan, only new bytes scanned, subject changes
 mk_record Read file_path "$R/docs/plans/beta.md" "$R" >> "$t"
 assert_eq "$(work_main s1 "$t" "$R" | cut -f1,2)" $'plan\tbeta' "appended evidence replaces the subject"
@@ -430,9 +430,9 @@ assert_eq "$(work_main s1 "$t" "$R")" "" "unresolved workspace shows nothing"
 mkdir -p "$R/.superpowers/sdd/late"; printf '# SDD ledger: plan docs/superpowers/plans/2026-01-01-alpha.md\nTask 1: complete\n' > "$R/.superpowers/sdd/late/progress.md"
 assert_eq "$(work_main s1 "$t" "$R" | cut -f2,4)" $'2026-01-01-alpha\tTask 1 complete' "resolved on a later run without a rescan"
 # invalidation
-sed -i '1s/^1\t/9\t/' "$WORK_CACHE_DIR/work-s1.tsv"
+sed -i "1s/^$WORK_CACHE_VERSION\t/9\t/" "$WORK_CACHE_DIR/work-s1.tsv"
 assert_eq "$(work_main s1 "$t" "$R" | cut -f2)" "2026-01-01-alpha" "stale version restarts from zero and still resolves"
-printf '1\t%s\t1\t999999999\n' "$t" > "$WORK_CACHE_DIR/work-s1.tsv"
+printf '%s\t%s\t1\t999999999\n' "$WORK_CACHE_VERSION" "$t" > "$WORK_CACHE_DIR/work-s1.tsv"
 assert_eq "$(work_main s1 "$t" "$R" | cut -f2)" "2026-01-01-alpha" "offset beyond size restarts from zero"
 # missing transcript, odd ids
 assert_eq "$(work_main s2 "$TMPROOT/does not exist.jsonl" "$R")" "" "missing transcript prints nothing"
@@ -450,7 +450,7 @@ assert_eq "$(head -1 "$WORK_CACHE_DIR/work-s1.tsv")" "$before" "held lock leaves
 assert_eq "$(work_main s1 "$t" "$R" | cut -f2,4)" $'2026-01-01-alpha\tTask 1 complete' "held lock renders from the cache"
 # While the cached offset is below the size the last commit recorded, a
 # catch-up is in flight, and a run that finds the lock held prints nothing.
-printf '1\t%s\t%s\t0\n0\t1\t%s\t\n' "$t" "$(stat -c %s "$t")" "$R/docs/superpowers/plans/2026-01-01-alpha.md" > "$WORK_CACHE_DIR/work-s1.tsv"
+printf '%s\t%s\t%s\t0\n0\t1\t%s\t\n' "$WORK_CACHE_VERSION" "$t" "$(stat -c %s "$t")" "$R/docs/superpowers/plans/2026-01-01-alpha.md" > "$WORK_CACHE_DIR/work-s1.tsv"
 assert_eq "$(work_main s1 "$t" "$R")" "" "held lock during a catch-up prints nothing"
 wait "$lp"
 # A call in this shell leaves no descriptor holding the lock.
@@ -475,9 +475,9 @@ assert_eq "$(work_main s6 "$pl" "$R" | cut -f2)" "add-groups" "the completed lin
 sh="$(mktemp -p "$TMPROOT")"
 mk_record Read file_path "$R/docs/superpowers/plans/2026-01-01-alpha.md" "$R" > "$sh"
 n="$(stat -c %s "$sh")"
-printf '1\t%s\t%s\t%s\n0\t1\t%s\t\n' "$sh" "$((n + 100))" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
+printf '%s\t%s\t%s\t%s\n0\t1\t%s\t\n' "$WORK_CACHE_VERSION" "$sh" "$((n + 100))" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
 assert_eq "$(work_main s7 "$sh" "$R" | cut -f2)" "2026-01-01-alpha" "a shrunk transcript restarts from zero"
-printf '1\t%s\t%s\t%s\n0\t1\t%s\t\nnot a row\n' "$sh" "$n" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
+printf '%s\t%s\t%s\t%s\n0\t1\t%s\t\nnot a row\n' "$WORK_CACHE_VERSION" "$sh" "$n" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
 assert_eq "$(work_main s7 "$sh" "$R" | cut -f2)" "2026-01-01-alpha" "a cache line that does not parse restarts from zero"
 
 # An id that is empty or holds a slash, or an empty transcript path, prints
@@ -688,5 +688,43 @@ out="$(statusline "$HW" 200 "$(payload "$R" e2e2 "$bt")")"
 assert_eq "$(sed -n 2p <<< "$out")" "🌿 main | $link"' · Section 1 complete \c tail' "a backslash in the stage is printed literally on the git row"
 out="$(statusline "$HW" 200 "$(payload "$NR" e2e2 "$bt")")"
 assert_contains "$(head -1 <<< "$out")" " | $link"' · Section 1 complete \c tail' "a backslash in the stage is printed literally on row 1"
+
+# Final review I1: one record naming a subject and its workspace. An apply
+# loop's dispatch prompt names both, often the plan or change last, so that
+# row comes first in the cache and resolves without a workspace; the stage
+# then comes from the workspace named in the same record, when it resolves
+# to the same file. The change's task list holds 2/4 ticks from Task 5.
+same_record() { # session prompt: one Agent prompt record under cwd R, then the helper's line
+    local f; f="$(mktemp -p "$TMPROOT")"
+    mk_record Agent prompt "$2" "$R" > "$f"
+    work_main "$1" "$f" "$R"
+}
+mk_ws same-record progress.md '# SDD ledger: change add-groups (openspec/changes/add-groups/tasks.md)'
+printf '%s\n' 'Section 2: complete' >> "$R/.superpowers/sdd/same-record/progress.md"
+alpha="$R/docs/superpowers/plans/2026-01-01-alpha.md"
+assert_eq "$(same_record t1 'Use .superpowers/sdd/late/ for docs/superpowers/plans/2026-01-01-alpha.md')" $'plan\t2026-01-01-alpha\t'"$alpha"$'\tTask 1 complete' "a plan named after its workspace in one record takes the ledger's stage"
+assert_eq "$(same_record t2 'Use .superpowers/sdd/same-record/ for openspec/changes/add-groups/')" $'change\tadd-groups\t'"$tasks"$'\tSection 2 complete' "a change named after its workspace in one record takes the ledger's stage, not its ticks"
+# A workspace of another subject in the same record lends nothing; nor
+# does a retired one (exit 2), which does not blank the subject either.
+assert_eq "$(same_record t3 'Use .superpowers/sdd/late/ for docs/plans/beta.md')" $'plan\tbeta\t'"$R"$'/docs/plans/beta.md\t' "a plan beside another subject's workspace has no stage"
+assert_eq "$(same_record t4 'Use .superpowers/sdd/late/ for openspec/changes/add-groups/')" $'change\tadd-groups\t'"$tasks"$'\t2/4' "a change beside another subject's workspace keeps its ticks"
+assert_eq "$(same_record t5 'Use .superpowers/sdd/gone/ for docs/plans/beta.md')" $'plan\tbeta\t'"$R"$'/docs/plans/beta.md\t' "a retired workspace in the same record changes nothing"
+
+# Two records scanned by two runs each sit first in their run's bytes, yet
+# stay two records: the cache keys a row by its position in the file, so a
+# plan read in the second run takes no stage from the workspace named in
+# the first.
+two="$(mktemp -p "$TMPROOT")"; tie_cache="$(mktemp -d -p "$TMPROOT")"
+mk_record Agent prompt 'Use .superpowers/sdd/late/' "$R" > "$two"
+assert_eq "$(WORK_CACHE_DIR="$tie_cache" work_main t6 "$two" "$R" | cut -f2,4)" $'2026-01-01-alpha\tTask 1 complete' "the workspace alone gives its ledger's stage"
+first_end="$(stat -c %s "$two")"
+mk_record Read file_path "$alpha" "$R" >> "$two"
+assert_eq "$(WORK_CACHE_DIR="$tie_cache" work_main t6 "$two" "$R")" $'plan\t2026-01-01-alpha\t'"$alpha"$'\t' "a plan read in a later run takes no stage from an earlier record's workspace"
+assert_eq "$(tail -n +2 "$tie_cache/work-t6.tsv" | cut -f1 | tr '\n' ' ')" "$first_end 0 " "rows of two runs keep their positions in the file"
+# A version 1 cache, whose positions restarted at every run, is discarded:
+# its cached beta row is not rendered, and the rescan finds the plan.
+end="$(stat -c %s "$two")"
+printf '1\t%s\t%s\t%s\n0\t1\t%s\t\n' "$two" "$end" "$end" "$R/docs/plans/beta.md" > "$tie_cache/work-t6.tsv"
+assert_eq "$(WORK_CACHE_DIR="$tie_cache" work_main t6 "$two" "$R" | cut -f2)" "2026-01-01-alpha" "a version 1 cache is discarded and rescanned"
 
 finish
