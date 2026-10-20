@@ -139,6 +139,24 @@ _work_allowed() {
     done
 }
 
+# _work_normalise VAR PATH
+# Sets VAR to the absolute PATH normalised without touching the disk: empty
+# and "." components dropped, each ".." removing the component before it,
+# no symlink resolved.
+_work_normalise() {
+    local _n_rest="$2" _n_part _n_out=""
+    while [ -n "$_n_rest" ]; do
+        _n_part="${_n_rest%%/*}"
+        if [[ $_n_rest == */* ]]; then _n_rest="${_n_rest#*/}"; else _n_rest=""; fi
+        case "$_n_part" in
+            ''|.) ;;
+            ..) _n_out="${_n_out%/*}" ;;
+            *) _n_out="$_n_out/$_n_part" ;;
+        esac
+    done
+    printf -v "$1" '%s' "${_n_out:-/}"
+}
+
 # work_classify ABSPATH
 # Prints "kind<TAB>name<TAB>open" for an absolute path. A path under
 # openspec/changes/<name>/, whatever file in it was named, is the change
@@ -207,20 +225,25 @@ work_ws_source() {
 
 # work_resolve RAW ABS CWD
 # Resolves one occurrence from work_scan_range and prints
-# "kind<TAB>name<TAB>open<TAB>ws", or prints nothing and exits 1. With ABS 1,
-# RAW starts with / or with ~/, which resolves against HOME; with ABS 0, RAW
-# joins CWD, which must be absolute. A workspace token, one ending in
-# .superpowers/sdd/<name>/, stands for the source work_ws_source reads, and
-# ws is the workspace's absolute, symlink-resolved directory; for any other
-# token ws is empty. open is symlink-resolved up to the file (a change's
-# tasks.md is opened in its resolved directory), so two names of one file
-# give one subject. Exits 1 for a path under openspec/changes/archive/ as
-# named or as resolved, a workspace that names no source, a path, workspace
-# or name with a character outside the allowed set, or an open file that
-# does not exist. Name and open are cut from the checked resolved path, so
-# they hold only allowed characters too.
+# "kind<TAB>name<TAB>open<TAB>ws". With ABS 1, RAW starts with / or with
+# ~/, which resolves against HOME; with ABS 0, RAW joins CWD, which must be
+# absolute. A workspace token, one ending in .superpowers/sdd/<name>/,
+# stands for the source work_ws_source reads, and ws is the workspace's
+# absolute, symlink-resolved directory; for any other token ws is empty.
+# Kind and name come from the path as named, lexically normalised and
+# before any symlink is resolved, so a change whose tasks.md or directory is
+# a symlink stays that change. open is the symlink-resolved file, so two
+# names of one file give one subject.
+# Exit 1, printing nothing, is invalid evidence, and the caller moves on to
+# an older occurrence: no usable base directory, a workspace that names no
+# source, a change under openspec/changes/archive/ as named or as resolved,
+# a path that classifies as nothing, or a character outside the allowed set
+# in the path as named, the workspace, or the file to open. Exit 2, printing
+# nothing, is a valid subject whose file to open does not exist or cannot be
+# resolved: the subject is retired, and the caller shows nothing rather than
+# an older subject.
 work_resolve() {
-    local raw="$1" abs="$2" cwd="$3" path ws="" real row kind name open
+    local raw="$1" abs="$2" cwd="$3" path ws="" named row kind name open resolved dir
     case "$abs:$raw" in
         1:/*) path="$raw" ;;
         1:\~/*) [[ ${HOME:-} == /* ]] || return 1; path="$HOME/${raw#\~/}" ;;
@@ -233,15 +256,25 @@ work_resolve() {
         ws="$(realpath -m -- "$path" 2>/dev/null)" || return 1
         path="$(work_ws_source "$path")" || return 1
     fi
-    case "$path" in
+    _work_allowed "$path" "$ws" || return 1
+    _work_normalise named "$path"
+    row="$(work_classify "$named")" || return 1
+    IFS=$'\t' read -r kind name open <<<"$row"
+    # One realpath call resolves the file to open and its directory, which
+    # for a change is the change directory the archive rule applies to (the
+    # trailing slash keeps a file at the root from passing an empty operand).
+    # A resolved path holding a newline leaves one in open, which then fails
+    # the character check.
+    resolved="$(realpath -m -- "${open%/*}/" "$open" 2>/dev/null)" || return 2
+    dir="${resolved%%$'\n'*}" open="${resolved#*$'\n'}"
+    case "$dir/" in
+        */openspec/changes/archive/*) return 1 ;;
+    esac
+    case "$open" in
         */openspec/changes/archive|*/openspec/changes/archive/*) return 1 ;;
     esac
-    _work_allowed "$path" "$ws" || return 1
-    real="$(realpath -m -- "$path" 2>/dev/null)" || return 1
-    _work_allowed "$real" || return 1
-    row="$(work_classify "$real")" || return 1
-    IFS=$'\t' read -r kind name open <<<"$row"
-    [ -e "$open" ] || return 1
+    _work_allowed "$open" || return 1
+    [ -e "$open" ] || return 2
     printf '%s\t%s\t%s\t%s\n' "$kind" "$name" "$open" "$ws"
 }
 

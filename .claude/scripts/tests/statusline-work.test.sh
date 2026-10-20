@@ -188,26 +188,37 @@ assert_eq "$(work_resolve ".superpowers/sdd/2026-01-01-alpha/" 0 "$R" | cut -f1,
 assert_eq "$(work_resolve ".superpowers/sdd/legacy/" 0 "$R" | cut -f1,2)" $'plan\tbeta' "older header grammar"
 assert_eq "$(work_resolve ".superpowers/sdd/changeform/" 0 "$R" | cut -f1,2)" $'change\tadd-groups' "change header grammar"
 assert_fail "workspace with neither marker nor header is skipped" work_resolve ".superpowers/sdd/tasks/" 0 "$R"
-assert_fail "workspace whose source is missing is skipped" work_resolve ".superpowers/sdd/gone/" 0 "$R"
+assert_fail "workspace whose source is missing is not a subject" work_resolve ".superpowers/sdd/gone/" 0 "$R"
 assert_fail "missing plan file is not a subject" work_resolve "docs/plans/nope.md" 0 "$R"
 assert_eq "$(work_resolve "$R/link/beta.md" 1 "" | cut -f3)" "$R/docs/plans/beta.md" "a symlinked path opens the real file"
-assert_fail "a workspace naming an archived change is skipped" work_resolve ".superpowers/sdd/archived/" 0 "$R"
+work_resolve ".superpowers/sdd/archived/" 0 "$R"; assert_eq "$?" 1 "a workspace naming an archived change is skipped"
 assert_file "$R/docs/plans/bad\$name.md" "the plan with a disallowed character exists"
 assert_fail "a plan name outside the allowed set is dropped" work_resolve "docs/plans/bad\$name.md" 0 "$R"
 
+# Exit status: 1 is invalid evidence, so the caller tries an older
+# occurrence; 2 is a valid subject whose file is missing, so the subject is
+# retired and nothing older is shown.
+work_resolve "docs/plans/nope.md" 0 "$R"; assert_eq "$?" 2 "a missing plan file exits 2"
+work_resolve ".superpowers/sdd/gone/" 0 "$R"; assert_eq "$?" 2 "a workspace whose source is missing exits 2"
+work_resolve "openspec/changes/archive/old-one/" 0 "$R"; assert_eq "$?" 1 "an archived change exits 1"
+work_resolve ".superpowers/sdd/tasks/" 0 "$R"; assert_eq "$?" 1 "a workspace with neither marker nor header exits 1"
+work_resolve "docs/plans/bad\$name.md" 0 "$R"; assert_eq "$?" 1 "a disallowed character exits 1"
+work_resolve "openspec/changes/retired/" 0 "$R"; assert_eq "$?" 2 "a change whose directory is gone exits 2"
+work_resolve "$R/docs/plans/" 1 ""; assert_eq "$?" 1 "a path that classifies as nothing exits 1"
+
 # The base directory: CWD for a relative raw, HOME for ~/.
-assert_fail "a relative raw with no cwd fails" work_resolve "docs/plans/beta.md" 0 ""
+work_resolve "docs/plans/beta.md" 0 ""; assert_eq "$?" 1 "a relative raw with no cwd exits 1"
 in_root() { (cd / && "$@"); }
-assert_fail "a relative cwd fails even where it would resolve" in_root work_resolve "docs/plans/beta.md" 0 "${R#/}"
+in_root work_resolve "docs/plans/beta.md" 0 "${R#/}"; assert_eq "$?" 1 "a relative cwd exits 1 even where it would resolve"
 assert_eq "$(HOME="$R" work_resolve \~/docs/plans/beta.md 1 "")" $'plan\tbeta\t'"$R"$'/docs/plans/beta.md\t' "a home-relative raw resolves against HOME"
-assert_fail "an absolute raw flagged relative fails" work_resolve "$R/docs/plans/beta.md" 0 /
+work_resolve "$R/docs/plans/beta.md" 0 /; assert_eq "$?" 1 "an absolute raw flagged relative exits 1"
 
 # Punctuation-prefixed raws fail the character check even when the prefixed
 # path exists.
 P="$(mktemp -d -p "$TMPROOT")"
 for pre in '(' '--x=' "\$HOME/" '[a]('; do
     mkdir -p "$P/${pre}docs/plans"; : > "$P/${pre}docs/plans/p.md"
-    assert_fail "a raw prefixed with $pre is dropped" work_resolve "${pre}docs/plans/p.md" 0 "$P"
+    work_resolve "${pre}docs/plans/p.md" 0 "$P"; assert_eq "$?" 1 "a raw prefixed with $pre exits 1"
 done
 # Both the path as named and the path as resolved are checked, and the
 # workspace directory too; the plain forms of each case resolve.
@@ -218,13 +229,15 @@ printf '# SDD ledger: plan docs/plans/p.md\n' | tee "$P/.superpowers/sdd/plain/p
 ln -s "$P/odd(ws)" "$P/.superpowers/sdd/wslink"
 assert_eq "$(work_resolve "docs/plans/p.md" 0 "$P" | cut -f1,2)" $'plan\tp' "the plain plan resolves"
 assert_eq "$(work_resolve ".superpowers/sdd/plain/" 0 "$P" | cut -f1,2)" $'plan\tp' "the plain workspace resolves"
-assert_fail "a named segment that .. removes still drops the raw" work_resolve "x(/../docs/plans/p.md" 0 "$P"
+work_resolve "x(/../docs/plans/p.md" 0 "$P"; assert_eq "$?" 1 "a named segment that .. removes still drops the raw"
 mkdir -p "$P/.superpowers/sdd/absolute" "$P/x("
 printf '# SDD ledger: plan %s/docs/plans/p.md\n' "$P" > "$P/.superpowers/sdd/absolute/progress.md"
 assert_eq "$(work_resolve ".superpowers/sdd/absolute/" 0 "$P" | cut -f1,2)" $'plan\tp' "a workspace naming an absolute source resolves"
-assert_fail "a named segment that .. removes still drops a workspace" work_resolve "x(/../.superpowers/sdd/absolute/" 0 "$P"
-assert_fail "a symlink onto a disallowed name is dropped" work_resolve "docs/plans/link.md" 0 "$P"
-assert_fail "a workspace that resolves to a disallowed name is dropped" work_resolve ".superpowers/sdd/wslink/" 0 "$P"
+work_resolve "x(/../.superpowers/sdd/absolute/" 0 "$P"; assert_eq "$?" 1 "a named segment that .. removes still drops a workspace"
+work_resolve "docs/plans/link.md" 0 "$P"; assert_eq "$?" 1 "a symlink onto a disallowed name exits 1"
+work_resolve ".superpowers/sdd/wslink/" 0 "$P"; assert_eq "$?" 1 "a workspace that resolves to a disallowed name exits 1"
+ln -s loop.md "$P/docs/plans/loop.md"
+work_resolve "docs/plans/loop.md" 0 "$P"; assert_eq "$?" 2 "a plan that cannot be resolved exits 2"
 
 # The archive rule holds for the path as named and as resolved. The
 # archive's own tasks.md exists here, so a missing archive rule would yield
@@ -235,9 +248,34 @@ mkdir -p "$A/openspec/changes/archive/x" "$A/named/openspec/changes"
 : > "$A/openspec/changes/archive/x/tasks.md"
 ln -s "$A/openspec/changes/archive/x" "$A/openspec/changes/y"
 ln -s "$R/openspec/changes/add-groups" "$A/named/openspec/changes/archive"
-assert_fail "an archived change is skipped" work_resolve "$A/openspec/changes/archive/x/" 1 ""
-assert_fail "a change that resolves into the archive is skipped" work_resolve "$A/openspec/changes/y/" 1 ""
-assert_fail "a raw naming the archive is skipped where it resolves elsewhere" work_resolve "$A/named/openspec/changes/archive/" 1 ""
+work_resolve "$A/openspec/changes/archive/x/" 1 ""; assert_eq "$?" 1 "an archived change is skipped"
+work_resolve "$A/openspec/changes/y/" 1 ""; assert_eq "$?" 1 "a change that resolves into the archive is skipped"
+work_resolve "$A/named/openspec/changes/archive/" 1 ""; assert_eq "$?" 1 "a raw naming the archive is skipped where it resolves elsewhere"
+# The resolved change directory and the resolved file are checked apart.
+: > "$A/outside-notes.md"
+mkdir -p "$A/openspec/changes/archive/w" "$A/openspec/changes/v"
+ln -s "$A/outside-notes.md" "$A/openspec/changes/archive/w/tasks.md"
+ln -s "$A/openspec/changes/archive/w" "$A/openspec/changes/z"
+ln -s "$A/openspec/changes/archive/x/tasks.md" "$A/openspec/changes/v/tasks.md"
+work_resolve "$A/openspec/changes/z/" 1 ""; assert_eq "$?" 1 "a change directory in the archive is skipped wherever its tasks.md points"
+work_resolve "$A/openspec/changes/v/" 1 ""; assert_eq "$?" 1 "a tasks.md that resolves into the archive is skipped"
+assert_eq "$(work_resolve "$R/openspec/changes/archive/../add-groups/" 1 "" | cut -f1,2)" $'change\tadd-groups' "a .. is normalised away before classifying"
+
+# Classification reads the path as named; the file to open is resolved.
+M="$(mktemp -d -p "$TMPROOT")"
+mkdir -p "$M/openspec/changes/foo" "$M/elsewhere" "$M/outside/bar-dir" "$M/docs/plans" "$M/.superpowers/sdd/foo"
+: > "$M/elsewhere/notes.md"; : > "$M/outside/bar-dir/tasks.md"
+ln -s "$M/elsewhere/notes.md" "$M/openspec/changes/foo/tasks.md"
+ln -s "$M/outside/bar-dir" "$M/openspec/changes/bar"
+ln -s "$M/elsewhere/notes.md" "$M/docs/plans/alias.md"
+printf '# SDD ledger: plan openspec/changes/foo/tasks.md\n' > "$M/.superpowers/sdd/foo/progress.md"
+assert_eq "$(work_resolve ".superpowers/sdd/foo/" 0 "$M" | cut -f1-3)" $'change\tfoo\t'"$M/elsewhere/notes.md" "a symlinked tasks.md stays its change"
+assert_eq "$(work_resolve "openspec/changes/foo/" 0 "$M" | cut -f1-3)" "$(work_resolve ".superpowers/sdd/foo/" 0 "$M" | cut -f1-3)" "a change and the workspace naming its tasks.md are one subject"
+assert_eq "$(work_resolve "openspec/changes/bar/" 0 "$M")" $'change\tbar\t'"$M"$'/outside/bar-dir/tasks.md\t' "a symlinked change directory stays its change"
+assert_eq "$(work_resolve "docs/plans/alias.md" 0 "$M" | cut -f1-3)" $'plan\talias\t'"$M/elsewhere/notes.md" "a plan is named by the path as named"
+norm=""
+_work_normalise norm "/a/./b//c/../d/"; assert_eq "$norm" "/a/b/d" "lexical normalisation"
+_work_normalise norm "/../a/.."; assert_eq "$norm" "/" "lexical normalisation stops at the root"
 
 # Header forms found in real ledgers; only the first line is read.
 i=0
@@ -250,7 +288,7 @@ mk_ws variant-change progress.md '# SDD ledger, change: add-groups (openspec/cha
 assert_eq "$(work_resolve ".superpowers/sdd/variant-change/" 0 "$R" | cut -f1,2)" $'change\tadd-groups' "change header with a colon"
 mk_ws other-first progress.md "# Progress ledger $emdash Ansible folder reorganization"
 printf '# SDD ledger: plan docs/plans/beta.md\n' >> "$R/.superpowers/sdd/other-first/progress.md"
-assert_fail "a header on the second line is not read" work_resolve ".superpowers/sdd/other-first/" 0 "$R"
+work_resolve ".superpowers/sdd/other-first/" 0 "$R"; assert_eq "$?" 1 "a header on the second line is not read"
 mk_ws both plan-path 'docs/superpowers/plans/2026-01-01-alpha.md'
 printf '# SDD ledger: plan docs/plans/beta.md\n' > "$R/.superpowers/sdd/both/progress.md"
 assert_eq "$(work_resolve ".superpowers/sdd/both/" 0 "$R" | cut -f2)" "2026-01-01-alpha" "the marker wins over the header"
