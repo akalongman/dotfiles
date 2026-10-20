@@ -86,8 +86,7 @@ $HOME/                    yadm working tree
 │   ├── zed/              Zed settings, keymap, and theme.
 │   └── yadm/bootstrap    Setup script run by `yadm bootstrap` after clone (see Install).
 ├── .gemini/settings.json
-├── .github/              README assets.
-└── .local/share/openspec/schemas/   User-level OpenSpec workflow schemas, shared across all projects.
+└── .github/              README assets.
 ```
 
 `~/.local/share/yadm/repo.git/` is yadm's bare repo. Do not touch it directly; use `yadm` commands.
