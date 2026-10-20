@@ -91,9 +91,12 @@ the final message.
   Requested or released, the unit's latest pause line wins. Read owner
   notes by count, not position: with k `owner note applied` lines for
   the unit, its first k `owner note:` lines are applied and the rest, in
-  order, are not. Carry each unapplied note in the dispatch or resume
-  that follows and ledger one `Section N: owner note applied` per note,
-  in the same call. A latest pause line
+  order, are not. Carry every owner note of the unit in every later
+  dispatch and every resume of a child, ledgering one
+  `Section N: owner note applied` per note at its first carry, in the
+  same call. A note asking to change work already done is applied as a
+  fix round (a message asking for code, so it counts toward the cap).
+  A latest pause line
   of `pause requested` is a pause in force: ledger what just ended as
   usual (the report, or the failure and the fallback or retry you would
   make, `Model fallback:` included), run
@@ -136,7 +139,10 @@ the final message.
   and ledger it as the `paused` line (point `before needs-ruling`), so
   the resume runs the drift check. The tick is not a dispatch: with a
   clean review and passing gates, tick and return `complete` whatever the
-  pause lines say. In the final phase these rules use
+  pause lines say. Before the tick, rerun the grep for owner notes
+  alone (the pause lines still do not stop the tick): an unapplied note
+  becomes a fix round, since no dispatch is left to carry it.
+  In the final phase these rules use
   `Final phase:` as the ledger prefix in place of `Section N:`, and the
   checkpoint takes the union of the units' briefs' file lists.
 - **Waiting.** A dispatch returns at once and the harness re-invokes you
