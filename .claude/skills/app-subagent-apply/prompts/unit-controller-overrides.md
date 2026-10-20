@@ -48,7 +48,12 @@ the final message.
   before (a Critical traded for an Important is progress; like for like
   is not), ends the loop: return
   `needs-ruling` with the two rounds' ids; under hands-off, ledger
-  `Ruling:` and return `parked`.
+  `Ruling:` and return `parked`. The count test applies only while the
+  re-review leaves at least one Critical or Important finding open: a
+  re-review that leaves none open closes the round as addressed. In a
+  loop that an owner note opened after a clean review, the loop's first
+  re-review is the baseline and is not compared with the clean review,
+  which measured other work.
 - **Gates.** Before the unit's `complete` line: the project's own lint,
   analysis and test commands over the unit's files (OpenSpec:
   `openspec validate <name> --strict` first); none defined: say so in the
@@ -59,7 +64,18 @@ the final message.
   to `final-review.md`; ONE fix dispatch with the whole Critical and
   Important list; ONE scoped re-review; the gates again. Leftovers:
   `Open before merge: <finding>. Ruling: <decision>. Cost if wrong: <what>`;
-  no second wave. Before your `complete`, ledger `Final phase: complete
+  no second wave. An owner note wins over the one-wave limit, which stays
+  as it is for review findings: a note dispatch carries every owner note
+  of the unit and no review findings. A note read after the fix dispatch
+  and before the scoped re-review goes out in one note dispatch, and the
+  one scoped re-review then covers both dispatches' diffs, from the head
+  the whole-branch review saw. A note found unapplied by the read before
+  the tick (`Final phase: complete`), after the re-review or with no fix
+  wave at all, goes out in one note dispatch, then one scoped re-review
+  of that dispatch's diff, then the gates again. A finding a note's
+  re-review raises is a leftover (`Open before merge`) and opens no
+  further round; each later note takes the same path.
+  Before your `complete`, ledger `Final phase: complete
   <sha7>` with the HEAD the review and the last gate run saw; a gate that
   fails after the re-review, or a Critical the fix wave did not close and
   no ruling covers, returns `failed` with the reason ledgered, never
@@ -93,9 +109,11 @@ the final message.
   the unit, its first k `owner note:` lines are applied and the rest, in
   order, are not. Carry every owner note of the unit in every later
   dispatch and every resume of a child, ledgering one
-  `Section N: owner note applied` per note at its first carry, in the
-  same call. A note asking to change work already done is applied as a
-  fix round (a message asking for code, so it counts toward the cap).
+  `Section N: owner note applied` per note at its first carry to an
+  implementer, in the same call. A reviewer's dispatch carries the
+  unit's notes as context only and never marks one applied. A note
+  asking to change work already done is applied as a fix round (a
+  message asking for code, so it counts toward the cap).
   A latest pause line
   of `pause requested` is a pause in force: ledger what just ended as
   usual (the report, or the failure and the fallback or retry you would
@@ -141,7 +159,8 @@ the final message.
   clean review and passing gates, tick and return `complete` whatever the
   pause lines say. Before the tick, rerun the grep for owner notes
   alone (the pause lines still do not stop the tick): an unapplied note
-  becomes a fix round, since no dispatch is left to carry it.
+  becomes a fix round, since no dispatch is left to carry it (in the
+  final phase, the Final phase bullet's note path).
   In the final phase these rules use
   `Final phase:` as the ledger prefix in place of `Section N:`, and the
   checkpoint takes the union of the units' briefs' file lists.
