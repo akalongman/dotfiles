@@ -294,15 +294,38 @@ work_resolve() {
 work_stage() {
     # The cap counts characters, not bytes, whatever the caller's locale.
     local LC_ALL=C.UTF-8
-    local kind="$1" open="$2" ws="$3" line last="" label status
+    local kind="$1" open="$2" ws="$3" line last="" label status i
     local ticked=0 total=0 fenced=0
+    local -a lines=() parts=()
     local marker='^((Section|Task|Unit) [A-Za-z0-9.]+|Final phase): '
     local box='^[[:space:]]*- \[( |x|X)\]'
     if [ -n "$ws" ]; then
         [ -f "$ws/progress.md" ] || return 0
-        while IFS= read -r line; do
-            if [[ $line =~ $marker ]]; then last="$line"; fi
-        done 2>/dev/null < "$ws/progress.md"
+        # One mapfile of the whole ledger, scanned from the end, spares a
+        # redraw the per-line regex of a line loop; a glob skips lines that
+        # cannot start a marker. mapfile keeps each newline, so an element
+        # without one is the unterminated last line. mapfile cuts a line at a
+        # NUL where the line loop drops the NUL, so a ledger with a NUL
+        # before its last byte (two NUL-separated records) takes the line
+        # loop and reads as it always did; a NUL as the last byte sits in the
+        # unterminated last line, which neither read uses.
+        mapfile -d '' -n 2 parts 2>/dev/null < "$ws/progress.md"
+        if [ "${#parts[@]}" -gt 1 ]; then
+            while IFS= read -r line; do
+                if [[ $line =~ $marker ]]; then last="$line"; fi
+            done 2>/dev/null < "$ws/progress.md"
+        else
+            mapfile lines 2>/dev/null < "$ws/progress.md"
+            i=$((${#lines[@]} - 1))
+            if [ "$i" -ge 0 ] && [[ ${lines[i]} != *$'\n' ]]; then i=$((i - 1)); fi
+            for (( ; i >= 0; i-- )); do
+                case ${lines[i]} in
+                    'Section '* | 'Task '* | 'Unit '* | 'Final phase: '*) ;;
+                    *) continue ;;
+                esac
+                if [[ ${lines[i]} =~ $marker ]]; then last="${lines[i]%$'\n'}"; break; fi
+            done
+        fi
         [[ $last =~ $marker ]] || return 0
         label="${BASH_REMATCH[1]}"
         status="${last#"${BASH_REMATCH[0]}"}"

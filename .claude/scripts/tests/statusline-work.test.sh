@@ -369,6 +369,16 @@ assert_eq "$(work_stage plan /x "$(dirname "$L10")")" "" "a status holding a tab
 L11="$(mk_ledger $'Section 3: complete (x\ty)')"
 assert_eq "$(work_stage plan /x "$(dirname "$L11")")" "Section 3 complete" "a control character after the cut is not part of the status"
 
+# The ledger is read whole and scanned from the end, past lines that cannot
+# be markers; a ledger holding a NUL is read line by line instead, which
+# drops the NUL, so a NUL after the cut leaves the last marker standing.
+L12="$(mk_ledger 'Section 1: complete' 'Unit A: complete')"
+assert_eq "$(work_stage plan /x "$(dirname "$L12")")" "Unit A complete" "a Unit marker is found from the end"
+q2="$(mktemp -d -p "$TMPROOT")"; printf 'Section 1: complete\nSection 2: paused (x\0y)\n' > "$q2/progress.md"
+assert_eq "$(work_stage plan /x "$q2")" "Section 2 paused" "a NUL in the last marker's annotation is dropped, not a cut line"
+printf 'Section 1: complete (x\0y)\nSection 2: comp' > "$q2/progress.md"
+assert_eq "$(work_stage plan /x "$q2")" "Section 1 complete" "a ledger read line by line still ignores its partial last line"
+
 # A workspace's stage comes from its ledger alone; a task list's last line
 # counts without its newline.
 assert_eq "$(work_stage change "$T1" "$(dirname "$L3")")" "" "a change with a workspace does not fall back to its task list"
