@@ -5,8 +5,9 @@
 # only from these input fields: file_path of Read, Edit, Write and
 # NotebookEdit; path of Grep and Glob; command of Bash; prompt of Agent; args
 # of Skill. File bodies (content, old_string, new_string), descriptions and
-# tool results never count. Transcript text is matched as data and never
-# evaluated by a shell.
+# tool results never count, and neither do the heredoc bodies inside a Bash
+# command, since file writes go through them. Transcript text is matched as
+# data and never evaluated by a shell.
 #
 # Sourcing the file defines the work_* functions only; executing it runs
 # work_main.
@@ -20,15 +21,48 @@ unset _work_seg
 # Turns a byte range of the transcript into "pos<TAB>field<TAB>value<TAB>cwd"
 # lines, one per evidence field that could hold a match. Only lines ending
 # in a newline are read, so a partly written last line is skipped. pos is
-# the line's 0-based index in the range. Whitespace control characters in a
-# value become spaces (they separate tokens either way); a value holding a
-# NUL is dropped, and a cwd holding a control character becomes empty, so
-# no field can break the line framing.
+# the line's 0-based index in the range. A Bash command loses its heredoc
+# bodies first. Whitespace control characters in a value become spaces
+# (they separate tokens either way); a value holding a NUL is dropped, and
+# a cwd holding a control character becomes empty, so no field can break
+# the line framing. Every step is linear in the value's length: jq's gsub,
+# and its join over many items, are quadratic, so neither is used here.
 IFS= read -r -d '' WORK_EVIDENCE_JQ <<'EOF' || true
 def evidence_field:
   {Read: "file_path", Edit: "file_path", Write: "file_path",
    NotebookEdit: "file_path", Grep: "path", Glob: "path",
    Bash: "command", Agent: "prompt", Skill: "args"}[.] // empty;
+def marked: test("openspec/changes/|docs/(superpowers/)?plans/|\\.superpowers/sdd/");
+# join in linear time: add appends to its accumulator in place.
+def joined($sep): [.[0] // empty, (.[1:][] | $sep + .)] | add // "";
+# The heredoc operators of one line, in order: <<WORD, <<-WORD, <<'WORD',
+# <<"WORD" and <<\WORD, with optional blanks after the <<, never the <<< of
+# a here-string.
+def heredoc_ops:
+  [match("(?<!<)<<(-?)[ \\t]*(?:'([^']+)'|\"([^\"]+)\"|\\\\?([^\\s|&;()<>'\"\\\\]+))"; "g")
+   | (.captures | map(.string)) as $c
+   | {dash: ($c[0] == "-"), word: ([$c[1], $c[2], $c[3]] | map(strings) | first)}];
+# Drops each heredoc body, from the line after its operator through its
+# closing line; the operator's own line stays. A line holding more than 16
+# "<<" opens a body that runs to the end, which bounds the operator queue.
+def strip_heredocs:
+  if contains("<<") | not then .
+  else
+    [foreach split("\n")[] as $line ({q: [], keep: true};
+        if (.q | length) == 0 then
+          .keep = true
+          | .q = if $line | contains("<<") | not then []
+                 elif ($line | indices("<<") | length) > 16 then [{dash: false, word: null}]
+                 else $line | heredoc_ops end
+        else
+          .keep = false
+          | if (if .q[0].dash then $line | sub("^\t+"; "") else $line end) == .q[0].word
+            then .q |= .[1:] else . end
+        end;
+        if .keep then $line else empty end)]
+    | joined("\n")
+  end;
+def spaced: reduce ("\t", "\n", "\u000b", "\f", "\r") as $c (.; split($c) | joined(" "));
 (split("\n") | .[:-1]) as $lines
 | range(0; $lines | length) as $pos
 | $lines[$pos] | fromjson?
@@ -38,9 +72,10 @@ def evidence_field:
 | objects | select(.type == "tool_use")
 | (.name | strings | evidence_field) as $field
 | .input | objects | .[$field] | strings
-| select(test("openspec/changes/|docs/(superpowers/)?plans/|\\.superpowers/sdd/"))
+| select(marked)
 | select(test("\\x00") | not)
-| [($pos | tostring), $field, gsub("[\\x09-\\x0d]"; " "), $cwd] | join("\t")
+| if $field == "command" then strip_heredocs | select(marked) else . end
+| [($pos | tostring), $field, spaced, $cwd] | join("\t")
 EOF
 readonly WORK_EVIDENCE_JQ
 

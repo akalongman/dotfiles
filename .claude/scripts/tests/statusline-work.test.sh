@@ -104,6 +104,50 @@ c="$(mktemp -p "$TMPROOT")"
 mk_record Bash command 'cd /other && cat /r/docs/plans/abs.md' /r description 'docs/plans/desc.md' > "$c"
 assert_eq "$(scan_file "$c")" $'0\t1\t/r/docs/plans/abs.md\t/r' "absolute path after cd is kept"
 
+# Heredoc bodies of a Bash command are not evidence; the operator's line and
+# the lines after the closing line are.
+scan_record() { # name field value: scans a one-record transcript, cwd /r
+    local f; f="$(mktemp -p "$TMPROOT")"
+    mk_record "$1" "$2" "$3" /r > "$f"
+    scan_file "$f"
+}
+assert_eq "$(scan_record Bash command $'cat > /r/notes.md <<\'EOF\'\nsee docs/plans/body-quoted.md\nEOF')" "" "a quoted heredoc body is not evidence"
+assert_eq "$(scan_record Bash command $'cat <<-"END"\n\tdocs/plans/body-dash.md\n\tEND\ncat docs/plans/after-dash.md')" $'0\t0\tdocs/plans/after-dash.md\t/r' "a <<- body ends at its tab-indented closing line"
+assert_eq "$(scan_record Bash command $'cat docs/plans/opline.md - <<EOF\nbody docs/plans/body-bare.md\nEOF\ncat docs/plans/after-bare.md')" $'0\t0\tdocs/plans/opline.md\t/r\n0\t0\tdocs/plans/after-bare.md\t/r' "the operator line and the lines after the closing line are evidence"
+assert_eq "$(scan_record Bash command $'cat << \\EOF\ndocs/plans/body-escaped.md\nEOF\ncat docs/plans/after-escaped.md')" $'0\t0\tdocs/plans/after-escaped.md\t/r' "an escaped delimiter after a blank is a heredoc"
+assert_eq "$(scan_record Bash command $'cat <<A <<B\na docs/plans/body-a.md\nA\nb docs/plans/body-b.md\nB\ncat docs/plans/after-two.md')" $'0\t0\tdocs/plans/after-two.md\t/r' "two heredocs on one line are read in order"
+assert_eq "$(scan_record Bash command $'cat <<EOF\ndocs/plans/never-closed.md')" "" "an unclosed heredoc runs to the end"
+assert_eq "$(scan_record Bash command $'grep -c x <<<"docs/plans/herestring.md"\ncat docs/plans/after-herestring.md')" $'0\t0\tdocs/plans/herestring.md\t/r\n0\t0\tdocs/plans/after-herestring.md\t/r' "a here-string is evidence and opens no body"
+assert_eq "$(scan_record Agent prompt $'cat <<EOF\ndocs/plans/agent-body.md\nEOF')" $'0\t0\tdocs/plans/agent-body.md\t/r' "only a Bash command loses its heredoc bodies"
+
+# Long values stay linear. Each case takes seconds under a quadratic step:
+# gsub or jq's join in the whitespace normalization, jq's join in the heredoc
+# strip, or an uncapped heredoc operator queue.
+long_record() { # file holding a command: one Bash record with it, cwd /r
+    jq -nc --rawfile v "$1" '{type: "assistant", cwd: "/r", message: {content: [
+        {type: "tool_use", name: "Bash", input: {command: $v}}]}}'
+}
+timed_scan() { # file: sets SCAN_OUT and SCAN_US (microseconds)
+    local start end
+    start=${EPOCHREALTIME//[!0-9]/}
+    SCAN_OUT="$(scan_file "$1")"
+    end=${EPOCHREALTIME//[!0-9]/}
+    SCAN_US=$((end - start))
+}
+v="$(mktemp -p "$TMPROOT")"; r="$(mktemp -p "$TMPROOT")"
+{ printf 'cat docs/plans/long.md\n'; seq 40000 | sed 's/^/echo filler line /'; } > "$v"
+long_record "$v" > "$r"; timed_scan "$r"
+assert_eq "$SCAN_OUT" $'0\t0\tdocs/plans/long.md\t/r' "a 40000-line command is scanned"
+assert_ok "a 40000-line command scans in under 1 s" test "$SCAN_US" -lt 1000000
+{ printf 'cat <<EOF\nbody docs/plans/body-long.md\nEOF\n'; seq 40000 | sed 's/^/echo filler line /'; printf 'cat docs/plans/after-long.md\n'; } > "$v"
+long_record "$v" > "$r"; timed_scan "$r"
+assert_eq "$SCAN_OUT" $'0\t0\tdocs/plans/after-long.md\t/r' "40000 lines after a heredoc are kept"
+assert_ok "40000 lines after a heredoc scan in under 1 s" test "$SCAN_US" -lt 1000000
+{ for _ in $(seq 32000); do printf '1<<3 '; done; printf '\n'; seq 32000 | sed 's/.*/3/'; printf 'cat docs/plans/after-ops.md\n'; } > "$v"
+long_record "$v" > "$r"; timed_scan "$r"
+assert_eq "$SCAN_OUT" "" "a line with more than 16 << opens a body that runs to the end"
+assert_ok "32000 heredoc operators on one line scan in under 1 s" test "$SCAN_US" -lt 1000000
+
 # The pattern covers the five forms and nothing else.
 forms='openspec/changes/a/ docs/superpowers/plans/b.md docs/plans/c.md .claude/docs/plans/d.md .superpowers/sdd/e/ docs/plans/f.txt openspec/changes/g'
 assert_eq "$(printf '%s\n' "$forms" | /bin/grep -oE "$WORK_PATTERN" | tr '\n' ' ')" 'openspec/changes/a/ docs/superpowers/plans/b.md docs/plans/c.md .claude/docs/plans/d.md .superpowers/sdd/e/ ' "WORK_PATTERN matches the five forms only"
