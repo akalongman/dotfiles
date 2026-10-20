@@ -33,7 +33,9 @@ import gi
 
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gio", "2.0")
-gi.require_version("Nautilus", "4.0")
+# No pin for Nautilus: nautilus-python loads the namespace (4.0 on
+# Nautilus 46, 4.1 on Nautilus 50) before any extension runs, and a
+# require_version for another version raises instead of selecting one.
 
 from gi.repository import Gdk, Gio, GLib, GObject, Nautilus  # noqa: E402
 
