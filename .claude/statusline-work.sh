@@ -278,6 +278,54 @@ work_resolve() {
     printf '%s\t%s\t%s\t%s\n' "$kind" "$name" "$open" "$ws"
 }
 
+# work_stage KIND OPEN WS
+# Prints the subject's stage, or nothing, and exits 0. With a workspace WS
+# the stage comes from WS/progress.md alone: its last line of the form
+# "Section|Task|Unit <id>: <status>" or "Final phase: <status>", where <id>
+# is letters, digits and dots, rendered as "Section 6.1 <status>" or "final
+# phase <status>". Lines are read up to their newline, so a partly written
+# last line is ignored. A carriage return ending the line is dropped; the
+# status is cut at its first " (" and capped at 40 characters, counted as
+# characters whatever the caller's locale; a status that still holds a
+# control character gives no stage. Without a workspace, a change's stage
+# is its ticked over total task boxes in OPEN outside fenced code blocks,
+# as "2/4", with no boxes giving none, and a plan has none. Only regular
+# files are opened, so a FIFO cannot block the status line.
+work_stage() {
+    # The cap counts characters, not bytes, whatever the caller's locale.
+    local LC_ALL=C.UTF-8
+    local kind="$1" open="$2" ws="$3" line last="" label status
+    local ticked=0 total=0 fenced=0
+    local marker='^((Section|Task|Unit) [A-Za-z0-9.]+|Final phase): '
+    local box='^[[:space:]]*- \[( |x|X)\]'
+    if [ -n "$ws" ]; then
+        [ -f "$ws/progress.md" ] || return 0
+        while IFS= read -r line; do
+            if [[ $line =~ $marker ]]; then last="$line"; fi
+        done 2>/dev/null < "$ws/progress.md"
+        [[ $last =~ $marker ]] || return 0
+        label="${BASH_REMATCH[1]}"
+        status="${last#"${BASH_REMATCH[0]}"}"
+        status="${status%$'\r'}"
+        status="${status%%' ('*}"
+        [[ $status != *[$'\001'-$'\037'$'\177']* ]] || return 0
+        if [ "$label" = "Final phase" ]; then label="final phase"; fi
+        printf '%s %s\n' "$label" "${status:0:40}"
+    elif [ "$kind" = change ] && [ -f "$open" ]; then
+        # The last line counts with or without its newline.
+        while IFS= read -r line || [ -n "$line" ]; do
+            if [[ $line == '```'* ]]; then
+                fenced=$((1 - fenced))
+            elif [ "$fenced" = 0 ] && [[ $line =~ $box ]]; then
+                total=$((total + 1))
+                if [ "${BASH_REMATCH[1]}" != ' ' ]; then ticked=$((ticked + 1)); fi
+            fi
+        done 2>/dev/null < "$open"
+        if [ "$total" -gt 0 ]; then printf '%s/%s\n' "$ticked" "$total"; fi
+    fi
+    return 0
+}
+
 # Entry point; a stub until the cache and the rendering exist.
 work_main() {
     return 0

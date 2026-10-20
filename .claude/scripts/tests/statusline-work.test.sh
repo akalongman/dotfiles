@@ -311,4 +311,81 @@ assert_fail "a file that is not .md is no subject" work_classify /r/docs/plans/x
 assert_fail "a bare .md has no name" work_classify /r/x/.md
 assert_fail "a relative path is not classified" work_classify docs/plans/x.md
 
+# Task 3: stage
+# A ledger is the progress.md of a fresh workspace directory, so the
+# workspace is the ledger's dirname.
+mk_ledger() { # line...: writes the lines to a new workspace's progress.md, prints its path
+    local d; d="$(mktemp -d -p "$TMPROOT")"
+    printf '%s\n' "$@" > "$d/progress.md"
+    printf '%s' "$d/progress.md"
+}
+L1="$(mk_ledger '# SDD ledger: plan openspec/changes/add-account-permission-scopes/tasks.md' \
+    'Run base: fc09252' 'Section 1: handed to controller' 'Section 1: complete (commit abc1234)' \
+    'Final phase: controller returned needs-ruling (tail pending while the detached test:parallel runs)' \
+    'Section 5: complete (ruling R3/R9; gates at 4d2b84f)' \
+    'Final phase: complete db66634 (review and gates at 4d2b84f)')"
+L2="$(mk_ledger 'Unit A: complete' 'Section 8h: paused' 'Section 6.1: handed to controller')"
+L3="$(mk_ledger '# SDD ledger: plan docs/plans/beta.md')"
+L4="$(mk_ledger 'Section 1: complete')"; printf 'Section 2: comp' >> "$L4"
+fence='```'
+T1="$(mktemp -p "$TMPROOT")"; T2="$(mktemp -p "$TMPROOT")"
+printf '%s\n' '- [x] 1.1 a' '  - [X] 1.2 b' '- [ ] 2.1 c' "${fence}bash" '- [ ] not counted' "$fence" '- [ ] 3.1 d' > "$T1"
+printf '%s\n' '## 1. Tasks' 'Nothing to tick.' > "$T2"
+# A plan carries task boxes too; without a workspace they give no stage.
+PL="$(mktemp -p "$TMPROOT")"; cp "$T1" "$PL"
+
+assert_eq "$(work_stage change /x "$(dirname "$L1")")" "final phase complete db66634" "last marker wins, annotation cut"
+assert_eq "$(work_stage plan /x "$(dirname "$L2")")" "Section 6.1 handed to controller" "dotted id"
+assert_eq "$(work_stage plan /x "$(dirname "$L3")")" "" "no marker lines, no stage"
+assert_eq "$(bash -c "source '$HELPER'; work_stage plan /x '$(dirname "$L3")'" 2>&1)" "" "no marker lines, no stage, outside set -u too"
+assert_eq "$(work_stage plan /x "$(dirname "$L4")")" "Section 1 complete" "partial last line ignored"
+assert_eq "$(work_stage change "$T1" "")" "2/4" "ticks over total, fenced block skipped"
+assert_eq "$(work_stage change "$T2" "")" "" "no boxes, no stage"
+assert_eq "$(work_stage plan "$PL" "")" "" "plan without workspace has no stage"
+
+L5="$(mk_ledger 'Section 4: complete' \
+    'Final phase: controller returned needs-ruling (tail pending while the detached test:parallel runs)')"
+assert_eq "$(work_stage plan /x "$(dirname "$L5")")" "final phase controller returned needs-ruling" "a needs-ruling final phase, annotation cut"
+
+# The 40-character cap applies to the status after the cut, and counts
+# characters whatever the caller's locale.
+L6="$(mk_ledger 'Task 2: 0123456789012345678901234567890123456789XYZ')"
+assert_eq "$(work_stage plan /x "$(dirname "$L6")")" "Task 2 0123456789012345678901234567890123456789" "status capped at 40 characters"
+L7="$(mk_ledger 'Task 2: 012345678901234567890123456789012345678 (a long annotation)')"
+assert_eq "$(work_stage plan /x "$(dirname "$L7")")" "Task 2 012345678901234567890123456789012345678" "the cap applies after the cut"
+printf -v z39 '%039d' 0
+L8="$(mk_ledger "Task 3: $z39${emdash}tail")"
+assert_eq "$(LC_ALL=C work_stage plan /x "$(dirname "$L8")")" "Task 3 $z39$emdash" "the cap counts characters, not bytes, under LC_ALL=C"
+
+# A carriage return ending a line is part of the line ending; any other
+# control character in the status gives no stage, and no earlier marker
+# stands in for it.
+q="$(mktemp -d -p "$TMPROOT")"; printf 'Section 1: complete\r\n' > "$q/progress.md"
+assert_eq "$(work_stage plan /x "$q")" "Section 1 complete" "a carriage return ending the line is dropped"
+L9="$(mk_ledger 'Section 1: complete' $'Section 2: comp\e[31mlete')"
+assert_eq "$(work_stage plan /x "$(dirname "$L9")")" "" "a status holding an escape gives no stage"
+L10="$(mk_ledger $'Section 3: a\tb')"
+assert_eq "$(work_stage plan /x "$(dirname "$L10")")" "" "a status holding a tab gives no stage"
+L11="$(mk_ledger $'Section 3: complete (x\ty)')"
+assert_eq "$(work_stage plan /x "$(dirname "$L11")")" "Section 3 complete" "a control character after the cut is not part of the status"
+
+# A workspace's stage comes from its ledger alone; a task list's last line
+# counts without its newline.
+assert_eq "$(work_stage change "$T1" "$(dirname "$L3")")" "" "a change with a workspace does not fall back to its task list"
+T3="$(mktemp -p "$TMPROOT")"; printf -- '- [x] 1.1 a\n- [ ] 1.2 b' > "$T3"
+assert_eq "$(work_stage change "$T3" "")" "1/2" "a task list's unterminated last line counts"
+
+# No stage is silent and exits 0; only regular files are read, so a FIFO
+# cannot block the status line.
+assert_eq "$(work_stage plan /x "$TMPROOT/no-such-ws" 2>&1)" "" "a missing ledger prints nothing"
+assert_ok "a missing ledger exits 0" work_stage plan /x "$TMPROOT/no-such-ws"
+assert_eq "$(work_stage change "$TMPROOT/no-such-tasks.md" "" 2>&1)" "" "a missing task list prints nothing"
+assert_ok "a missing task list exits 0" work_stage change "$TMPROOT/no-such-tasks.md" ""
+assert_ok "a plan without a workspace exits 0" work_stage plan "$PL" ""
+f="$(mktemp -d -p "$TMPROOT")"; mkfifo "$f/progress.md" "$f/tasks.md"
+timeout 5 bash -c "source '$HELPER'; work_stage plan /x '$f'" >/dev/null 2>&1
+assert_eq "$?" 0 "a FIFO ledger is not opened"
+timeout 5 bash -c "source '$HELPER'; work_stage change '$f/tasks.md' ''" >/dev/null 2>&1
+assert_eq "$?" 0 "a FIFO task list is not opened"
+
 finish
