@@ -121,6 +121,130 @@ work_scan_range() {
     return 0
 }
 
+# The first line of a workspace's progress.md that names its source: "# SDD
+# ledger", a separator of punctuation and spaces, then "plan <path>" or
+# "change <name> (<path>)", the keyword optionally followed by a colon. Real
+# ledgers separate with ": ", ", ", ". ", " - " or an em dash between spaces:
+# "# SDD ledger: plan docs/plans/x.md",
+# "# SDD ledger, change: add-groups (openspec/changes/add-groups/tasks.md)".
+readonly WORK_LEDGER_HEADER='^# SDD ledger[^[:alnum:]]+(plan|change):?[[:space:]]+(.*)$'
+
+# _work_allowed STRING...
+# Exits 0 when every STRING holds only letters, digits, /, ., _, -, ~ and
+# space, the characters a subject's name and path may carry.
+_work_allowed() {
+    local s
+    for s in "$@"; do
+        [[ $s != *[!A-Za-z0-9/._~\ -]* ]] || return 1
+    done
+}
+
+# work_classify ABSPATH
+# Prints "kind<TAB>name<TAB>open" for an absolute path. A path under
+# openspec/changes/<name>/, whatever file in it was named, is the change
+# <name>, opened at its tasks.md; a path under openspec/changes/archive/ is
+# no subject at all. Any other .md file is a plan named by its basename
+# without .md and opened as is. Anything else exits 1. Purely lexical: no
+# symlink is resolved and no existence is checked.
+work_classify() {
+    local path="$1" name
+    [[ $path == /* ]] || return 1
+    case "$path" in
+        */openspec/changes/archive|*/openspec/changes/archive/*) return 1 ;;
+        */openspec/changes/*)
+            name="${path#*/openspec/changes/}"
+            name="${name%%/*}"
+            [[ -n $name && $name != . && $name != .. ]] || return 1
+            printf 'change\t%s\t%s\n' "$name" "${path%%/openspec/changes/*}/openspec/changes/$name/tasks.md"
+            return 0
+            ;;
+    esac
+    name="${path##*/}"
+    [[ $name == ?*.md ]] || return 1
+    printf 'plan\t%s\t%s\n' "${name%.md}" "$path"
+}
+
+# work_ws_source WSDIR
+# Prints the absolute path of the source an apply-run workspace names, or
+# exits 1. WSDIR is the workspace directory as named, an absolute path
+# ending in /.superpowers/sdd/<name>, before any symlink is resolved, so the
+# workspace root is the directory that holds .superpowers in that path. The
+# plan-path marker comes first; when it is missing or blank, the first line
+# of progress.md, when it matches WORK_LEDGER_HEADER: the path is the text
+# after the keyword, inside the parentheses for a change, up to the end of
+# the line or a ")". A relative source resolves against the workspace root,
+# one starting with ~/ against HOME. Each read stops at 4096 characters.
+work_ws_source() {
+    local ws="${1%/}" root name src="" line="" rest
+    [[ $ws =~ ^(.*)/\.superpowers/sdd/([^/]+)$ ]] || return 1
+    root="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
+    [[ $ws == /* && $name != . && $name != .. ]] || return 1
+    if [ -f "$ws/plan-path" ]; then
+        IFS= read -r -n 4096 src 2>/dev/null < "$ws/plan-path" || true
+    fi
+    if [[ $src != *[![:space:]]* ]] && [ -f "$ws/progress.md" ]; then
+        src=""
+        IFS= read -r -n 4096 line 2>/dev/null < "$ws/progress.md" || true
+        if [[ $line =~ $WORK_LEDGER_HEADER ]]; then
+            rest="${BASH_REMATCH[2]}"
+            if [ "${BASH_REMATCH[1]}" = change ]; then
+                [[ $rest == *' ('* ]] || return 1
+                rest="${rest#*' ('}"
+            fi
+            src="${rest%%)*}"
+        fi
+    fi
+    src="${src#"${src%%[![:space:]]*}"}"
+    src="${src%"${src##*[![:space:]]}"}"
+    [ -n "$src" ] || return 1
+    case "$src" in
+        /*) ;;
+        \~/*) [[ ${HOME:-} == /* ]] || return 1; src="$HOME/${src#\~/}" ;;
+        *) src="$root/$src" ;;
+    esac
+    printf '%s\n' "$src"
+}
+
+# work_resolve RAW ABS CWD
+# Resolves one occurrence from work_scan_range and prints
+# "kind<TAB>name<TAB>open<TAB>ws", or prints nothing and exits 1. With ABS 1,
+# RAW starts with / or with ~/, which resolves against HOME; with ABS 0, RAW
+# joins CWD, which must be absolute. A workspace token, one ending in
+# .superpowers/sdd/<name>/, stands for the source work_ws_source reads, and
+# ws is the workspace's absolute, symlink-resolved directory; for any other
+# token ws is empty. open is symlink-resolved up to the file (a change's
+# tasks.md is opened in its resolved directory), so two names of one file
+# give one subject. Exits 1 for a path under openspec/changes/archive/ as
+# named or as resolved, a workspace that names no source, a path, workspace
+# or name with a character outside the allowed set, or an open file that
+# does not exist. Name and open are cut from the checked resolved path, so
+# they hold only allowed characters too.
+work_resolve() {
+    local raw="$1" abs="$2" cwd="$3" path ws="" real row kind name open
+    case "$abs:$raw" in
+        1:/*) path="$raw" ;;
+        1:\~/*) [[ ${HOME:-} == /* ]] || return 1; path="$HOME/${raw#\~/}" ;;
+        0:/*|0:\~/*) return 1 ;;
+        0:?*) [[ $cwd == /* ]] || return 1; path="$cwd/$raw" ;;
+        *) return 1 ;;
+    esac
+    if [[ $path =~ /\.superpowers/sdd/[^/]+/?$ ]]; then
+        _work_allowed "$path" || return 1
+        ws="$(realpath -m -- "$path" 2>/dev/null)" || return 1
+        path="$(work_ws_source "$path")" || return 1
+    fi
+    case "$path" in
+        */openspec/changes/archive|*/openspec/changes/archive/*) return 1 ;;
+    esac
+    _work_allowed "$path" "$ws" || return 1
+    real="$(realpath -m -- "$path" 2>/dev/null)" || return 1
+    _work_allowed "$real" || return 1
+    row="$(work_classify "$real")" || return 1
+    IFS=$'\t' read -r kind name open <<<"$row"
+    [ -e "$open" ] || return 1
+    printf '%s\t%s\t%s\t%s\n' "$kind" "$name" "$open" "$ws"
+}
+
 # Entry point; a stub until the cache and the rendering exist.
 work_main() {
     return 0

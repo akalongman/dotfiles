@@ -152,4 +152,125 @@ assert_ok "32000 heredoc operators on one line scan in under 1 s" test "$SCAN_US
 forms='openspec/changes/a/ docs/superpowers/plans/b.md docs/plans/c.md .claude/docs/plans/d.md .superpowers/sdd/e/ docs/plans/f.txt openspec/changes/g'
 assert_eq "$(printf '%s\n' "$forms" | /bin/grep -oE "$WORK_PATTERN" | tr '\n' ' ')" 'openspec/changes/a/ docs/superpowers/plans/b.md docs/plans/c.md .claude/docs/plans/d.md .superpowers/sdd/e/ ' "WORK_PATTERN matches the five forms only"
 
+# Task 2: resolution and classification
+# Fixture root, reused by later tasks: a change and an archived one, two
+# plans, a plan whose name breaks the character set, workspaces in each
+# header grammar, an empty workspace, and a symlink onto docs/plans.
+R="$(mktemp -d -p "$TMPROOT")"
+mkdir -p "$R/openspec/changes/add-groups" "$R/openspec/changes/archive/old-one" \
+    "$R/docs/superpowers/plans" "$R/docs/plans" "$R/.superpowers/sdd/tasks"
+: > "$R/openspec/changes/add-groups/tasks.md"
+: > "$R/openspec/changes/archive/old-one/tasks.md"
+: > "$R/docs/superpowers/plans/2026-01-01-alpha.md"
+: > "$R/docs/plans/beta.md"
+: > "$R/docs/plans/bad\$name.md"
+: > "$R/docs/plans/with space.md"
+ln -s docs/plans "$R/link"
+mk_ws() { # name file line: writes the line as .superpowers/sdd/<name>/<file> under R
+    mkdir -p "$R/.superpowers/sdd/$1"
+    printf '%s\n' "$3" > "$R/.superpowers/sdd/$1/$2"
+}
+emdash=$'\xe2\x80\x94' # U+2014, the separator of the older header grammar
+mk_ws add-groups progress.md '# SDD ledger: plan openspec/changes/add-groups/tasks.md'
+mk_ws 2026-01-01-alpha plan-path 'docs/superpowers/plans/2026-01-01-alpha.md'
+mk_ws legacy progress.md "# SDD ledger $emdash plan: docs/plans/beta.md"
+mk_ws changeform progress.md '# SDD ledger: change add-groups (openspec/changes/add-groups/tasks.md)'
+mk_ws gone progress.md '# SDD ledger: plan docs/plans/missing.md'
+mk_ws archived progress.md '# SDD ledger: plan openspec/changes/archive/old-one/tasks.md'
+
+assert_eq "$(work_resolve "openspec/changes/add-groups/" 0 "$R")" $'change\tadd-groups\t'"$R"$'/openspec/changes/add-groups/tasks.md\t' "relative change resolves against cwd"
+assert_eq "$(work_resolve "$R/openspec/changes/add-groups/tasks.md" 1 "")" $'change\tadd-groups\t'"$R"$'/openspec/changes/add-groups/tasks.md\t' "tasks.md inside a change is the change, not a plan"
+assert_fail "archive is rejected" work_resolve "openspec/changes/archive/old-one/" 0 "$R"
+assert_eq "$(work_resolve "docs/plans/beta.md" 0 "$R")" $'plan\tbeta\t'"$R"$'/docs/plans/beta.md\t' "plan by basename"
+assert_eq "$(work_resolve "$R/link/beta.md" 1 "")" "$(work_resolve "docs/plans/beta.md" 0 "$R")" "symlinked and real path are one subject"
+assert_eq "$(work_resolve ".superpowers/sdd/add-groups/" 0 "$R")" $'change\tadd-groups\t'"$R"$'/openspec/changes/add-groups/tasks.md\t'"$R/.superpowers/sdd/add-groups" "workspace via current ledger header"
+assert_eq "$(work_resolve ".superpowers/sdd/2026-01-01-alpha/" 0 "$R" | cut -f1,2)" $'plan\t2026-01-01-alpha' "workspace via plan-path marker"
+assert_eq "$(work_resolve ".superpowers/sdd/legacy/" 0 "$R" | cut -f1,2)" $'plan\tbeta' "older header grammar"
+assert_eq "$(work_resolve ".superpowers/sdd/changeform/" 0 "$R" | cut -f1,2)" $'change\tadd-groups' "change header grammar"
+assert_fail "workspace with neither marker nor header is skipped" work_resolve ".superpowers/sdd/tasks/" 0 "$R"
+assert_fail "workspace whose source is missing is skipped" work_resolve ".superpowers/sdd/gone/" 0 "$R"
+assert_fail "missing plan file is not a subject" work_resolve "docs/plans/nope.md" 0 "$R"
+assert_eq "$(work_resolve "$R/link/beta.md" 1 "" | cut -f3)" "$R/docs/plans/beta.md" "a symlinked path opens the real file"
+assert_fail "a workspace naming an archived change is skipped" work_resolve ".superpowers/sdd/archived/" 0 "$R"
+assert_file "$R/docs/plans/bad\$name.md" "the plan with a disallowed character exists"
+assert_fail "a plan name outside the allowed set is dropped" work_resolve "docs/plans/bad\$name.md" 0 "$R"
+
+# The base directory: CWD for a relative raw, HOME for ~/.
+assert_fail "a relative raw with no cwd fails" work_resolve "docs/plans/beta.md" 0 ""
+in_root() { (cd / && "$@"); }
+assert_fail "a relative cwd fails even where it would resolve" in_root work_resolve "docs/plans/beta.md" 0 "${R#/}"
+assert_eq "$(HOME="$R" work_resolve \~/docs/plans/beta.md 1 "")" $'plan\tbeta\t'"$R"$'/docs/plans/beta.md\t' "a home-relative raw resolves against HOME"
+assert_fail "an absolute raw flagged relative fails" work_resolve "$R/docs/plans/beta.md" 0 /
+
+# Punctuation-prefixed raws fail the character check even when the prefixed
+# path exists.
+P="$(mktemp -d -p "$TMPROOT")"
+for pre in '(' '--x=' "\$HOME/" '[a]('; do
+    mkdir -p "$P/${pre}docs/plans"; : > "$P/${pre}docs/plans/p.md"
+    assert_fail "a raw prefixed with $pre is dropped" work_resolve "${pre}docs/plans/p.md" 0 "$P"
+done
+# Both the path as named and the path as resolved are checked, and the
+# workspace directory too; the plain forms of each case resolve.
+mkdir -p "$P/docs/plans" "$P/odd(ws)" "$P/.superpowers/sdd/plain"
+: > "$P/docs/plans/p.md"; : > "$P/odd(1).md"
+ln -s "$P/odd(1).md" "$P/docs/plans/link.md"
+printf '# SDD ledger: plan docs/plans/p.md\n' | tee "$P/.superpowers/sdd/plain/progress.md" > "$P/odd(ws)/progress.md"
+ln -s "$P/odd(ws)" "$P/.superpowers/sdd/wslink"
+assert_eq "$(work_resolve "docs/plans/p.md" 0 "$P" | cut -f1,2)" $'plan\tp' "the plain plan resolves"
+assert_eq "$(work_resolve ".superpowers/sdd/plain/" 0 "$P" | cut -f1,2)" $'plan\tp' "the plain workspace resolves"
+assert_fail "a named segment that .. removes still drops the raw" work_resolve "x(/../docs/plans/p.md" 0 "$P"
+mkdir -p "$P/.superpowers/sdd/absolute" "$P/x("
+printf '# SDD ledger: plan %s/docs/plans/p.md\n' "$P" > "$P/.superpowers/sdd/absolute/progress.md"
+assert_eq "$(work_resolve ".superpowers/sdd/absolute/" 0 "$P" | cut -f1,2)" $'plan\tp' "a workspace naming an absolute source resolves"
+assert_fail "a named segment that .. removes still drops a workspace" work_resolve "x(/../.superpowers/sdd/absolute/" 0 "$P"
+assert_fail "a symlink onto a disallowed name is dropped" work_resolve "docs/plans/link.md" 0 "$P"
+assert_fail "a workspace that resolves to a disallowed name is dropped" work_resolve ".superpowers/sdd/wslink/" 0 "$P"
+
+# The archive rule holds for the path as named and as resolved. The
+# archive's own tasks.md exists here, so a missing archive rule would yield
+# a change named archive instead of failing the existence check.
+A="$(mktemp -d -p "$TMPROOT")"
+mkdir -p "$A/openspec/changes/archive/x" "$A/named/openspec/changes"
+: > "$A/openspec/changes/archive/tasks.md"
+: > "$A/openspec/changes/archive/x/tasks.md"
+ln -s "$A/openspec/changes/archive/x" "$A/openspec/changes/y"
+ln -s "$R/openspec/changes/add-groups" "$A/named/openspec/changes/archive"
+assert_fail "an archived change is skipped" work_resolve "$A/openspec/changes/archive/x/" 1 ""
+assert_fail "a change that resolves into the archive is skipped" work_resolve "$A/openspec/changes/y/" 1 ""
+assert_fail "a raw naming the archive is skipped where it resolves elsewhere" work_resolve "$A/named/openspec/changes/archive/" 1 ""
+
+# Header forms found in real ledgers; only the first line is read.
+i=0
+for header in '# SDD ledger, plan: docs/plans/beta.md' '# SDD ledger. plan: docs/plans/beta.md' \
+        '# SDD ledger - plan: docs/plans/beta.md' '# SDD ledger: plan: docs/plans/beta.md'; do
+    i=$((i + 1)); mk_ws "variant-$i" progress.md "$header"
+    assert_eq "$(work_resolve ".superpowers/sdd/variant-$i/" 0 "$R" | cut -f1,2)" $'plan\tbeta' "header form: $header"
+done
+mk_ws variant-change progress.md '# SDD ledger, change: add-groups (openspec/changes/add-groups/tasks.md)'
+assert_eq "$(work_resolve ".superpowers/sdd/variant-change/" 0 "$R" | cut -f1,2)" $'change\tadd-groups' "change header with a colon"
+mk_ws other-first progress.md "# Progress ledger $emdash Ansible folder reorganization"
+printf '# SDD ledger: plan docs/plans/beta.md\n' >> "$R/.superpowers/sdd/other-first/progress.md"
+assert_fail "a header on the second line is not read" work_resolve ".superpowers/sdd/other-first/" 0 "$R"
+mk_ws both plan-path 'docs/superpowers/plans/2026-01-01-alpha.md'
+printf '# SDD ledger: plan docs/plans/beta.md\n' > "$R/.superpowers/sdd/both/progress.md"
+assert_eq "$(work_resolve ".superpowers/sdd/both/" 0 "$R" | cut -f2)" "2026-01-01-alpha" "the marker wins over the header"
+mk_ws blank-marker plan-path ''
+printf '# SDD ledger: plan docs/plans/beta.md\n' > "$R/.superpowers/sdd/blank-marker/progress.md"
+assert_eq "$(work_resolve ".superpowers/sdd/blank-marker/" 0 "$R" | cut -f2)" "beta" "an empty marker falls back to the header"
+mk_ws spaced progress.md '# SDD ledger: plan docs/plans/with space.md'
+assert_eq "$(work_resolve ".superpowers/sdd/spaced/" 0 "$R" | cut -f1,2)" $'plan\twith space' "a source path with a space survives"
+mk_ws home progress.md '# SDD ledger: plan ~/docs/plans/beta.md'
+assert_eq "$(HOME="$R" work_resolve ".superpowers/sdd/home/" 0 "$R" | cut -f1,2)" $'plan\tbeta' "a home-relative source resolves against HOME"
+
+# The workspace source and the classification on their own.
+assert_eq "$(work_ws_source "$R/.superpowers/sdd/2026-01-01-alpha")" "$R/docs/superpowers/plans/2026-01-01-alpha.md" "a relative source joins the workspace root"
+assert_fail "a directory outside .superpowers/sdd is no workspace" work_ws_source "$R/docs/plans"
+assert_eq "$(work_classify /r/openspec/changes/foo/design.md)" $'change\tfoo\t/r/openspec/changes/foo/tasks.md' "any file in a change is the change"
+assert_eq "$(work_classify /r/openspec/changes/foo)" $'change\tfoo\t/r/openspec/changes/foo/tasks.md' "a change directory without its slash"
+assert_eq "$(work_classify /r/docs/plans/x.md)" $'plan\tx\t/r/docs/plans/x.md' "a .md file is a plan"
+assert_fail "a file in an archived change is not a plan" work_classify /r/openspec/changes/archive/old/notes.md
+assert_fail "a file that is not .md is no subject" work_classify /r/docs/plans/x.txt
+assert_fail "a bare .md has no name" work_classify /r/x/.md
+assert_fail "a relative path is not classified" work_classify docs/plans/x.md
+
 finish
