@@ -126,15 +126,13 @@ __pycache__/
 .gemini/*
 !.gemini/settings.json
 
-# ~/.local tree: only user-level OpenSpec schemas are tracked. Everything
-# else under .local is app state; yadm's own bare repo lives at
-# .local/share/yadm and must never be tracked.
+# ~/.local tree: only the gtksourceview-5 styles, the nautilus-python
+# extension and the Ptyxis palettes are tracked. Everything else under
+# .local is app state; yadm's own bare repo lives at .local/share/yadm and
+# must never be tracked.
 .local/*
 !.local/share
 .local/share/*
-!.local/share/openspec
-.local/share/openspec/*
-!.local/share/openspec/schemas
 !.local/share/gtksourceview-5
 .local/share/gtksourceview-5/*
 !.local/share/gtksourceview-5/styles
