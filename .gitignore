@@ -95,6 +95,7 @@ __pycache__/
 !.claude/mcp.json
 !.claude/statusline.sh
 !.claude/statusline-usage.sh
+!.claude/statusline-work.sh
 !.claude/rules
 .claude/rules/environment.md
 .claude/rules/environment.private.md
