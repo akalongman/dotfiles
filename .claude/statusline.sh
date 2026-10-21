@@ -307,10 +307,10 @@ if [ "$IN_REPO" = 1 ]; then
     echo -e "$ROW2"
 fi
 
-# The work row, "📋 <name>[ · <stage>]", follows the git row inside a
+# The work row, "📝 <name>[ · <stage>]", follows the git row inside a
 # repository and row 1 elsewhere, and exists only when the session has a
 # subject. Its name is the row's only name and its only link. Its fixed
-# cells are the icon, 📋 (2), and while the stage is shown " · <stage>";
+# cells are the icon, 📝 (2), and while the stage is shown " · <stage>";
 # the space between the icon and the name is left to fit_names, which
 # charges it to every name, as on the other rows. The stage stays only
 # while the name fits whole beside it; otherwise the stage is dropped first,
@@ -327,7 +327,7 @@ if [ -n "$WORK_NAME" ]; then
     url_encode_path "$WORK_PATH"
     WORK_URI="file://$REPLY"
     shorten "$WORK_NAME" "$NAME_CAP"
-    printf -v WORK_ROW '📋 \033]8;;%s\a\033[4m%s\033[24m\033]8;;\a' "$WORK_URI" "$REPLY"
+    printf -v WORK_ROW '📝 \033]8;;%s\a\033[4m%s\033[24m\033]8;;\a' "$WORK_URI" "$REPLY"
     if [ -n "$WORK_STAGE" ]; then printf -v WORK_ROW '%s · %s' "$WORK_ROW" "$WORK_STAGE"; fi
     printf '%s\n' "$WORK_ROW"
 fi

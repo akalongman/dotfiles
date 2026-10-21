@@ -606,7 +606,7 @@ payload() { # current_dir session_id transcript
 # link target is the path itself.
 tasks="$R/openspec/changes/add-groups/tasks.md"
 work_link() { # label [path]: the row's icon and its link to path, by default the fixture change
-    printf '📋 \e]8;;file://%s\a\e[4m%s\e[24m\e]8;;\a' "${2:-$tasks}" "$1"
+    printf '📝 \e]8;;file://%s\a\e[4m%s\e[24m\e]8;;\a' "${2:-$tasks}" "$1"
 }
 
 git init -q -b main "$R"
@@ -636,7 +636,7 @@ work_rows() {
 work_rows "in a repository" "$HW" "$R" 200 e2e1 "$et"
 assert_eq "$WORK_ROW" "$link · 2/4" "the work row is the change's file link labelled with its name, its stage after it"
 
-# The work row's fixed cells are 📋 (2) and " · 2/4" (6), 8 in all, and
+# The work row's fixed cells are 📝 (2) and " · 2/4" (6), 8 in all, and
 # fit_names charges the name one more cell for the space before it, so 23
 # columns leave 23 - 4 (LINE_RESERVE) - 8 - 1 = 10 cells, all of
 # "add-groups": the narrowest width where the name and the stage fit whole.
@@ -673,7 +673,7 @@ stub_rows() { # status line...: the rows rendered with a stub as the helper
     statusline "$(mk_home "$(mk_stub "$@")")" 200 "$(payload "$R" e2e1 "$et")"
 }
 none="$(statusline "$H0" 200 "$(payload "$R" e2e1 "$et")")"
-assert_eq "$(printf '%s\n' "$none" | /bin/grep -c '📋')" "0" "no helper, no work row"
+assert_eq "$(printf '%s\n' "$none" | /bin/grep -c '📝')" "0" "no helper, no work row"
 good=$'change\tadd-groups\t'"$tasks"$'\t2/4'
 assert_eq "$(stub_rows 0 "$good")" "$(statusline "$HW" 200 "$(payload "$R" e2e1 "$et")")" "a stub's well-formed line renders as the helper's"
 assert_eq "$(stub_rows 0 garbage)" "$none" "a garbage helper line renders as no helper"
