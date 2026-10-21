@@ -28,7 +28,7 @@
   "icon_theme": {
     "mode": "system",
     "light": "Zed (Default)",
-    "dark": "Zed (Default)"
+    "dark": "Catppuccin Latte"
   },
   "edit_predictions": {
     // No inline AI completions. "copilot" spawned one copilot-language-server
@@ -186,7 +186,34 @@
     "dockerfile": true,
     "env": true,
     // typos-lsp spell checker (code-aware, low false positives)
-    "typos": true
+    "typos": true,
+    // Themes under evaluation (2026-10-19); prune once one is chosen
+    "tokyo-night": true,
+    "catppuccin": true,
+    "jetbrains-themes": true,
+    "kanagawa-themes": true,
+    "everforest": true,
+    "sequoia": true,
+    "vercel-theme": true,
+    // Icon themes under evaluation
+    "catppuccin-icons": true,
+    "material-icon-theme": true,
+    "jetbrains-new-ui-icons": true,
+    "vscode-icons": true,
+    // Syntax-only extensions (no language server)
+    "csv": true,
+    "ini": true,
+    "make": true,
+    "git-firefly": true,
+    // Language extension whose server runs: terraform-ls (iac repos)
+    "terraform": true,
+    // Highlighting only; their servers are disabled under "languages".
+    // Ruby and PowerShell: no projects, the files are Gemfiles and scripts.
+    // Java: jdtls is a JVM of 500 MB+ per window, not worth it for one repo.
+    // Markdown highlighting and preview are built in, so no extension.
+    "ruby": true,
+    "powershell": true,
+    "java": true
   },
 
   // Zed classifies .env as Shell Script, so bash-language-server runs
@@ -253,6 +280,39 @@
     },
     "Dart": {
       "format_on_save": "on"
+    },
+    // Highlighting only. Zed's default would start solargraph (a Ruby gem
+    // that is not installed) on every Gemfile and Vagrantfile.
+    "Ruby": {
+      "enable_language_server": false
+    },
+    // Highlighting only. powershell-es needs pwsh and is .NET-hosted.
+    "PowerShell": {
+      "enable_language_server": false
+    },
+    // Highlighting only; see auto_install_extensions. Gradle files are
+    // their own languages served by gradle-language-server.
+    "Java": {
+      "enable_language_server": false
+    },
+    "Gradle": {
+      "enable_language_server": false
+    },
+    "Gradle KTS": {
+      "enable_language_server": false
+    },
+    // The dockerfile extension registers two servers for Dockerfile and
+    // neither is a default, so both start. Keep Docker's official one
+    // (Dockerfile, Compose and Bake); drop the older Node one.
+    "Dockerfile": {
+      "language_servers": ["docker-language-server", "!dockerfile-language-server", "..."]
+    },
+    // The docker-compose extension (uninstalled 2026-10-19) attached its
+    // server to the YAML language, so it spawned on every YAML file;
+    // compose files are the "Docker Compose" language served above.
+    // Kept as a guard in case it is reinstalled.
+    "YAML": {
+      "language_servers": ["!docker-compose", "..."]
     }
   },
 
