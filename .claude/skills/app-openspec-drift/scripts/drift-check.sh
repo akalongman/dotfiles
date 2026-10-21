@@ -392,58 +392,93 @@ fleet_mode() {
 # extract_field reads a top-level scalar (name, version, description,
 # apply.tracks) or list (apply.requires). extract_artifact_field reads
 # description or instruction for a given artifacts[].id. Both prefer yq,
-# falling back to python3 + PyYAML. Output is verbatim.
+# falling back to python3 + PyYAML. Output is verbatim. yaml_check runs on
+# both schemas before any reader does and says why a file does not load;
+# after it, a key or artifact a schema lacks reads as nothing and no reader
+# fails or prints a traceback, so the report always ends at exit 0.
 
 have_yq() { command -v yq >/dev/null 2>&1; }
 have_python_yaml() { python3 -c 'import yaml' >/dev/null 2>&1; }
 
+# Status 0 when <file> loads as YAML (with python3, as a mapping); else
+# status 1 and the reason on one line.
+yaml_check() { # file
+    if have_yq; then
+        if yq -r '.' "$1" >/dev/null 2>"$TMPDIR_DRIFT/yq.err"; then
+            return 0
+        fi
+        head -n 1 -- "$TMPDIR_DRIFT/yq.err"
+        return 1
+    fi
+    python3 -c "
+import sys, yaml
+try:
+    data = yaml.safe_load(open(sys.argv[1]))
+except yaml.MarkedYAMLError as e:
+    mark = e.problem_mark or e.context_mark
+    problem = (e.problem or e.context or 'not valid YAML').splitlines()[0]
+    print('line %d: %s' % (mark.line + 1, problem) if mark else problem)
+    sys.exit(1)
+except Exception as e:
+    print((str(e).splitlines() or [type(e).__name__])[0])
+    sys.exit(1)
+if not isinstance(data, dict):
+    print('not a mapping')
+    sys.exit(1)
+" "$1" 2>/dev/null
+}
+
 extract_field() {
     local file="$1" path="$2"
     if have_yq; then
-        yq -r ".$path" "$file"
+        yq -r ".$path" "$file" 2>/dev/null || true
     else
         python3 -c "
 import sys, yaml
 data = yaml.safe_load(open(sys.argv[1]))
-path = sys.argv[2].split('.')
-for key in path:
+for key in sys.argv[2].split('.'):
+    if not isinstance(data, dict) or key not in data:
+        sys.exit(0)
     data = data[key]
 if isinstance(data, list):
     print('\n'.join(map(str, data)))
 else:
     print(data)
-" "$file" "$path"
+" "$file" "$path" 2>/dev/null || true
     fi
 }
 
 extract_artifact_field() {
     local file="$1" artifact_id="$2" field="$3"
     if have_yq; then
-        yq -r ".artifacts[] | select(.id == \"$artifact_id\") | .$field" "$file"
+        yq -r ".artifacts[] | select(.id == \"$artifact_id\") | .$field" "$file" 2>/dev/null || true
     else
         python3 -c "
 import sys, yaml
 data = yaml.safe_load(open(sys.argv[1]))
 aid, field = sys.argv[2], sys.argv[3]
-for artifact in data.get('artifacts', []):
-    if artifact.get('id') == aid:
+artifacts = data.get('artifacts') if isinstance(data, dict) else None
+for artifact in artifacts if isinstance(artifacts, list) else []:
+    if isinstance(artifact, dict) and artifact.get('id') == aid:
         print(artifact.get(field, ''))
         break
-" "$file" "$artifact_id" "$field"
+" "$file" "$artifact_id" "$field" 2>/dev/null || true
     fi
 }
 
 list_artifact_ids() {
     local file="$1"
     if have_yq; then
-        yq -r '.artifacts[].id' "$file"
+        yq -r '.artifacts[].id' "$file" 2>/dev/null || true
     else
         python3 -c "
 import sys, yaml
 data = yaml.safe_load(open(sys.argv[1]))
-for a in data.get('artifacts', []):
-    print(a.get('id'))
-" "$file"
+artifacts = data.get('artifacts') if isinstance(data, dict) else None
+for a in artifacts if isinstance(artifacts, list) else []:
+    if isinstance(a, dict):
+        print(a.get('id'))
+" "$file" 2>/dev/null || true
     fi
 }
 
@@ -591,7 +626,7 @@ classify_templates() {
 # --- Render report ---
 
 upstream_mode() {
-    local candidate npm_root row label status notes UV CV aid fld
+    local candidate npm_root reason row label status notes UV CV aid fld
     local any_diverged=false
 
     if [ -z "$CANON_HEAD" ]; then
@@ -630,9 +665,6 @@ EOF
         return 0
     fi
 
-    echo "upstream schema: $UPSTREAM_SCHEMA"
-    echo "canonical schema: $CUSTOM_SCHEMA"
-
     if ! have_yq && ! have_python_yaml; then
         cat <<EOF
 Drift check requires yq or python3 + PyYAML. Install one of:
@@ -641,6 +673,20 @@ Drift check requires yq or python3 + PyYAML. Install one of:
 EOF
         return 0
     fi
+
+    # A half-edited schema.yaml in the canonical's working tree is the
+    # likely case: one line naming the file, never a traceback.
+    if ! reason="$(yaml_check "$CUSTOM_SCHEMA")"; then
+        echo "the canonical schema cannot be read at $CUSTOM_SCHEMA${reason:+ ($reason)}"
+        return 0
+    fi
+    if ! reason="$(yaml_check "$UPSTREAM_SCHEMA")"; then
+        echo "the upstream schema cannot be read at $UPSTREAM_SCHEMA${reason:+ ($reason)}"
+        return 0
+    fi
+
+    echo "upstream schema: $UPSTREAM_SCHEMA"
+    echo "canonical schema: $CUSTOM_SCHEMA"
 
     classify_top_level
     classify_artifacts

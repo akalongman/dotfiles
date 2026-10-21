@@ -256,6 +256,15 @@ assert_contains "$out" "$S/schema.yaml" "the advice names the canonical schema"
 assert_contains "$out" "openspec-fleet schema-sync" "the advice says how to vendor"
 assert_eq "$(printf '%s\n' "$out" | grep -c 'a verbatim copy is correct')" "0" "the verbatim-copy claim is gone"
 
+# A canonical schema.yaml that does not parse (a half-edited working tree in
+# a clone of its own, so no other case sees it) ends the report with one
+# line naming it, exit 0, and no traceback.
+git clone -q "$ROOT/canon" "$ROOT/badcanon"
+printf 'name: spec-driven-longish\nversion: [1\n' > "$ROOT/badcanon/schemas/spec-driven-longish/schema.yaml"
+out="$(OPENSPEC_CANONICAL_DIR=$ROOT/badcanon/schemas/spec-driven-longish bash "$DC" --upstream 2>&1)"; rc=$?
+assert_eq "$rc" "0" "exit 0 when the canonical schema does not parse"
+assert_eq "$(printf '%s\n' "$out" | sed 's/ (.*//')" "the canonical schema cannot be read at $ROOT/badcanon/schemas/spec-driven-longish/schema.yaml" "one line and no traceback when the canonical schema does not parse"
+
 # --- Usage and exit status (K5) ---
 
 for args in "--bogus" "--fleet --upstream" "--fleet $SYNC" "--upstream $SYNC" "$SYNC $MOD" "-h" "--help"; do
