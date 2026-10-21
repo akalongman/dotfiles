@@ -62,5 +62,5 @@ outside the test's reach and the test is green on buggy code.
 This also decides commit order: a red-then-green sequence needs the
 reproduction against unchanged code first, never a behaviour-preserving
 extraction that changes the tested constructor between red and green
-(2026-09-12, sc-843: a probe-level test that chose its own target could never
+(2026-09-12, a probe-level test that chose its own target could never
 fail).

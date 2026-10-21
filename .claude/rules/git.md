@@ -93,7 +93,7 @@ branch, branch first" behavior.
   post-merge pipeline to its end and report its result; the merge is not done
   until that pipeline, including any deploy job, is green, and a green MR
   pipeline is not evidence for it. Investigate a failure there before
-  reporting the work complete (2026-09-28, sc-924: the dev pipeline failed on
+  reporting the work complete (2026-09-28, the dev pipeline failed on
   a flaky test after I had reported the merge done).
 - `gh run list --commit` matches only a full 40-character SHA; a short one
   returns an empty list, not an error. Resolve it with `git rev-parse` first,

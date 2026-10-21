@@ -16,8 +16,8 @@ locks (MyISAM) a slow `SELECT` holds a read lock for its whole run, every write
 queues behind it, and every later read queues behind those writes, so one
 careless statement stalls the application.
 
-Worked example (2026-10-05): `SELECT COUNT(*) FROM studzefinan` on a legacy
-MariaDB 5.5 looked like a one-table count. `studzefinan` was a view over a
+Worked example (2026-10-05): `SELECT COUNT(*) FROM student_finances` on a
+legacy MariaDB 5.5 looked like a one-table count. The name was a view over a
 four-table `DISTINCT` join, ran for more than two minutes, and 46 production
 queries, logins among them, waited behind its table locks.
 
