@@ -605,8 +605,8 @@ payload() { # current_dir session_id transcript
 # mktemp names hold only characters url_encode_path keeps, so the encoded
 # link target is the path itself.
 tasks="$R/openspec/changes/add-groups/tasks.md"
-work_link() { # label: the row's icon and its link to the fixture change
-    printf '📋 \e]8;;file://%s\a\e[4m%s\e[24m\e]8;;\a' "$tasks" "$1"
+work_link() { # label [path]: the row's icon and its link to path, by default the fixture change
+    printf '📋 \e]8;;file://%s\a\e[4m%s\e[24m\e]8;;\a' "${2:-$tasks}" "$1"
 }
 
 git init -q -b main "$R"
@@ -617,15 +617,15 @@ HW="$(mk_home "$HELPER")"
 H0="$(mk_home "")"
 link="$(work_link add-groups)"
 
-# work_rows label dir columns session transcript: renders the rows from one
-# payload at one width, with the helper and with none. The rows with a
-# subject are the rows without one plus the work row, inserted just before
-# the last line, the usage bar row; every other row matches byte for byte.
-# Sets WORK_ROW to the inserted line.
+# work_rows label home dir columns session transcript: renders the rows
+# from one payload at one width, with the helper home gives and with none.
+# The rows with a subject are the rows without one plus the work row,
+# inserted just before the last line, the usage bar row; every other row
+# matches byte for byte. Sets WORK_ROW to the inserted line.
 work_rows() {
     local with without n
-    with="$(statusline "$HW" "$3" "$(payload "$2" "$4" "$5")")"
-    without="$(statusline "$H0" "$3" "$(payload "$2" "$4" "$5")")"
+    with="$(statusline "$2" "$4" "$(payload "$3" "$5" "$6")")"
+    without="$(statusline "$H0" "$4" "$(payload "$3" "$5" "$6")")"
     n="$(wc -l <<< "$with")"
     assert_eq "$n" "$(( $(wc -l <<< "$without") + 1 ))" "$1: the work row adds one line"
     assert_eq "$(sed "$(( n - 1 ))d" <<< "$with")" "$without" "$1: the other rows are the no-helper rows, byte for byte"
@@ -633,32 +633,32 @@ work_rows() {
     WORK_ROW="$(sed -n "$(( n - 1 ))p" <<< "$with")"
 }
 
-work_rows "in a repository" "$R" 200 e2e1 "$et"
+work_rows "in a repository" "$HW" "$R" 200 e2e1 "$et"
 assert_eq "$WORK_ROW" "$link · 2/4" "the work row is the change's file link labelled with its name, its stage after it"
 
-# The work row's fixed cells are "📋 " (3) and " · 2/4" (6), 9 in all, and
-# fit_names charges the name one more cell, so 24 columns leave
-# 24 - 4 (LINE_RESERVE) - 9 - 1 = 10 cells: the floor of 10, and all of
-# "add-groups". The stage stays.
-work_rows "24 columns" "$R" 24 e2e1 "$et"
-assert_eq "$WORK_ROW" "$link · 2/4" "at 24 columns the name and the stage fit"
+# The work row's fixed cells are 📋 (2) and " · 2/4" (6), 8 in all, and
+# fit_names charges the name one more cell for the space before it, so 23
+# columns leave 23 - 4 (LINE_RESERVE) - 8 - 1 = 10 cells, all of
+# "add-groups": the narrowest width where the name and the stage fit whole.
+work_rows "23 columns" "$HW" "$R" 23 e2e1 "$et"
+assert_eq "$WORK_ROW" "$link · 2/4" "at 23 columns the name and the stage fit whole"
 # One column less, the stage cannot stay. Dropping it gives back 6 cells,
-# 23 - 4 - 3 - 1 = 15, so the name stays whole.
-work_rows "23 columns" "$R" 23 e2e1 "$et"
+# 22 - 4 - 2 - 1 = 15, so the name stays whole.
+work_rows "22 columns" "$HW" "$R" 22 e2e1 "$et"
 assert_eq "$WORK_ROW" "$link" "the stage drops before the name is cut"
-# At 16 columns 16 - 4 - 3 - 1 = 8 cells are left without the stage, under
+# At 15 columns 15 - 4 - 2 - 1 = 8 cells are left without the stage, under
 # the floor, so the last step cuts the name to 8 from the middle.
-work_rows "16 columns" "$R" 16 e2e1 "$et"
+work_rows "15 columns" "$HW" "$R" 15 e2e1 "$et"
 assert_eq "$WORK_ROW" "$(work_link 'add...ps')" "the name is cut from the middle once the stage is gone"
 
 # Outside a repository there is no git row, so the work row follows row 1.
 # The row has a budget of its own: at 76 columns, too narrow for row 1 to
 # show the fixture's folder whole, the work row is unchanged.
 NR="$(mktemp -d -p "$TMPROOT")"
-work_rows "outside a repository" "$NR" 200 e2e1 "$et"
+work_rows "outside a repository" "$HW" "$NR" 200 e2e1 "$et"
 assert_eq "$WORK_ROW" "$link · 2/4" "outside a repository the work row is the same"
 assert_eq "$(statusline "$HW" 200 "$(payload "$NR" e2e1 "$et")" | wc -l)" "3" "outside a repository the work row is the second of three lines"
-work_rows "outside a repository at 76 columns" "$NR" 76 e2e1 "$et"
+work_rows "outside a repository at 76 columns" "$HW" "$NR" 76 e2e1 "$et"
 assert_eq "$WORK_ROW" "$link · 2/4" "the work row's budget does not depend on row 1"
 
 # Anything but one well-formed line on a zero exit leaves the rows as they
@@ -684,6 +684,27 @@ assert_eq "$(stub_rows 0 $'change\tadd\\groups\t'"$tasks"$'\t')" "$none" "a back
 assert_eq "$(stub_rows 0 $'change\tadd-groups\t'"$R"$'/caf\xc3\xa9.md\t')" "$none" "a letter outside ASCII in the path renders as no helper"
 assert_eq "$(stub_rows 0 "$good"$'\e[31m')" "$none" "an escape in the stage renders as no helper"
 
+# A name longer than the floor keeps its stage only while it fits whole.
+# A stub serves plan 2026-10-20-statusline-work (26 characters) at stage
+# "Task 5 complete" (15), so the fixed cells are 2 + 3 + 15 = 20 with the
+# stage and 2 without it.
+long_plan="$R/docs/superpowers/plans/2026-10-20-statusline-work.md"
+: > "$long_plan"
+HL="$(mk_home "$(mk_stub 0 $'plan\t2026-10-20-statusline-work\t'"$long_plan"$'\tTask 5 complete')")"
+long_link="$(work_link 2026-10-20-statusline-work "$long_plan")"
+# 51 columns leave 51 - 4 - 20 - 1 = 26 cells, the whole name.
+work_rows "a long name at 51 columns" "$HL" "$R" 51 e2e1 "$et"
+assert_eq "$WORK_ROW" "$long_link · Task 5 complete" "a long name that fits whole keeps its stage"
+# At 40 columns the stage could stay only with the name cut to
+# 40 - 4 - 20 - 1 = 15. The stage goes instead, and 40 - 4 - 2 - 1 = 33
+# cells hold the whole name.
+work_rows "a long name at 40 columns" "$HL" "$R" 40 e2e1 "$et"
+assert_eq "$WORK_ROW" "$long_link" "the stage drops before a long name is cut"
+# At 25 columns 25 - 4 - 2 - 1 = 18 cells are left without the stage, and
+# shorten keeps 8 characters in front and 7 behind.
+work_rows "a long name at 25 columns" "$HL" "$R" 25 e2e1 "$et"
+assert_eq "$WORK_ROW" "$(work_link '2026-10-...ne-work' "$long_plan")" "a long name is cut only once the stage is gone"
+
 # The stage reaches the terminal as written: a backslash sequence in it is
 # not read as an escape (echo -e would stop the row at \c and swallow its
 # newline, so the usage bar row would join it).
@@ -691,7 +712,7 @@ mk_ws backslash progress.md '# SDD ledger: change add-groups (openspec/changes/a
 printf '%s\n' 'Section 1: complete \c tail' >> "$R/.superpowers/sdd/backslash/progress.md"
 bt="$(mktemp -p "$TMPROOT")"
 mk_record Agent prompt 'Read .superpowers/sdd/backslash/progress.md first' "$R" > "$bt"
-work_rows "a backslash in the stage" "$R" 200 e2e2 "$bt"
+work_rows "a backslash in the stage" "$HW" "$R" 200 e2e2 "$bt"
 assert_eq "$WORK_ROW" "$link"' · Section 1 complete \c tail' "a backslash in the stage is printed literally"
 
 # Final review I1: one record naming a subject and its workspace. An apply

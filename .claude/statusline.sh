@@ -307,16 +307,19 @@ fi
 
 # The work row, "📋 <name>[ · <stage>]", follows the git row inside a
 # repository and row 1 elsewhere, and exists only when the session has a
-# subject. Its name is the row's only name and its only link; "📋 " and,
-# while the stage is shown, " · <stage>" are its fixed cells. When the floor
-# does not fit, the stage is dropped first, and only then is the name cut
-# down to the minimum. The name and the stage reach the terminal through
-# printf %s, so no character of either is read as an escape.
+# subject. Its name is the row's only name and its only link. Its fixed
+# cells are the icon, 📋 (2), and while the stage is shown " · <stage>";
+# the space between the icon and the name is left to fit_names, which
+# charges it to every name, as on the other rows. The stage stays only
+# while the name fits whole beside it; otherwise the stage is dropped first,
+# then the name is cut to fit, down to the floor, and finally down to the
+# minimum. The name and the stage reach the terminal through printf %s, so
+# no character of either is read as an escape.
 if [ -n "$WORK_NAME" ]; then
-    WORK_FIXED=3
+    WORK_FIXED=2
     [ -n "$WORK_STAGE" ] && WORK_FIXED=$(( WORK_FIXED + 3 + ${#WORK_STAGE} ))
-    fit_names "$NAME_FLOOR" "$WORK_FIXED" "$WORK_NAME" \
-        || { WORK_STAGE=""; WORK_FIXED=3; fit_names "$NAME_FLOOR" "$WORK_FIXED" "$WORK_NAME"; } \
+    fit_names "${#WORK_NAME}" "$WORK_FIXED" "$WORK_NAME" \
+        || { WORK_STAGE=""; WORK_FIXED=2; fit_names "$NAME_FLOOR" "$WORK_FIXED" "$WORK_NAME"; } \
         || fit_names "$NAME_MIN" "$WORK_FIXED" "$WORK_NAME"
 
     url_encode_path "$WORK_PATH"
