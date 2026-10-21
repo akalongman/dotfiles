@@ -243,8 +243,9 @@ work_ws_source() {
 # a path that classifies as nothing, or a character outside the allowed set
 # in the path as named, the workspace, or the file to open. Exit 2, printing
 # nothing, is a valid subject whose file to open does not exist or cannot be
-# resolved: the subject is retired, and the caller shows nothing rather than
-# an older subject.
+# resolved: when a render has shown the occurrence before, the caller
+# retires the subject and shows nothing rather than an older subject, and
+# otherwise moves on as for exit 1 (see work_render).
 work_resolve() {
     local raw="$1" abs="$2" cwd="$3" path ws="" named row kind name open resolved dir
     case "$abs:$raw" in
@@ -353,16 +354,22 @@ work_stage() {
 }
 
 # Format version of the cache file; a cache of any other version is
-# discarded. Version 2 keys each occurrence by its record's position in the
-# file (see work_scan_chunks); version 1 stored the record's index in the
-# bytes its run scanned, which records of different runs shared.
-readonly WORK_CACHE_VERSION=2
+# discarded. Version 3 gives each occurrence the flag that a render has
+# shown it (see work_render), which a version 2 cache lacks, so that cache
+# is rescanned once. Version 2 keyed each occurrence by its record's
+# position in the file (see work_scan_chunks), where version 1 stored the
+# record's index in the bytes its run scanned, which records of different
+# runs shared.
+readonly WORK_CACHE_VERSION=3
 
 # The run's state, shared by the functions below: the cache file and the
 # transcript it belongs to, the offset scanned so far, the transcript size
 # the last commit recorded, and the occurrences, newest first, as
-# "pos<TAB>abs<TAB>raw<TAB>cwd" with pos the record's position in the file
-# (see work_scan_chunks).
+# "pos<TAB>abs<TAB>raw<TAB>cwd<TAB>shown" with pos the record's position in
+# the file (see work_scan_chunks) and shown 1 once a render has printed the
+# occurrence's subject, 0 before (see work_render). Only cwd can be empty,
+# so a row is split from its end: an empty field between two tabs would
+# vanish in a read with IFS set to a tab.
 _work_cache="" _work_transcript="" _work_offset=0 _work_recorded=0
 _work_rows=()
 
@@ -372,11 +379,11 @@ _work_rows=()
 # instead: no cache file, another version, another transcript path than
 # _work_transcript, a recorded size above SIZE (the transcript's current
 # size; a shrink is a replacement), an offset above the recorded size, or a
-# line that does not parse.
+# line that does not parse as the header or as a five-field row.
 work_cache_load() {
     local size="$1" header pair recorded offset row
     local sizes=$'^(0|[1-9][0-9]{0,17})\t(0|[1-9][0-9]{0,17})$'
-    local shape=$'^(0|[1-9][0-9]{0,17})\t[01]\t[^\t]+\t[^\t]*$'
+    local shape=$'^(0|[1-9][0-9]{0,17})\t[01]\t[^\t]+\t[^\t]*\t[01]$'
     local -a lines=()
     _work_offset=0 _work_recorded=0 _work_rows=()
     [ -f "$_work_cache" ] || return 0
@@ -443,20 +450,23 @@ _work_chunk_end() {
 # work_scan_chunks ENDPOINT
 # Scans the transcript from _work_offset towards ENDPOINT, its size at the
 # run's start, in chunks of WORK_CHUNK bytes (4 MiB), each extended to a
-# line end. A chunk's occurrences go on top of _work_rows, newest first,
-# each with its pos made the record's position in the file: the chunk's
-# start offset plus the record's line index in the chunk, which every
-# occurrence of one record shares and no other record has, since each line
-# holds at least its newline byte. The newest ten with distinct raw
-# matches are kept, and each chunk is then committed, recording ENDPOINT as
-# the transcript size (a commit that fails leaves the progress in memory
-# for this run only). Exits 0 once the offset reaches the last line end
-# before ENDPOINT, and 1 when the work budget of WORK_BUDGET_MS
-# milliseconds (1500) ran out first. The budget is checked only after a
-# chunk, so every run makes progress.
+# line end. A chunk's occurrences go on top of _work_rows, newest first and
+# not yet shown, each with its pos made the record's position in the file:
+# the chunk's start offset plus the record's line index in the chunk, which
+# every occurrence of one record shares and no other record has, since each
+# line holds at least its newline byte. The newest ten with distinct raw
+# matches are kept. A cached occurrence whose raw a newer one took over
+# hands that one its shown flag when the two resolve alike (raw is
+# absolute, or both have the same cwd), so a later mention of a shown
+# subject's path, such as an rm of the plan read before, still retires it.
+# Each chunk is then committed, recording ENDPOINT as the transcript size
+# (a commit that fails leaves the progress in memory for this run only).
+# Exits 0 once the offset reaches the last line end before ENDPOINT, and 1
+# when the work budget of WORK_BUDGET_MS milliseconds (1500) ran out first.
+# The budget is checked only after a chunk, so every run makes progress.
 work_scan_chunks() {
     local endpoint="$1" chunk="${WORK_CHUNK:-}" budget="${WORK_BUDGET_MS:-}"
-    local start to="" scanned=0 i pos row raw seen_raw
+    local start to="" scanned=0 i j pos row raw seen_raw old new
     local -a found=() newest=() kept=() seen=()
     [[ $chunk =~ ^[1-9][0-9]{0,9}$ ]] || chunk=4194304
     [[ $budget =~ ^[0-9]{1,9}$ ]] || budget=1500
@@ -474,7 +484,7 @@ work_scan_chunks() {
         for (( i = ${#found[@]} - 1; i >= 0; i-- )); do
             pos="${found[i]%%$'\t'*}"
             [[ $pos =~ ^(0|[1-9][0-9]{0,17})$ ]] || continue
-            newest+=("$((_work_offset + pos))${found[i]#"$pos"}")
+            newest+=("$((_work_offset + pos))${found[i]#"$pos"}"$'\t0')
         done
         newest+=("${_work_rows[@]}")
         kept=() seen=()
@@ -487,6 +497,23 @@ work_scan_chunks() {
             done
             kept+=("$row") seen+=("$raw")
         done
+        # A kept row with a cached row's raw is that row or a newer one,
+        # since no new record shares a cached record's position. A newer
+        # one takes the cached flag when the two resolve alike: raw is
+        # absolute, or their "abs<TAB>raw<TAB>cwd" match. The flag is a
+        # row's last character.
+        for row in "${_work_rows[@]}"; do
+            raw="${row#*$'\t'*$'\t'}"
+            raw="${raw%%$'\t'*}"
+            for (( j = 0; j < ${#kept[@]}; j++ )); do
+                [ "${seen[j]}" = "$raw" ] || continue
+                old="${row#*$'\t'}" new="${kept[j]#*$'\t'}"
+                if [ "${kept[j]}" != "$row" ] && [[ $old == 1$'\t'* || ${old%$'\t'*} == "${new%$'\t'*}" ]]; then
+                    kept[j]="${kept[j]%?}${row: -1}"
+                fi
+                break
+            done
+        done
         _work_rows=("${kept[@]}") _work_offset="$to" _work_recorded="$endpoint"
         work_cache_commit "$to"
         scanned=1
@@ -494,33 +521,41 @@ work_scan_chunks() {
     return 0
 }
 
-# work_render
+# work_render LOCKED
 # Prints the subject of the newest occurrence in _work_rows that resolves,
-# as "kind<TAB>name<TAB>open<TAB>stage", the stage possibly empty. Invalid
-# evidence (work_resolve exit 1) passes the walk on to the next older
-# occurrence; a valid subject whose file is gone (exit 2) ends it with
-# nothing printed, since an older subject is never shown in its place.
-# One record can name a plan or change and its workspace together, as an
-# apply loop's dispatch prompt does. When the subject resolved without a
-# workspace, the other occurrences of its own record (equal pos) are
-# resolved too, and the first one that resolves (exit 0) to the same file
-# to open with a workspace lends that workspace to the stage. A sibling
-# that exits 1 or 2 or names another file changes nothing, and an
-# occurrence of another record is never consulted.
+# as "kind<TAB>name<TAB>open<TAB>stage", the stage possibly empty, and marks
+# that occurrence shown. Invalid evidence (work_resolve exit 1) passes the
+# walk on to the next older occurrence, and so does a valid subject whose
+# file is gone (exit 2) on an occurrence no render has shown, such as a
+# relative path joined to the wrong directory. Exit 2 on an occurrence
+# shown before retires the subject: the walk ends with nothing printed,
+# since an older subject is never shown in its place.
+# LOCKED is 1 when the run holds the session's lock. Only then does an
+# occurrence shown for the first time get its flag committed to the cache,
+# with the offset and recorded size unchanged; a run that found the lock
+# held writes nothing, and neither does a redraw that sets no flag.
+# When the subject resolved without a workspace, the older occurrences,
+# newest first and of any record, are resolved too, and the first that
+# resolves (exit 0) to the same file to open with a workspace lends that
+# workspace to the stage; the subject itself does not change. An
+# occurrence that exits 1 or 2 or names another file lends nothing. Only a
+# workspace token can resolve with a workspace, so no other occurrence is
+# resolved for this.
 work_render() {
-    local i j pos tie_pos abs raw cwd subject kind name open ws tie tie_open tie_ws
+    local locked="${1:-0}" i j abs raw cwd shown subject kind name open ws tie tie_open tie_ws
     for (( i = 0; i < ${#_work_rows[@]}; i++ )); do
-        IFS=$'\t' read -r pos abs raw cwd <<<"${_work_rows[i]}"
+        shown="${_work_rows[i]##*$'\t'}"
+        IFS=$'\t' read -r _ abs raw cwd <<<"${_work_rows[i]%$'\t'*}"
         subject="$(work_resolve "$raw" "$abs" "$cwd")"
         case $? in
             0)
                 IFS=$'\t' read -r kind name open ws <<<"$subject"
-                # The record's newer occurrences all exited 1, or the walk
-                # would have stopped there, so only the older ones can lend.
+                # The newer occurrences exited 1 or 2 in this walk, so only
+                # the older ones can lend.
                 if [ -z "$ws" ]; then
                     for (( j = i + 1; j < ${#_work_rows[@]}; j++ )); do
-                        IFS=$'\t' read -r tie_pos abs raw cwd <<<"${_work_rows[j]}"
-                        [ "$tie_pos" = "$pos" ] || continue
+                        IFS=$'\t' read -r _ abs raw cwd <<<"${_work_rows[j]%$'\t'*}"
+                        [[ $raw == *.superpowers/sdd/?* ]] || continue
                         tie="$(work_resolve "$raw" "$abs" "$cwd")" || continue
                         IFS=$'\t' read -r _ _ tie_open tie_ws <<<"$tie"
                         if [ "$tie_open" = "$open" ] && [ -n "$tie_ws" ]; then
@@ -530,9 +565,15 @@ work_render() {
                     done
                 fi
                 printf '%s\t%s\t%s\t%s\n' "$kind" "$name" "$open" "$(work_stage "$kind" "$open" "$ws")"
+                if [ "$shown" = 0 ] && [ "$locked" = 1 ]; then
+                    _work_rows[i]="${_work_rows[i]%0}1"
+                    work_cache_commit "$_work_offset"
+                fi
                 return 0
                 ;;
-            2) return 0 ;;
+            2)
+                if [ "$shown" = 1 ]; then return 0; fi
+                ;;
         esac
     done
     return 0
@@ -568,10 +609,10 @@ work_prune() {
 # the transcript up to its size at the start, prints the subject once the
 # scan has caught up and nothing while it has not, and prunes old caches.
 # When another run holds the lock, it renders from the cache without
-# scanning, and prints nothing while the cached offset is below the size
-# the last commit recorded, since a catch-up is then in flight. The lock is
-# held on descriptor 9 for the call only, so a shell that sources this file
-# holds no lock once work_main returns.
+# scanning or writing, and prints nothing while the cached offset is below
+# the size the last commit recorded, since a catch-up is then in flight.
+# The lock is held on descriptor 9 for the call only, so a shell that
+# sources this file holds no lock once work_main returns.
 work_main() {
     local id="${1:-}" transcript="${2:-}" size="" locked=0
     local dir="${WORK_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME:-}/.cache}/claude-statusline}"
@@ -588,10 +629,10 @@ work_main() {
         [[ $size =~ ^(0|[1-9][0-9]{0,17})$ ]] || return 0
         work_cache_load "$size"
         if [ "$locked" = 1 ]; then
-            if work_scan_chunks "$size"; then work_render; fi
+            if work_scan_chunks "$size"; then work_render 1; fi
             work_prune "$dir"
         elif [ "$_work_offset" -ge "$_work_recorded" ]; then
-            work_render
+            work_render 0
         fi
     } 2>/dev/null 9>"$dir/work-$id.lock"
     return 0

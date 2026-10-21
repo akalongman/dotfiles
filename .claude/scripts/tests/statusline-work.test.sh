@@ -196,8 +196,9 @@ assert_file "$R/docs/plans/bad\$name.md" "the plan with a disallowed character e
 assert_fail "a plan name outside the allowed set is dropped" work_resolve "docs/plans/bad\$name.md" 0 "$R"
 
 # Exit status: 1 is invalid evidence, so the caller tries an older
-# occurrence; 2 is a valid subject whose file is missing, so the subject is
-# retired and nothing older is shown.
+# occurrence; 2 is a valid subject whose file is missing, which retires the
+# subject when a render has shown that occurrence and is otherwise skipped
+# like 1.
 work_resolve "docs/plans/nope.md" 0 "$R"; assert_eq "$?" 2 "a missing plan file exits 2"
 work_resolve ".superpowers/sdd/gone/" 0 "$R"; assert_eq "$?" 2 "a workspace whose source is missing exits 2"
 work_resolve "openspec/changes/archive/old-one/" 0 "$R"; assert_eq "$?" 1 "an archived change exits 1"
@@ -450,7 +451,7 @@ assert_eq "$(head -1 "$WORK_CACHE_DIR/work-s1.tsv")" "$before" "held lock leaves
 assert_eq "$(work_main s1 "$t" "$R" | cut -f2,4)" $'2026-01-01-alpha\tTask 1 complete' "held lock renders from the cache"
 # While the cached offset is below the size the last commit recorded, a
 # catch-up is in flight, and a run that finds the lock held prints nothing.
-printf '%s\t%s\t%s\t0\n0\t1\t%s\t\n' "$WORK_CACHE_VERSION" "$t" "$(stat -c %s "$t")" "$R/docs/superpowers/plans/2026-01-01-alpha.md" > "$WORK_CACHE_DIR/work-s1.tsv"
+printf '%s\t%s\t%s\t0\n0\t1\t%s\t\t0\n' "$WORK_CACHE_VERSION" "$t" "$(stat -c %s "$t")" "$R/docs/superpowers/plans/2026-01-01-alpha.md" > "$WORK_CACHE_DIR/work-s1.tsv"
 assert_eq "$(work_main s1 "$t" "$R")" "" "held lock during a catch-up prints nothing"
 wait "$lp"
 # A call in this shell leaves no descriptor holding the lock.
@@ -475,9 +476,9 @@ assert_eq "$(work_main s6 "$pl" "$R" | cut -f2)" "add-groups" "the completed lin
 sh="$(mktemp -p "$TMPROOT")"
 mk_record Read file_path "$R/docs/superpowers/plans/2026-01-01-alpha.md" "$R" > "$sh"
 n="$(stat -c %s "$sh")"
-printf '%s\t%s\t%s\t%s\n0\t1\t%s\t\n' "$WORK_CACHE_VERSION" "$sh" "$((n + 100))" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
+printf '%s\t%s\t%s\t%s\n0\t1\t%s\t\t0\n' "$WORK_CACHE_VERSION" "$sh" "$((n + 100))" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
 assert_eq "$(work_main s7 "$sh" "$R" | cut -f2)" "2026-01-01-alpha" "a shrunk transcript restarts from zero"
-printf '%s\t%s\t%s\t%s\n0\t1\t%s\t\nnot a row\n' "$WORK_CACHE_VERSION" "$sh" "$n" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
+printf '%s\t%s\t%s\t%s\n0\t1\t%s\t\t0\nnot a row\n' "$WORK_CACHE_VERSION" "$sh" "$n" "$n" "$R/openspec/changes/add-groups/" > "$WORK_CACHE_DIR/work-s7.tsv"
 assert_eq "$(work_main s7 "$sh" "$R" | cut -f2)" "2026-01-01-alpha" "a cache line that does not parse restarts from zero"
 
 # An id that is empty or holds a slash, or an empty transcript path, prints
@@ -737,20 +738,83 @@ assert_eq "$(same_record t4 'Use .superpowers/sdd/late/ for openspec/changes/add
 assert_eq "$(same_record t5 'Use .superpowers/sdd/gone/ for docs/plans/beta.md')" $'plan\tbeta\t'"$R"$'/docs/plans/beta.md\t' "a retired workspace in the same record changes nothing"
 
 # Two records scanned by two runs each sit first in their run's bytes, yet
-# stay two records: the cache keys a row by its position in the file, so a
-# plan read in the second run takes no stage from the workspace named in
-# the first.
+# stay two records: the cache keys a row by its position in the file. The
+# stage search spans the whole cache (Task 7), so a plan read in the second
+# run takes its stage from the workspace named in the first.
 two="$(mktemp -p "$TMPROOT")"; tie_cache="$(mktemp -d -p "$TMPROOT")"
 mk_record Agent prompt 'Use .superpowers/sdd/late/' "$R" > "$two"
 assert_eq "$(WORK_CACHE_DIR="$tie_cache" work_main t6 "$two" "$R" | cut -f2,4)" $'2026-01-01-alpha\tTask 1 complete' "the workspace alone gives its ledger's stage"
 first_end="$(stat -c %s "$two")"
 mk_record Read file_path "$alpha" "$R" >> "$two"
-assert_eq "$(WORK_CACHE_DIR="$tie_cache" work_main t6 "$two" "$R")" $'plan\t2026-01-01-alpha\t'"$alpha"$'\t' "a plan read in a later run takes no stage from an earlier record's workspace"
+assert_eq "$(WORK_CACHE_DIR="$tie_cache" work_main t6 "$two" "$R")" $'plan\t2026-01-01-alpha\t'"$alpha"$'\tTask 1 complete' "a plan read in a later run takes its stage from an earlier record's workspace"
 assert_eq "$(tail -n +2 "$tie_cache/work-t6.tsv" | cut -f1 | tr '\n' ' ')" "$first_end 0 " "rows of two runs keep their positions in the file"
 # A version 1 cache, whose positions restarted at every run, is discarded:
 # its cached beta row is not rendered, and the rescan finds the plan.
 end="$(stat -c %s "$two")"
 printf '1\t%s\t%s\t%s\n0\t1\t%s\t\n' "$two" "$end" "$end" "$R/docs/plans/beta.md" > "$tie_cache/work-t6.tsv"
 assert_eq "$(WORK_CACHE_DIR="$tie_cache" work_main t6 "$two" "$R" | cut -f2)" "2026-01-01-alpha" "a version 1 cache is discarded and rescanned"
+
+# Task 7: an occurrence whose file is gone retires its subject only once a
+# render has shown it, and a subject without a workspace takes its stage
+# from any cached workspace occurrence of the same subject.
+WORK_CACHE_DIR="$(mktemp -d -p "$TMPROOT")"; export WORK_CACHE_DIR
+# never-resolved path does not retire: newest row is a relative path that never existed
+t="$(mktemp -p "$TMPROOT")"
+mk_record Read file_path "$R/docs/plans/beta.md" "$R" > "$t"
+mk_record Bash command "git -C /elsewhere add home/docs/plans/beta.md" "$R" >> "$t"
+assert_eq "$(work_main s7a "$t" "$R" | cut -f1,2)" $'plan\tbeta' "a never-existing relative path is skipped, not a retirement"
+# a shown subject retires when its file goes
+t2="$(mktemp -p "$TMPROOT")"; cp "$R/docs/plans/beta.md" "$R/docs/plans/gamma.md"
+mk_record Read file_path "$R/docs/plans/gamma.md" "$R" > "$t2"
+assert_eq "$(work_main s7b "$t2" "$R" | cut -f2)" "gamma" "shown once"
+assert_eq "$(tail -n +2 "$WORK_CACHE_DIR/work-s7b.tsv" | head -1 | cut -f5)" "1" "the shown flag is committed"
+# A commit renames a new file over the cache, so an unchanged inode means
+# the redraw wrote nothing.
+ino="$(stat -c %i "$WORK_CACHE_DIR/work-s7b.tsv")"
+work_main s7b "$t2" "$R" >/dev/null
+assert_eq "$(stat -c %i "$WORK_CACHE_DIR/work-s7b.tsv")" "$ino" "a redraw that sets no flag writes nothing"
+rm "$R/docs/plans/gamma.md"
+assert_eq "$(work_main s7b "$t2" "$R")" "" "a shown subject whose file vanished blanks the segment"
+# stage borrowed from an older workspace occurrence of the same subject
+t3="$(mktemp -p "$TMPROOT")"
+mk_record Agent prompt "read .superpowers/sdd/add-groups/progress.md" "$R" > "$t3"
+mk_record Bash command "ls" "$R" >> "$t3"
+mk_record Read file_path "$R/openspec/changes/add-groups/tasks.md" "$R" >> "$t3"
+printf '# SDD ledger: plan openspec/changes/add-groups/tasks.md\nSection 2: complete\n' > "$R/.superpowers/sdd/add-groups/progress.md"
+assert_eq "$(work_main s7c "$t3" "$R" | cut -f2,4)" $'add-groups\tSection 2 complete' "a plain Read borrows the stage from the older workspace occurrence"
+# version 2 cache discarded; a cache read from its offset of 1 would miss
+# the workspace named in the first record
+printf '2\t%s\t1\t1\n' "$t3" > "$WORK_CACHE_DIR/work-s7c.tsv"
+assert_eq "$(work_main s7c "$t3" "$R" | cut -f2)" "add-groups" "a version 2 cache restarts from zero"
+assert_eq "$(tail -n +2 "$WORK_CACHE_DIR/work-s7c.tsv" | cut -f3 | tr '\n' ' ')" "$R/openspec/changes/add-groups/ .superpowers/sdd/add-groups/ " "the rescan of a version 2 cache reaches the first record"
+# A newer occurrence of a cached one's raw takes over its shown flag when the
+# two resolve alike, as an absolute raw always does: a plan read and then
+# removed by the same path retires instead of passing the walk to beta.
+t4="$(mktemp -p "$TMPROOT")"; : > "$R/docs/plans/delta.md"
+mk_record Read file_path "$R/docs/plans/beta.md" "$R" > "$t4"
+mk_record Read file_path "$R/docs/plans/delta.md" "$R" >> "$t4"
+assert_eq "$(work_main s7d "$t4" "$R" | cut -f2)" "delta" "the plan read last is shown"
+rm "$R/docs/plans/delta.md"
+mk_record Bash command "rm $R/docs/plans/delta.md" "$R" >> "$t4"
+assert_eq "$(work_main s7d "$t4" "$R")" "" "a removal by the shown raw takes over its flag and retires the subject"
+# A relative raw under another cwd resolves elsewhere, so its newer
+# occurrence starts unshown.
+t5="$(mktemp -p "$TMPROOT")"; : > "$R/docs/plans/epsilon.md"
+mk_record Bash command "cat docs/plans/epsilon.md" "$R" > "$t5"
+assert_eq "$(work_main s7e "$t5" "$R" | cut -f2)" "epsilon" "a relative raw is shown"
+mk_record Bash command "cat docs/plans/epsilon.md" "$TMPROOT" >> "$t5"
+work_main s7e "$t5" "$R" >/dev/null
+assert_eq "$(tail -n +2 "$WORK_CACHE_DIR/work-s7e.tsv" | cut -f4,5)" "$TMPROOT"$'\t0' "a newer occurrence under another cwd starts unshown"
+# A run that finds the lock held renders an unshown occurrence from the
+# cache and leaves the cache as it was.
+t6="$(mktemp -p "$TMPROOT")"
+mk_record Read file_path "$R/docs/plans/beta.md" "$R" > "$t6"
+n="$(stat -c %s "$t6")"
+printf '%s\t%s\t%s\t%s\n0\t1\t%s\t%s\t0\n' "$WORK_CACHE_VERSION" "$t6" "$n" "$n" "$R/docs/plans/beta.md" "$R" > "$WORK_CACHE_DIR/work-s7f.tsv"
+before="$(cat "$WORK_CACHE_DIR/work-s7f.tsv")"
+( exec 9>"$WORK_CACHE_DIR/work-s7f.lock"; flock 9; sleep 1 ) & lp=$!; sleep 0.2
+assert_eq "$(work_main s7f "$t6" "$R" | cut -f2)" "beta" "a run that finds the lock held shows an unshown occurrence"
+assert_eq "$(cat "$WORK_CACHE_DIR/work-s7f.tsv")" "$before" "a run that finds the lock held writes no shown flag"
+wait "$lp"
 
 finish
