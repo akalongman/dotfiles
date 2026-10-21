@@ -4,6 +4,8 @@ Background=#000000
 Foreground=#D4D4D4
 Cursor=#C0CAF5
 CursorForeground=#1A1B26
+TitlebarBackground=#222222
+TitlebarForeground=#F7F7F7
 Color0=#15161E
 Color1=#F7768E
 Color2=#9ECE6A
@@ -22,3 +24,4 @@ Color14=#7DCFFF
 Color15=#C0CAF5
 
 # Colours copied on 2026-10-20 from the GNOME Terminal profile c1515941-65fd-4648-85e4-d04af3060b75
+# Titlebar colours copied on 2026-10-21 from the Yaru-dark GTK 3 theme's header bar and text, which GNOME Terminal draws
