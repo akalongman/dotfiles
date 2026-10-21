@@ -235,51 +235,6 @@ fit_names() {
     done
 }
 
-# The work segment, " | 📋 <name>[ · <stage>]", ends the git row inside a
-# repository and row 1 elsewhere. Its name is one more name in that row's
-# fit_names budget; " | 📋" and, while the stage is shown, " · <stage>" are
-# fixed cells.
-WORK_FIXED=0
-if [ -n "$WORK_NAME" ]; then
-    WORK_FIXED=5
-    [ -n "$WORK_STAGE" ] && WORK_FIXED=$(( WORK_FIXED + 3 + ${#WORK_STAGE} ))
-fi
-
-# drop_stage VAR: hides the stage and takes its cells off the fixed cells
-# held in VAR. Fails when there is no stage, so a collapse chain goes on to
-# its next step.
-drop_stage() {
-    [ -n "$WORK_STAGE" ] || return 1
-    local -n fixed=$1
-    fixed=$(( fixed - 3 - ${#WORK_STAGE} ))
-    WORK_STAGE=""
-}
-
-# work_segment NAME: sets WORK_SEG to the segment when NAME, the work name
-# on the row being printed, is set, and to nothing otherwise. The label is
-# cut to NAME_CAP; the link, built as the folder link is, opens the file.
-work_segment() {
-    WORK_SEG=""
-    [ -n "$1" ] || return 0
-    url_encode_path "$WORK_PATH"
-    local uri="file://$REPLY"
-    shorten "$1" "$NAME_CAP"
-    printf -v WORK_SEG ' | 📋 \033]8;;%s\a\033[4m%s\033[24m\033]8;;\a' "$uri" "$REPLY"
-    if [ -n "$WORK_STAGE" ]; then WORK_SEG+=" · ${WORK_STAGE}"; fi
-}
-
-# print_row ROW SEGMENT: prints ROW through echo -e, as the rows always
-# were, then SEGMENT, when set, through printf %s, so no character of the
-# name or the stage is read as an escape.
-print_row() {
-    if [ -n "$2" ]; then
-        echo -ne "$1"
-        printf '%s\n' "$2"
-    else
-        echo -e "$1"
-    fi
-}
-
 # Fixed cells: ${#} counts characters and each icon is two cells wide, hence
 # one extra per icon.
 DIR_NAME="${DIR/#$HOME/'~'}"
@@ -294,18 +249,9 @@ fi
 MODE_SEG+=" | 🎨 ${YELLOW}${OUTPUT_STYLE}${RESET}"
 ROW1_FIXED=$(( ROW1_FIXED + 6 + ${#OUTPUT_STYLE} ))
 
-# Outside a repository the work segment ends row 1.
-ROW1_WORK=""
-if [ "$IN_REPO" != 1 ] && [ -n "$WORK_NAME" ]; then
-    ROW1_WORK="$WORK_NAME"
-    ROW1_FIXED=$(( ROW1_FIXED + WORK_FIXED ))
-fi
-
-# The work stage is dropped first. A row that is still too long at the
-# minimum is left for the terminal to clip.
-fit_names "$NAME_FLOOR" "$ROW1_FIXED" "$DIR_NAME" "$ROW1_WORK" \
-    || { [ -n "$ROW1_WORK" ] && drop_stage ROW1_FIXED && fit_names "$NAME_FLOOR" "$ROW1_FIXED" "$DIR_NAME" "$ROW1_WORK"; } \
-    || fit_names "$NAME_MIN" "$ROW1_FIXED" "$DIR_NAME" "$ROW1_WORK"
+# A row that is still too long at the minimum is left for the terminal to clip.
+fit_names "$NAME_FLOOR" "$ROW1_FIXED" "$DIR_NAME" \
+    || fit_names "$NAME_MIN" "$ROW1_FIXED" "$DIR_NAME"
 
 url_encode_path "$DIR"
 DIR_URI="file://$REPLY"
@@ -314,26 +260,21 @@ DIR_URI="file://$REPLY"
 # BEL form through to the terminal but drops ST (anthropics/claude-code#26356).
 # A link always points at the full target, however short its label was cut.
 shorten "$DIR_NAME" "$NAME_CAP"
-ROW1="${ACCT_SEG}${CYAN}[$MODEL]${RESET}${MODE_SEG} | 📁 \033]8;;${DIR_URI}\a\033[4m${REPLY}\033[24m\033]8;;\a"
-work_segment "$ROW1_WORK"
-print_row "$ROW1" "$WORK_SEG"
+echo -e "${ACCT_SEG}${CYAN}[$MODEL]${RESET}${MODE_SEG} | 📁 \033]8;;${DIR_URI}\a\033[4m${REPLY}\033[24m\033]8;;\a"
 
 if [ "$IN_REPO" = 1 ]; then
     REPO_NAME="$REPO_PATH"
     ROW2_FIXED=2                                                # "🌿"
     [ "$IN_WORKTREE" = 1 ] && ROW2_FIXED=$(( ROW2_FIXED + 5 ))  # " | 🌳"
     [ -n "$REPO_ICON" ] && ROW2_FIXED=$(( ROW2_FIXED + 5 ))     # " | 🐙"
-    ROW2_FIXED=$(( ROW2_FIXED + WORK_FIXED ))                   # " | 📋", " · <stage>"
 
-    # When the floor does not fit, the work stage is dropped first, then the
-    # repo falls back to its icon (which then carries the link), after that
-    # the worktree loses its name, and what remains is cut down to the
-    # minimum. The work name stays in every step.
-    fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME" "$WT_NAME" "$REPO_NAME" "$WORK_NAME" \
-        || { drop_stage ROW2_FIXED && fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME" "$WT_NAME" "$REPO_NAME" "$WORK_NAME"; } \
-        || { REPO_NAME=""; fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME" "$WT_NAME" "$WORK_NAME"; } \
-        || { WT_NAME=""; fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME" "$WORK_NAME"; } \
-        || fit_names "$NAME_MIN" "$ROW2_FIXED" "$BRANCH_NAME" "$WORK_NAME"
+    # When the floor does not fit, the repo falls back to its icon (which then
+    # carries the link), after that the worktree loses its name, and what
+    # remains is cut down to the minimum.
+    fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME" "$WT_NAME" "$REPO_NAME" \
+        || { REPO_NAME=""; fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME" "$WT_NAME"; } \
+        || { WT_NAME=""; fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME"; } \
+        || fit_names "$NAME_MIN" "$ROW2_FIXED" "$BRANCH_NAME"
 
     ROW2="🌿"
     if [ -n "$BRANCH_NAME" ]; then
@@ -361,8 +302,29 @@ if [ "$IN_REPO" = 1 ]; then
         fi
     fi
 
-    work_segment "$WORK_NAME"
-    print_row "$ROW2" "$WORK_SEG"
+    echo -e "$ROW2"
+fi
+
+# The work row, "📋 <name>[ · <stage>]", follows the git row inside a
+# repository and row 1 elsewhere, and exists only when the session has a
+# subject. Its name is the row's only name and its only link; "📋 " and,
+# while the stage is shown, " · <stage>" are its fixed cells. When the floor
+# does not fit, the stage is dropped first, and only then is the name cut
+# down to the minimum. The name and the stage reach the terminal through
+# printf %s, so no character of either is read as an escape.
+if [ -n "$WORK_NAME" ]; then
+    WORK_FIXED=3
+    [ -n "$WORK_STAGE" ] && WORK_FIXED=$(( WORK_FIXED + 3 + ${#WORK_STAGE} ))
+    fit_names "$NAME_FLOOR" "$WORK_FIXED" "$WORK_NAME" \
+        || { WORK_STAGE=""; WORK_FIXED=3; fit_names "$NAME_FLOOR" "$WORK_FIXED" "$WORK_NAME"; } \
+        || fit_names "$NAME_MIN" "$WORK_FIXED" "$WORK_NAME"
+
+    url_encode_path "$WORK_PATH"
+    WORK_URI="file://$REPLY"
+    shorten "$WORK_NAME" "$NAME_CAP"
+    printf -v WORK_ROW '📋 \033]8;;%s\a\033[4m%s\033[24m\033]8;;\a' "$WORK_URI" "$REPLY"
+    if [ -n "$WORK_STAGE" ]; then printf -v WORK_ROW '%s · %s' "$WORK_ROW" "$WORK_STAGE"; fi
+    printf '%s\n' "$WORK_ROW"
 fi
 COST_FMT=$(printf '$%.2f' "$COST")
 

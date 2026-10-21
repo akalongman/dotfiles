@@ -576,7 +576,7 @@ touch -d '20 days ago' "$pd/work-old2.tsv"
 WORK_CACHE_DIR="$pd" work_main s5 "$t" "$R" >/dev/null
 assert_file "$pd/work-old2.tsv" "a second run within the day does not prune"
 
-# Task 5: the segment on the status line
+# Tasks 5 and 6: the work row on the status line
 # The real status line script runs end to end under a temporary HOME whose
 # .claude/statusline-work.sh links to the helper or to a stub, or is absent,
 # so the real home's usage helper and account file stay out of the run. The
@@ -605,7 +605,7 @@ payload() { # current_dir session_id transcript
 # mktemp names hold only characters url_encode_path keeps, so the encoded
 # link target is the path itself.
 tasks="$R/openspec/changes/add-groups/tasks.md"
-work_link() { # label: the segment's icon and its link to the fixture change
+work_link() { # label: the row's icon and its link to the fixture change
     printf '📋 \e]8;;file://%s\a\e[4m%s\e[24m\e]8;;\a' "$tasks" "$1"
 }
 
@@ -614,46 +614,52 @@ printf '%s\n' '- [x] a' '- [x] b' '- [ ] c' '- [ ] d' > "$tasks"
 et="$(mktemp -p "$TMPROOT")"
 mk_record Bash command 'cat openspec/changes/add-groups/tasks.md' "$R" > "$et"
 HW="$(mk_home "$HELPER")"
+H0="$(mk_home "")"
 link="$(work_link add-groups)"
 
-out="$(statusline "$HW" 200 "$(payload "$R" e2e1 "$et")")"
-assert_contains "$out" "$link · 2/4" "the change is a file link labelled with its name, its stage after it"
-assert_eq "$(sed -n 2p <<< "$out")" "🌿 main | $link · 2/4" "the segment ends the git row"
+# work_rows label dir columns session transcript: renders the rows from one
+# payload at one width, with the helper and with none. The rows with a
+# subject are the rows without one plus the work row, inserted just before
+# the last line, the usage bar row; every other row matches byte for byte.
+# Sets WORK_ROW to the inserted line.
+work_rows() {
+    local with without n
+    with="$(statusline "$HW" "$3" "$(payload "$2" "$4" "$5")")"
+    without="$(statusline "$H0" "$3" "$(payload "$2" "$4" "$5")")"
+    n="$(wc -l <<< "$with")"
+    assert_eq "$n" "$(( $(wc -l <<< "$without") + 1 ))" "$1: the work row adds one line"
+    assert_eq "$(sed "$(( n - 1 ))d" <<< "$with")" "$without" "$1: the other rows are the no-helper rows, byte for byte"
+    assert_contains "$(tail -1 <<< "$with")" '░░░░░░░░░░' "$1: the usage bar row stays last"
+    WORK_ROW="$(sed -n "$(( n - 1 ))p" <<< "$with")"
+}
 
-# At 30 columns the stage cannot stay. The git row's fixed cells are 🌿 (2),
-# " | 📋" (5) and " · 2/4" (6), 13 in all, so fit_names leaves
-# 30 - 4 (LINE_RESERVE) - 13 - 2 (a space per name) = 11 cells for "main"
-# and "add-groups", which need 4 + 10 = 14 at the floor of 10. The stage
-# is kept from 33 columns up. Dropping it gives back 6 cells, 17 >= 14, so
-# the name then fits whole.
-out="$(statusline "$HW" 30 "$(payload "$R" e2e1 "$et")")"
-row2="$(sed -n 2p <<< "$out")"
-assert_eq "$(printf '%s\n' "$row2" | /bin/grep -c '2/4')" "0" "a narrow git row drops the stage"
-label="${row2#*$'\e[4m'}"; label="${label%%$'\e[24m'*}"
-assert_eq "$(printf '%s\n' "$label" | /bin/grep -cE '^(add-groups|ad.*\.\.\..*s)$')" "1" "a narrow git row keeps the name, whole or cut with ..."
-assert_eq "$row2" "🌿 main | $link" "the stage drops before any name is cut"
-# At 24 columns the names miss the floor even without the stage
-# (24 - 4 - 7 - 2 = 11 < 14), so the last step cuts both to a common cap
-# of 7 (4 + 7 = 11), the work name among them.
-out="$(statusline "$HW" 24 "$(payload "$R" e2e1 "$et")")"
-assert_eq "$(sed -n 2p <<< "$out")" "🌿 main | $(work_link 'ad...ps')" "the work name shares the cap of the minimum step"
+work_rows "in a repository" "$R" 200 e2e1 "$et"
+assert_eq "$WORK_ROW" "$link · 2/4" "the work row is the change's file link labelled with its name, its stage after it"
 
-# Outside a repository the segment ends row 1, and there is no git row.
+# The work row's fixed cells are "📋 " (3) and " · 2/4" (6), 9 in all, and
+# fit_names charges the name one more cell, so 24 columns leave
+# 24 - 4 (LINE_RESERVE) - 9 - 1 = 10 cells: the floor of 10, and all of
+# "add-groups". The stage stays.
+work_rows "24 columns" "$R" 24 e2e1 "$et"
+assert_eq "$WORK_ROW" "$link · 2/4" "at 24 columns the name and the stage fit"
+# One column less, the stage cannot stay. Dropping it gives back 6 cells,
+# 23 - 4 - 3 - 1 = 15, so the name stays whole.
+work_rows "23 columns" "$R" 23 e2e1 "$et"
+assert_eq "$WORK_ROW" "$link" "the stage drops before the name is cut"
+# At 16 columns 16 - 4 - 3 - 1 = 8 cells are left without the stage, under
+# the floor, so the last step cuts the name to 8 from the middle.
+work_rows "16 columns" "$R" 16 e2e1 "$et"
+assert_eq "$WORK_ROW" "$(work_link 'add...ps')" "the name is cut from the middle once the stage is gone"
+
+# Outside a repository there is no git row, so the work row follows row 1.
+# The row has a budget of its own: at 76 columns, too narrow for row 1 to
+# show the fixture's folder whole, the work row is unchanged.
 NR="$(mktemp -d -p "$TMPROOT")"
-out="$(statusline "$HW" 200 "$(payload "$NR" e2e1 "$et")")"
-assert_contains "$(head -1 <<< "$out")" " | $link · 2/4" "outside a repository the segment is on the first line"
-assert_eq "$(wc -l <<< "$out")" "2" "outside a repository there is no git row"
-# Row 1 drops the stage first too. Its fixed cells in a UTF-8 locale are
-# the badge "[👤 not logged in]" and its space (19), "[Model]" (7),
-# " | 📁" (5), " | 🎨 null" (10), " | 📋" (5) and " · 2/4" (6), 52 in all,
-# so 76 columns leave 76 - 4 - 52 - 2 = 18 cells for the folder and the
-# work name, short of the 20 they need at the floor; the stage is kept
-# from 78 columns up. Without it 24 cells are left and the name stays
-# whole. (A C locale counts the emoji as four characters; the run holds.)
-out="$(statusline "$HW" 76 "$(payload "$NR" e2e1 "$et")")"
-row1="$(head -1 <<< "$out")"
-assert_eq "$(printf '%s\n' "$row1" | /bin/grep -c '2/4')" "0" "a narrow row 1 drops the stage"
-assert_eq "${row1##*" | "}" "$link" "the stage drops before the name on row 1 is cut"
+work_rows "outside a repository" "$NR" 200 e2e1 "$et"
+assert_eq "$WORK_ROW" "$link · 2/4" "outside a repository the work row is the same"
+assert_eq "$(statusline "$HW" 200 "$(payload "$NR" e2e1 "$et")" | wc -l)" "3" "outside a repository the work row is the second of three lines"
+work_rows "outside a repository at 76 columns" "$NR" 76 e2e1 "$et"
+assert_eq "$WORK_ROW" "$link · 2/4" "the work row's budget does not depend on row 1"
 
 # Anything but one well-formed line on a zero exit leaves the rows as they
 # are with no helper at all; the same line from a stub that exits 0 renders
@@ -666,8 +672,8 @@ mk_stub() { # status line...: a helper stub that prints the lines and exits with
 stub_rows() { # status line...: the rows rendered with a stub as the helper
     statusline "$(mk_home "$(mk_stub "$@")")" 200 "$(payload "$R" e2e1 "$et")"
 }
-none="$(statusline "$(mk_home "")" 200 "$(payload "$R" e2e1 "$et")")"
-assert_eq "$(printf '%s\n' "$none" | /bin/grep -c '📋')" "0" "no helper, no segment"
+none="$(statusline "$H0" 200 "$(payload "$R" e2e1 "$et")")"
+assert_eq "$(printf '%s\n' "$none" | /bin/grep -c '📋')" "0" "no helper, no work row"
 good=$'change\tadd-groups\t'"$tasks"$'\t2/4'
 assert_eq "$(stub_rows 0 "$good")" "$(statusline "$HW" 200 "$(payload "$R" e2e1 "$et")")" "a stub's well-formed line renders as the helper's"
 assert_eq "$(stub_rows 0 garbage)" "$none" "a garbage helper line renders as no helper"
@@ -678,16 +684,15 @@ assert_eq "$(stub_rows 0 $'change\tadd\\groups\t'"$tasks"$'\t')" "$none" "a back
 assert_eq "$(stub_rows 0 $'change\tadd-groups\t'"$R"$'/caf\xc3\xa9.md\t')" "$none" "a letter outside ASCII in the path renders as no helper"
 assert_eq "$(stub_rows 0 "$good"$'\e[31m')" "$none" "an escape in the stage renders as no helper"
 
-# The stage reaches the terminal as written on either row: a backslash
-# sequence in it is not read as an escape (echo -e would stop the row at \c).
+# The stage reaches the terminal as written: a backslash sequence in it is
+# not read as an escape (echo -e would stop the row at \c and swallow its
+# newline, so the usage bar row would join it).
 mk_ws backslash progress.md '# SDD ledger: change add-groups (openspec/changes/add-groups/tasks.md)'
 printf '%s\n' 'Section 1: complete \c tail' >> "$R/.superpowers/sdd/backslash/progress.md"
 bt="$(mktemp -p "$TMPROOT")"
 mk_record Agent prompt 'Read .superpowers/sdd/backslash/progress.md first' "$R" > "$bt"
-out="$(statusline "$HW" 200 "$(payload "$R" e2e2 "$bt")")"
-assert_eq "$(sed -n 2p <<< "$out")" "🌿 main | $link"' · Section 1 complete \c tail' "a backslash in the stage is printed literally on the git row"
-out="$(statusline "$HW" 200 "$(payload "$NR" e2e2 "$bt")")"
-assert_contains "$(head -1 <<< "$out")" " | $link"' · Section 1 complete \c tail' "a backslash in the stage is printed literally on row 1"
+work_rows "a backslash in the stage" "$R" 200 e2e2 "$bt"
+assert_eq "$WORK_ROW" "$link"' · Section 1 complete \c tail' "a backslash in the stage is printed literally"
 
 # Final review I1: one record naming a subject and its workspace. An apply
 # loop's dispatch prompt names both, often the plan or change last, so that
