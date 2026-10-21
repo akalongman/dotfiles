@@ -266,7 +266,7 @@ if [ "$IN_REPO" = 1 ]; then
     REPO_NAME="$REPO_PATH"
     ROW2_FIXED=2                                                # "🌿"
     [ "$IN_WORKTREE" = 1 ] && ROW2_FIXED=$(( ROW2_FIXED + 5 ))  # " | 🌳"
-    [ -n "$REPO_ICON" ] && ROW2_FIXED=$(( ROW2_FIXED + 5 ))     # " | 🐙"
+    [ -n "$REPO_ICON" ] && ROW2_FIXED=$(( ROW2_FIXED + 5 ))     # "🐙 | " ahead of the branch
 
     # When the floor does not fit, the repo falls back to its icon (which then
     # carries the link), after that the worktree loses its name, and what
@@ -276,7 +276,21 @@ if [ "$IN_REPO" = 1 ]; then
         || { WT_NAME=""; fit_names "$NAME_FLOOR" "$ROW2_FIXED" "$BRANCH_NAME"; } \
         || fit_names "$NAME_MIN" "$ROW2_FIXED" "$BRANCH_NAME"
 
-    ROW2="🌿"
+    # The repository leads the row, so the name that identifies the work is
+    # the first thing read; the branch and the worktree follow it. The repo
+    # link is the row's only OSC 8 link; when its name is cut to the icon, the
+    # icon carries the link (anthropics/claude-code#26356 for the BEL form).
+    ROW2=""
+    if [ -n "$REPO_ICON" ]; then
+        if [ -n "$REPO_NAME" ]; then
+            shorten "$REPO_NAME" "$NAME_CAP"
+            ROW2+="${REPO_ICON} \033]8;;${REMOTE}\a\033[4m${REPLY}\033[24m\033]8;;\a | "
+        else
+            ROW2+="\033]8;;${REMOTE}\a${REPO_ICON}\033]8;;\a | "
+        fi
+    fi
+
+    ROW2+="🌿"
     if [ -n "$BRANCH_NAME" ]; then
         shorten "$BRANCH_NAME" "$NAME_CAP"
         ROW2+=" ${REPLY}"
@@ -287,18 +301,6 @@ if [ "$IN_REPO" = 1 ]; then
         if [ -n "$WT_NAME" ]; then
             shorten "$WT_NAME" "$NAME_CAP"
             ROW2+=" ${REPLY}"
-        fi
-    fi
-
-    # Second OSC 8 link; the folder link is emitted first, so it survives renderers
-    # that keep only the first hyperlink, and the short label still auto-linkifies as
-    # a fallback (anthropics/claude-code#26356).
-    if [ -n "$REPO_ICON" ]; then
-        if [ -n "$REPO_NAME" ]; then
-            shorten "$REPO_NAME" "$NAME_CAP"
-            ROW2+=" | ${REPO_ICON} \033]8;;${REMOTE}\a\033[4m${REPLY}\033[24m\033]8;;\a"
-        else
-            ROW2+=" | \033]8;;${REMOTE}\a${REPO_ICON}\033]8;;\a"
         fi
     fi
 
