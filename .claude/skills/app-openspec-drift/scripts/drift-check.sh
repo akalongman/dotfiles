@@ -11,17 +11,20 @@
 #   drift-check.sh --upstream  the block-and-template report of the
 #                              canonical against upstream spec-driven
 #
-# The status of a copy:
+# The status of a copy, decided in this order and by content, the copy's
+# SOURCE left out:
 #   upstream spec-driven  the repository uses the schema OpenSpec ships
 #   missing copy          openspec/schemas/<schema>/ is absent
 #   legacy copy           the copy has no SOURCE naming a commit
-#   unknown commit        the canonical clone does not hold that commit
-#   locally modified      the copy differs from the tree that commit holds
-#   in sync               the copy is that tree and the commit is HEAD
-#   behind canonical      the copy is that tree, an ancestor of HEAD
-#   ahead of canonical    the copy is that tree, not an ancestor of HEAD
 #   no canonical          the canonical directory does not resolve to a
 #                         git clone
+#   in sync               the copy is the tree the clone's HEAD holds,
+#                         whatever commit SOURCE names
+#   unknown commit        the canonical clone does not hold the commit
+#                         SOURCE names
+#   behind canonical      the copy is the tree that commit holds, which
+#                         differs from HEAD's
+#   locally modified      the copy differs from both
 #
 # Read-only, and always exit 0: it writes only its own temporary directory,
 # runs no git command in a repository it checks, and runs only reading ones
@@ -278,9 +281,12 @@ print_capped() { # file
 # The status of <repo>'s schema copy, one line on stdout. The capped diff of
 # a locally modified copy goes to <difffile>, which is left empty otherwise.
 # The states decided from the repository alone come first, so they print
-# whatever the canonical's state. Always status 0.
+# whatever the canonical's state. The rest compare content, never commits:
+# a copy that is HEAD's tree is in sync whatever its SOURCE names, so a
+# canonical commit outside the schema path changes no status. Always
+# status 0.
 repo_status() { # repo difffile
-    local schema dir commit short full vdir
+    local schema dir commit short full vdir head hdir
     : > "$2"
     schema="$(top_value "$1/openspec/config.yaml" schema)"
     schema="${schema:-spec-driven}"
@@ -305,6 +311,15 @@ repo_status() { # repo difffile
         echo "$NO_CANONICAL"
         return 0
     fi
+    head="${CANON_HEAD:0:7}"
+    if ! hdir="$(vendored_tree "$CANON_HEAD")"; then
+        echo "cannot read canonical $head from the canonical clone"
+        return 0
+    fi
+    if copy_diff "$hdir" "$dir" "$head" "$schema" /dev/null; then
+        echo "in sync"
+        return 0
+    fi
     short="${commit:0:7}"
     if ! full="$(git -C "$CANON_TOP" rev-parse --verify --quiet "$commit^{commit}" 2>/dev/null)"; then
         echo "unknown commit (vendored $short is not in the canonical clone)"
@@ -315,18 +330,12 @@ repo_status() { # repo difffile
         echo "cannot read vendored $short from the canonical clone"
         return 0
     fi
-    if ! copy_diff "$vdir" "$dir" "$short" "$schema" "$TMPDIR_DRIFT/full-diff"; then
-        echo "locally modified (differs from vendored $short; diff below)"
-        print_capped "$TMPDIR_DRIFT/full-diff" > "$2"
+    if copy_diff "$vdir" "$dir" "$short" "$schema" "$TMPDIR_DRIFT/full-diff"; then
+        echo "behind canonical (vendored $short, canonical $head)"
         return 0
     fi
-    if [ "$full" = "$CANON_HEAD" ]; then
-        echo "in sync"
-    elif git -C "$CANON_TOP" merge-base --is-ancestor "$full" "$CANON_HEAD" 2>/dev/null; then
-        echo "behind canonical (vendored $short, canonical ${CANON_HEAD:0:7})"
-    else
-        echo "ahead of canonical (vendored $short, canonical ${CANON_HEAD:0:7}; update the canonical clone)"
-    fi
+    echo "locally modified (differs from vendored $short; diff below)"
+    print_capped "$TMPDIR_DRIFT/full-diff" > "$2"
     return 0
 }
 

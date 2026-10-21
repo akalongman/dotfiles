@@ -128,6 +128,15 @@ export OPENSPEC_CANONICAL_DIR="$ROOT/link"
 git clone -q "$ROOT/canon" "$ROOT/canon-old"
 git -C "$ROOT/canon-old" reset -q --hard "$V1FULL"
 
+# A third clone one commit past v2 that adds only a README, outside the
+# schema path, so its HEAD holds v2's schema tree.
+git clone -q "$ROOT/canon" "$ROOT/canon-readme"
+git -C "$ROOT/canon-readme" config user.email t@t.t
+git -C "$ROOT/canon-readme" config user.name t
+git -C "$ROOT/canon-readme" config commit.gpgsign false
+printf 'readme\n' > "$ROOT/canon-readme/README.md"
+git -C "$ROOT/canon-readme" add -- README.md && git -C "$ROOT/canon-readme" commit -qm readme
+
 # --- The five fixture repositories of the fleet ---
 
 SYNC="$ROOT/projects/acme/sync"
@@ -204,8 +213,9 @@ assert_eq "$(bash "$DC" "$MISSING")" "acme/missing  missing copy" "missing copy"
 assert_eq "$(bash "$DC" "$NOSCHEMA")" "acme/noschema  upstream spec-driven (no copy; the recipe switches it)" "no schema line reads upstream"
 assert_eq "$(bash "$DC" "$BADCOMMIT")" "acme/badcommit  legacy copy (no SOURCE; run openspec-fleet schema-sync)" "malformed commit line reads legacy"
 assert_eq "$(bash "$DC" "$UNKNOWN")" "acme/unknown  unknown commit (vendored aaaaaaa is not in the canonical clone)" "unknown commit"
-assert_eq "$(OPENSPEC_CANONICAL_DIR=$ROOT/canon-old/schemas/spec-driven-longish bash "$DC" "$SYNC")" "acme/sync  ahead of canonical (vendored $V2, canonical $V1; update the canonical clone)" "ahead of canonical"
+assert_eq "$(OPENSPEC_CANONICAL_DIR=$ROOT/canon-old/schemas/spec-driven-longish bash "$DC" "$SYNC")" "acme/sync  behind canonical (vendored $V2, canonical $V1)" "a copy vendored from a newer canonical reads behind"
 assert_eq "$(OPENSPEC_CANONICAL_DIR=$ROOT/canon-old/schemas/spec-driven-longish bash "$DC" "$BEHIND")" "acme/behind  in sync" "in sync with an older clone"
+assert_eq "$(OPENSPEC_CANONICAL_DIR=$ROOT/canon-readme/schemas/spec-driven-longish bash "$DC" "$SYNC")" "acme/sync  in sync" "in sync when the canonical moved only outside the schema path"
 out="$(bash "$DC" "$BIG")"
 assert_contains "$out" "[... 26 more lines truncated]" "diff capped at 40 lines with the note"
 assert_eq "$(printf '%s\n' "$out" | wc -l)" "42" "status line, 40 diff lines, the note"
