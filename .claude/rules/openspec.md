@@ -37,7 +37,7 @@ CLAUDE.md is a thin orientation layer, not a rule encyclopedia. Most rule detail
 **Moves to a capability spec:**
 
 - Rule narratives with their own enforcement story (CI gate, runtime error, code review focus).
-- Multi-rule clusters with worked examples (e.g. "API resources" covering attributes-vs-relationships, includeXxx pattern, threading context, named-arg gotcha — all in one spec).
+- Multi-rule clusters with worked examples (e.g. "API resources" covering attributes-vs-relationships, includeXxx pattern, threading context, named-arg gotcha, all in one spec).
 - Gotchas with WHY explanations (YAML colon-space mapping error, lodash named-arg dispatch, silent failure modes).
 - Verification protocols (e.g. "run `composer docs` and treat as blocking").
 - Anything that needs WHEN/THEN scenarios to fully describe the contract.
@@ -57,7 +57,7 @@ For canonical detail, read the cited capability spec under `openspec/specs/<name
 
 "Where" is the capability name from the map in `openspec/config.yaml`, marked "no spec yet" when that capability has no `spec.md` so far. A row exists because there is a rule, not because there is a file. The rule column stays under about 40 words and must be self-contained enough that a reader who never opens the spec still grasps the headline rule. The spec carries the detail, scenarios, and rationale. The `app-compact-constitution` skill audits and maintains this table.
 
-**Extracting existing inline convention is fine.** The "do not stub empty specs" rule (in Bootstrapping below) is specifically about empty stubs that force artificial `ADDED Requirements` deltas. Extracting an existing body of inline CLAUDE.md convention into a born-populated spec is a real change with real content — run a normal `/opsx:propose` → `/opsx:apply` → `/opsx:archive` cycle for the extraction. If you find yourself about to add 5+ lines of rule detail to CLAUDE.md, that's a signal to extract instead: add a row to the dictionary table and put the detail in a new (or existing) spec.
+**Extracting existing inline convention is fine.** The "do not stub empty specs" rule (in Bootstrapping below) is specifically about empty stubs that force artificial `ADDED Requirements` deltas. Extracting an existing body of inline CLAUDE.md convention into a born-populated spec is a real change with real content: run a normal `/opsx:propose` → `/opsx:apply` → `/opsx:archive` cycle for the extraction. If you find yourself about to add 5+ lines of rule detail to CLAUDE.md, that's a signal to extract instead: add a row to the dictionary table and put the detail in a new (or existing) spec.
 
 ## What belongs in `openspec/config.yaml`
 
@@ -72,7 +72,7 @@ Keep the file minimal and OpenSpec-native. Include only:
 Example shape:
 
 ```yaml
-schema: spec-driven
+schema: spec-driven-longish
 
 context: |
   # Constitution
@@ -113,7 +113,7 @@ When setting up OpenSpec in a new or existing project:
 
 1. Confirm `CLAUDE.md` exists and contains the constitution. If missing, build it first; OpenSpec on top of a blank CLAUDE.md gives poor proposals.
 2. Derive the capability map by scanning the codebase (models, controllers, integrations, admin resources). Consolidate into coarse-grained capabilities (kebab-case, typically 10 to 20 per project). Do not over-fragment.
-3. Write `openspec/config.yaml` following the shape above. Reference CLAUDE.md as the constitution. Do not duplicate its content.
+3. Write `openspec/config.yaml` following the shape above, with `schema: spec-driven-longish`. Reference CLAUDE.md as the constitution. Do not duplicate its content. Then vendor the canonical schema with `openspec-fleet schema-sync <repo>`, which copies it into `openspec/schemas/spec-driven-longish/` and writes a `SOURCE` file naming the commit. Never replace or edit that copy by hand; project-specific instruction lines go in `config.yaml`: `rules:` per artifact, `operations.apply.guidance` for the apply phase.
 4. Add a "Spec-driven development" section to `CLAUDE.md` with this structure:
 
    ```markdown
@@ -129,8 +129,7 @@ When setting up OpenSpec in a new or existing project:
 ## Working inside an OpenSpec project
 
 - Prefer placing new requirements under an existing capability from the map. Justify in the proposal when creating a new capability.
-- Scenarios use `#### Scenario:` (exactly four hashtags) with `WHEN`/`THEN` lines. Three hashtags fail silently.
-- Use `SHALL` / `MUST` for normative requirements. Avoid `should` / `may`.
+- Requirement descriptions stay at 500 characters or fewer; `openspec validate --specs --strict` fails a longer one, and so does the project's `specs:lint` gate where it runs that validation.
 - When a change touches an external integration, pair the wrapper task with a matching `.http` request file under `docs/http/` if the project uses that pattern.
 - When spec implemented, suggest a commit message.
 
@@ -157,6 +156,7 @@ The `/opsx:*` and `/openspec-*` commands are discrete, user-invoked checkpoints,
 - After `/opsx:propose` completes, hand control back to the user (the propose flow itself ends by telling the user to run `/opsx:apply`). Do not self-invoke `/opsx:apply` or `/opsx:archive`, and do not start coding, on your own initiative.
 - "Use the OpenSpec flow" (and equivalents like "follow the openspec process", "do this via openspec") means follow the gated workflow **including its stops**. It is not authorization to run `propose → apply → archive` autonomously in one turn.
 - The only ways past a gate are: the user explicitly invokes that phase's command, or the user explicitly mandates autonomous continuation in the same instruction (e.g. "propose then apply without stopping"). Inferring "they probably want me to continue" from context is a violation.
+- When handing control back at a gate, write the next command with the change name, `/opsx:apply <change-name>` or `/opsx:archive <change-name>`, never a bare `/opsx:apply`, so the user can paste it and two active changes cannot be confused (2026-10-19, a change).
 
 ### Why
 
@@ -168,30 +168,16 @@ Merging (or arming merge-when-pipeline-succeeds / auto-merge on) an MR that impl
 
 Before merging an MR (or arming auto-merge) that corresponds to an OpenSpec change, verify the change has been archived: its directory has moved to `openspec/changes/archive/<date>-<name>/` and its spec deltas are folded into `openspec/specs/`. If the change is still active in `openspec/changes/`, stop and warn the user before proceeding, recommending that `/opsx:archive` run and the archive be committed into the MR first, so the merged branch's specs match its code. Do not merge until the archive is committed. Where the project's own OpenSpec workflow requires archive-before-merge, a remaining post-merge task is moved to the merge request description's `### Post-merge checks` checklist by a pre-merge task, and then the change is archived.
 
-## /opsx:propose and /openspec-propose: always interview first
+## The schema is the source of truth for artifact content
 
-When the user invokes `/opsx:propose` or `/openspec-propose`, run a clarification interview before generating any proposal artifacts (proposal.md, design.md, tasks.md, specs/). "The request seems clear" is not a valid reason to skip; clarity is what the interview proves, not what you assume.
+The schema's instructions define the propose interview, what each artifact contains and the tasks table shown after propose. Follow them, not a copy here. The repository's vendored copy is `openspec/schemas/spec-driven-longish/`; the canonical is `schemas/spec-driven-longish/` in `akalongman/openspec-schemas`.
 
-### Protocol
+The user saying "skip the interview" in the message that invokes `/opsx:propose` or `/openspec-propose` is the only bypass of the interview.
 
-1. Pause before touching any files.
-2. Ask the user clarifying questions. Where a question maps to a small set of discrete options, present them as a multiple-choice list so the user can pick rather than write open prose. Group related questions into a single round of roughly 4 at a time to minimize back and forth; append genuinely open-ended questions as plain prose alongside the multiple-choice block.
-3. Cover, at minimum, all four of these dimensions:
-   - **Scope**: what is explicitly in, what is explicitly out.
-   - **Capability placement**: which existing capability from the project's capability map owns the new requirements, or a justification for adding a new capability.
-   - **Acceptance criteria**: what observable behavior or test outcome proves the change is complete.
-   - **Constraints and non-functionals**: performance budgets, backward-compatibility requirements, security implications, migration concerns.
-4. After the user answers, proceed with proposal artifact generation. If the answers reveal new ambiguity, run a follow-up round using the same multiple-choice-where-possible discipline.
-5. The only way to bypass this rule is for the user to explicitly say "skip the interview" in the same message that invokes propose. Inferring "the user probably wants me to skip" from context is a violation.
+Fallback for a repository whose `openspec/config.yaml` still declares upstream `spec-driven` (no `schema:` line also means `spec-driven`); delete this fallback once no repository declares that schema:
 
-### Why
-
-`/opsx:propose` generates multiple coupled artifacts in one step. Drafting them on incomplete or assumed requirements produces a proposal that looks finished but encodes the wrong scope, lands in the wrong capability, or lacks acceptance criteria. Catching these in the interview takes minutes; catching them after the fact requires unwinding the proposal and any implementation that followed.
-
-## After /opsx:propose completes: show the tasks list
-
-When `/opsx:propose` or `/openspec-propose` finishes generating the artifacts and the change validates, always display the generated `tasks.md` (the numbered, checkbox implementation steps) to the user before handing control back at the propose to apply gate. Show the steps verbatim or near verbatim, not merely a task count or a one line summary.
-
-### Why
-
-The propose to apply gate is a review point. The tasks list is the most concrete preview of what `/opsx:apply` will actually do, so surfacing it lets the user catch a mis-scoped or mis-ordered step before any code is written, without having to open the file themselves.
+- Interview before writing any artifact, covering scope, capability placement, acceptance criteria, and constraints / non-functionals.
+- Present multiple choice wherever a question has discrete options.
+- Ask about four questions a round.
+- Run further rounds until no ambiguity is left.
+- After propose, show the generated `tasks.md` steps verbatim (not a count or a one-line summary) before handing control back.
