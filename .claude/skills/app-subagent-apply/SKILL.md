@@ -6,7 +6,7 @@ user-invocable: true
 
 # Implementing through subagents
 
-**REQUIRED SUB-SKILL:** superpowers:subagent-driven-development defines the loop (dispatch, task review, fix rounds, ledger, final review), tested against superpowers 6.4.1; invoke it once at launch for the pre-flight scan and its scripts. This session is the driver and never runs the loop itself: each unit runs inside one `app-sdd-unit-controller` subagent (definition in `~/.claude/agents/`, the loop preloaded), which dispatches the implementer and reviewers one layer down under `prompts/unit-controller-overrides.md`, passed by path. This skill adds the source adapter, this machine's constraints, the driver loop and the hands-off ending.
+**REQUIRED SUB-SKILL:** superpowers:subagent-driven-development defines the loop (dispatch, task review, fix rounds, ledger, final review), tested against superpowers 7.0.0; invoke it once at launch for the pre-flight scan and its scripts. This session is the driver and never runs the loop itself: each unit runs inside one `app-sdd-unit-controller` subagent (definition in `~/.claude/agents/`, the loop preloaded), which dispatches the implementer and reviewers one layer down under `prompts/unit-controller-overrides.md`, passed by path. This skill adds the source adapter, this machine's constraints, the driver loop and the hands-off ending.
 
 **Input:** `$ARGUMENTS` is an OpenSpec change name, a plan file path, a PRD or spec path, or empty (infer from the conversation; several candidates: AskUserQuestion), optionally followed by `step` or `hands-off`, `isolated`, and `tier=<alias>`. Announce "Using source: <name>" and the options given.
 
@@ -32,7 +32,7 @@ user-invocable: true
 
 ## Driver loop
 
-Pre-flight once: if this session already holds a drafting conversation about the source, say that the run will re-read it on every driver turn and that a fresh session avoids it, then continue; read the installed sub-skill's version directory under the plugin cache, ledger `Sub-skill: <version>`, print one warning line if it is not 6.4.1; then the sub-skill's scan of the whole source, rulings into `<ws>/decisions.md`, and for every unit the earlier units it needs (an interface, a migration, a file they create) as `Section N depends on: <units or none>` lines there. Then for each unit in order:
+Pre-flight once: if this session already holds a drafting conversation about the source, say that the run will re-read it on every driver turn and that a fresh session avoids it, then continue; read the installed sub-skill's version directory under the plugin cache, ledger `Sub-skill: <version>`, print one warning line if it is not 7.0.0; then the sub-skill's scan of the whole source, rulings into `<ws>/decisions.md`, and for every unit the earlier units it needs (an interface, a migration, a file they create) as `Section N depends on: <units or none>` lines there. Then for each unit in order:
 
 1. If a unit it depends on is parked, ledger `Section N: blocked by parked Section M` and take the next unit; nothing is dispatched. Otherwise write the brief with the source's script. Ledger `Section N: handed to controller`.
 2. Dispatch `app-sdd-unit-controller` on the tier of item 3 with paths only: the brief, `<ws>/section-N-report.md`, `<ws>/section-N-review.md`, `<ws>/progress.md`, `<ws>/decisions.md`, this skill's `prompts/unit-controller-overrides.md`, the source's tick command, and the line `Mode: hands-off` when given. Then end the turn: its hand-back re-invokes you; never poll for it.

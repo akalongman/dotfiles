@@ -39,7 +39,10 @@ fi
   echo "Session: $transcript"
   echo "Repository: $(pwd) on $branch at $sha, remote host ${host:-none}"
   echo "Skill: SKILL.md $(h "$skill_dir/SKILL.md"), unit-controller-overrides.md $(h "$skill_dir/prompts/unit-controller-overrides.md")"
-  echo "Sub-skill: $(ls -1 "$config/plugins/cache/claude-plugins-official/superpowers/" 2>/dev/null | sort -V | tail -1)"
+  # The ledger's lines: the pre-flight read the copy the run loaded, and a
+  # resumed run may ledger a second one.
+  sub="$(grep '^Sub-skill:' "$ws/progress.md" 2>/dev/null || true)"
+  echo "${sub:-Sub-skill: not ledgered}"
   echo "Workspace: $ws"
 } > "$dest/run-facts.md"
 echo "$dest"
