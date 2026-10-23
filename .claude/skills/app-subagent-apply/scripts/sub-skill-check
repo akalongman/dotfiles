@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Print one line naming the superpowers subagent-driven-development copy a
+# run loads: its version, a hash of the loop's files, and whether that hash
+# is the verified pin. The loop's files are every regular file under the
+# sub-skill directory plus ../requesting-code-review/code-reviewer.md. The
+# hash is sha256 over their paths, relative to the sub-skill directory's
+# parent, and their contents, in C-locale path order, cut to 12 hex digits;
+# where the copy lives does not change it.
+#
+# Usage: sub-skill-check [SKILL_DIR]
+#        sub-skill-check --dir
+#   SKILL_DIR  the sub-skill's base directory as the invocation printed it;
+#              default: the user-scope install path of
+#              superpowers@superpowers-marketplace in
+#              ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json
+#              plus skills/subagent-driven-development
+#   --dir      print that default directory instead
+# Prints "Sub-skill: <version> loop <hash> verified", or
+# "Sub-skill: <version> loop <hash> unverified (verified: <version> <hash>)"
+# and a warning line naming the verified version; the version is "unknown"
+# without the plugin root's .claude-plugin/plugin.json. SUB_SKILL_VERIFIED,
+# "<version> <hash>", replaces the pin (for the test).
+# Exit 0 on either. Exit 2 with "Sub-skill: unknown (<reason>)" when the
+# directory is missing or unreadable or no install path is found; --dir
+# prints its reason on stderr. Exit 2 on usage.
+set -euo pipefail
+unset CDPATH
+
+# The verified copy. Written only after a copy passes the verification of
+# the 2026-10-23 sub-skill spec (claude-subagent-apply repository).
+verified_version=7.0.0
+verified_loop=daeb4f493ead
+if [ -n "${SUB_SKILL_VERIFIED:-}" ]; then
+  read -r verified_version verified_loop <<<"$SUB_SKILL_VERIFIED"
+fi
+
+reviewer=requesting-code-review/code-reviewer.md
+
+# Set dir to the installed copy's sub-skill directory, or reason and return 1.
+installed() {
+  local file path
+  file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"
+  [ -r "$file" ] || { reason="cannot read $file"; return 1; }
+  path=$(jq -r 'first(.plugins["superpowers@superpowers-marketplace"][]?
+    | select(.scope? == "user") | .installPath) // empty' "$file" 2>/dev/null) ||
+    { reason="cannot parse $file"; return 1; }
+  [ -n "$path" ] ||
+    { reason="no user-scope superpowers@superpowers-marketplace entry in $file"; return 1; }
+  dir="${path%/}/skills/subagent-driven-development"
+}
+
+# Print the loop's files under the current directory (the sub-skill
+# directory's parent), NUL-terminated; the caller sorts them.
+loop_files() {
+  find "$1" -type f -print0 || return 1
+  if [ -f "$reviewer" ]; then printf '%s\0' "$reviewer"; fi
+}
+
+# Write each file as its path, its size and its content, so that a renamed
+# file changes the stream as a changed byte does.
+loop_stream() {
+  local path size
+  while IFS= read -r -d '' path; do
+    size=$(wc -c <"$path") || return 1
+    printf '%s\0%s\0' "$path" "$size"
+    cat -- "$path" || return 1
+  done
+}
+
+unknown() {
+  echo "Sub-skill: unknown ($1)"
+  exit 2
+}
+
+case $# in
+  0) installed || unknown "$reason" ;;
+  1)
+    if [ "$1" = --dir ]; then
+      if ! installed; then echo "$reason" >&2; exit 2; fi
+      if [ ! -d "$dir" ]; then echo "no directory $dir" >&2; exit 2; fi
+      echo "$dir"
+      exit 0
+    fi
+    dir=$1
+    ;;
+  *) echo "usage: sub-skill-check [SKILL_DIR] | sub-skill-check --dir" >&2; exit 2 ;;
+esac
+
+[ -d "$dir" ] && [ -r "$dir" ] && [ -x "$dir" ] || unknown "not a readable directory: ${dir:-(empty argument)}"
+real=$(cd -P -- "$dir" && pwd)
+parent=$(dirname -- "$real")
+name=$(basename -- "$real")
+
+hash=$(cd -- "$parent" && loop_files "$name" | LC_ALL=C sort -z | loop_stream | sha256sum) ||
+  unknown "cannot read the loop's files under $real"
+hash=${hash:0:12}
+
+version=$(jq -r '.version // empty' "$(dirname -- "$parent")/.claude-plugin/plugin.json" 2>/dev/null) ||
+  version=
+version=${version:-unknown}
+
+if [ "$hash" = "$verified_loop" ]; then
+  echo "Sub-skill: $version loop $hash verified"
+else
+  echo "Sub-skill: $version loop $hash unverified (verified: $verified_version $verified_loop)"
+  echo "Warning: the loop's files differ from the copy verified with superpowers $verified_version; this run uses an unverified sub-skill."
+fi
