@@ -9,8 +9,8 @@ Every write sends its body from a JSON file under `$(git rev-parse --git-common-
 ### Metadata and head
 
 ```bash
-glab api "projects/<id>/merge_requests/<iid>"       # .sha (head), .source_branch, .target_branch, .diff_refs{base_sha,start_sha,head_sha}
-gh pr view <n> --repo <owner/repo> --json headRefName,headRefOid,baseRefName
+glab api "projects/<id>/merge_requests/<iid>"       # .sha (head), .source_branch, .target_branch, .diff_refs{base_sha,start_sha,head_sha}, .labels
+gh pr view <n> --repo <owner/repo> --json headRefName,headRefOid,baseRefName,labels
 ```
 
 ### Changed files
@@ -89,6 +89,21 @@ For an added line `new_path` + `new_line` suffice; for an unchanged context line
 gh api --method POST --input note.json "repos/<owner/repo>/pulls/<n>/comments"
 ```
 Multi-line: add `start_line` and `start_side`. `LEFT` is the old side. **Verify:** `.path` and `.line` match and `.position` is non-null (null means the line is outside every hunk; pick a changed line nearby). Delete with `DELETE repos/<owner/repo>/pulls/comments/<comment_id>`.
+
+## Remove the review-request label
+
+Take the exact label title from the metadata (`.labels` on GitLab, `labels[].name` on GitHub), matching `Ready for Review` case-insensitively, and skip an MR/PR that does not carry it.
+
+```bash
+# unlabel.json: {"remove_labels": "<exact label title>"}
+glab api --method PUT -H 'Content-Type: application/json' --input unlabel.json \
+  "projects/<id>/merge_requests/<iid>"
+# verify: the response .labels no longer contains the title
+
+gh api --method DELETE "repos/<owner/repo>/issues/<n>/labels/<url-encoded label name>"
+# verify: the response list has no entry whose .name is the label
+```
+On GitHub do not use `gh pr edit --remove-label`; `gh pr edit` fails on repos with classic project cards.
 
 ## MR/PR-level summary note
 

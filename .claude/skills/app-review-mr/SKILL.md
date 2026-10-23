@@ -1,6 +1,6 @@
 ---
 name: app-review-mr
-description: Use when asked to review one or more GitLab merge requests or GitHub pull requests (numbers, `!123`/`#123`, or URLs, possibly several at once), to check whether open review threads are already fixed, to resolve fixed threads, or to post review findings back as inline discussions.
+description: Use when asked to review one or more GitLab merge requests or GitHub pull requests (numbers, `!123`/`#123`, or URLs, possibly several at once), to check whether open review threads are already fixed, to resolve fixed threads, to post review findings back as inline discussions, or to remove the "Ready for Review" label once reviewed.
 user-invocable: true
 ---
 
@@ -19,6 +19,7 @@ Review every requested MR/PR from a full read of the changed files at the MR hea
 | `https://github.com/<owner>/<repo>/pull/<n>` | GitHub PR, repo from the URL |
 | `--resolve` | After the review, resolve every open thread judged FIXED (reply with evidence first) |
 | `--post` | After the review, post new findings as inline discussions |
+| `--unlabel` | After the review, remove the `Ready for Review` label (matched case-insensitively) from every reviewed MR/PR that carries it |
 
 Without a flag, nothing outward happens until the user answers the closing question (a numbered list, so they can reply "1. yes 2. no"). A flag is that answer given in advance.
 
@@ -26,7 +27,7 @@ Without a flag, nothing outward happens until the user answers the closing quest
 
 0. **Check the session is fresh.** A fork copies the whole conversation per MR. If this conversation already holds work beyond this skill's invocation (an earlier task, a planning discussion, another review), stop before fetching anything and say: "Each review fork would copy this session's context; run `/clear` and then `/app-review-mr <same arguments>`." Continue in the current session only when the user answers that they accept the cost.
 1. **Resolve references.** For each token build `{platform, repo, iid}`. Dedupe. Mixed repos are fine.
-2. **Fetch metadata per MR** (main session, serially): title, source branch, head SHA, `diff_refs` (GitLab), the changed-file list, and **every previous review**: MR-level notes (bot rounds included), GitHub review bodies, and every discussion thread, resolved or open, **with pagination** (`--paginate`; unpaginated reads stop at 20 and hide threads). Keep system notes out. GitLab: `bash <skill dir>/scripts/fetch-gitlab-mr.sh <encoded ns/repo> <scratch>/mr <iid>...` does all of it and writes `<iid>.reviews.txt`, the digest the brief points at. GitHub: the recipes in `api-recipes.md`, by hand.
+2. **Fetch metadata per MR** (main session, serially): title, source branch, head SHA, `diff_refs` (GitLab), labels, the changed-file list, and **every previous review**: MR-level notes (bot rounds included), GitHub review bodies, and every discussion thread, resolved or open, **with pagination** (`--paginate`; unpaginated reads stop at 20 and hide threads). Keep system notes out. GitLab: `bash <skill dir>/scripts/fetch-gitlab-mr.sh <encoded ns/repo> <scratch>/mr <iid>...` does all of it and writes `<iid>.reviews.txt`, the digest the brief points at. GitHub: the recipes in `api-recipes.md`, by hand.
 3. **Make one detached worktree per MR** under the scratchpad (else `mktemp -d`), from the forge's own head ref so fork MRs work and the user's working tree is never touched:
    ```bash
    git worktree prune
@@ -41,7 +42,8 @@ Without a flag, nothing outward happens until the user answers the closing quest
 7. **Close with the numbered question** unless the flags already answered it:
    1. Resolve the N FIXED threads on !A, !B (reply with the fixing SHA, then resolve)?
    2. Post the M new findings inline on !A, !B?
-8. **Act, then verify every call** per `api-recipes.md`: a reply note that landed, `resolved: true` on the discussion (GitLab) or `isResolved` (GitHub), a non-null `position` on each posted discussion. Stop at the first failed verification and report it; do not loop through a broken batch.
+   3. Remove the `Ready for Review` label from !A, !B? List only the MRs whose metadata carries it, and leave the item out when none does.
+8. **Act, then verify every call** per `api-recipes.md`: a reply note that landed, `resolved: true` on the discussion (GitLab) or `isResolved` (GitHub), a non-null `position` on each posted discussion, the label absent from the MR's labels afterwards. Remove the label last, after every reply, resolve and post has verified, so an MR leaves the review queue only once its review is on it. Stop at the first failed verification and report it; do not loop through a broken batch.
 
 ## Thread verdicts
 

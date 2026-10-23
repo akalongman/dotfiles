@@ -30,6 +30,7 @@ r = m["diff_refs"]
 print(f"!{iid} {m['state']} {m['source_branch']} -> {m['target_branch']} head={m['sha']}")
 print(f"  base={r['base_sha']} start={r['start_sha']} head={r['head_sha']}")
 print(f"  title: {m['title']}")
+print(f"  labels: {', '.join(m['labels']) or 'none'}")
 paths = [d["new_path"] for d in load_pages(f"{out}/{iid}.diffs.json")]
 print(f"  files ({len(paths)}):")
 for p in paths:
