@@ -108,7 +108,7 @@ __pycache__/
 .claude/skills/app-local-environment
 .claude/skills/app-ftp
 !.claude/hooks
-# scripts: the worktree orchestrator and its tests
+# scripts: the worktree orchestrator, the push guard and the tests
 !.claude/scripts
 .claude/scripts/*
 !.claude/scripts/worktree.sh
