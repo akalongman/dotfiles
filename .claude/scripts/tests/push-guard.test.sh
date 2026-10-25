@@ -44,6 +44,10 @@ run_hook Read 'git push --no-verify' "$root/home";          assert_eq "$RC" 0 "a
 ERR="$(printf 'not json' | PUSH_GUARD_REPO="$root/repo.git" bash "$ENGINE" hook 2>&1)"; assert_eq "$?" 0 "unparsable input passes"; assert_eq "$ERR" "" "and prints nothing"
 assert_fail "unknown subcommand exits nonzero" bash "$ENGINE" bogus
 
+# Tools (owner ruling): Monitor runs tool_input.command in a shell, as Bash does.
+run_hook Monitor 'git push --no-verify' "$root/home";       assert_eq "$RC" 2 "a Monitor command is checked like a Bash command"
+run_hook Grep 'git push --no-verify' "$root/home";          assert_eq "$RC" 0 "another tool with the same command passes"
+
 # The refusal contract: the exact push text, one line on stderr, nothing on stdout.
 run_hook Bash 'git push --no-verify' "$root/home"
 assert_eq "$ERR" "push-guard: a push of the public dotfiles with hooks disabled is refused; the pre-push guard is the publication check, fix the content and push without --no-verify (a push of another repository from this directory needs that repository as the working directory)" "the push refusal text is exact"
@@ -80,6 +84,20 @@ run_hook Bash "git --git-dir $root/rel/gitfile push --no-verify" "$other"; asser
 run_home Bash 'git --work-tree ~ push --no-verify' "$other"; assert_eq "$RC" 2 "--work-tree naming the public work tree is refused"
 run_home Bash 'GIT_WORK_TREE=$HOME git push --no-verify' "$other"; assert_eq "$RC" 2 "GIT_WORK_TREE naming the public work tree is refused"
 run_hook Bash "cd $TMPROOT/gone && git push --no-verify" "$other"; assert_eq "$RC" 0 "a cd to a missing directory passes"; assert_eq "$ERR" "" "and prints nothing"
+
+# Linked worktrees (owner ruling): a directory resolves to its common git dir, so
+# a linked worktree of the public repository is the public repository.
+git -C "$root/home" config user.email t@t.t; git -C "$root/home" config user.name t
+git -C "$root/home" config commit.gpgsign false   # global gpgsign=true would hang/fail in tests
+git -C "$root/home" commit -q --allow-empty -m init
+wt="$TMPROOT/wt";   git -C "$root/home" worktree add -q --detach "$wt"
+owt="$TMPROOT/owt"; git -C "$other" worktree add -q --detach "$owt"
+assert_contains "$(git -C "$wt" rev-parse --absolute-git-dir)" "/repo.git/worktrees/" "the fixture is a linked worktree"
+assert_file "$owt/.git" "the other repository has a linked worktree"
+run_hook Bash 'git push --no-verify' "$wt";                 assert_eq "$RC" 2 "a push from a linked worktree of the public repository is refused"
+run_hook Bash "git -C $wt push --no-verify" "$other";       assert_eq "$RC" 2 "-C naming a linked worktree of the public repository is refused"
+run_hook Bash "GIT_DIR=$wt/.git git push --no-verify" "$other"; assert_eq "$RC" 2 "a git dir naming a linked worktree's gitfile is refused"
+run_hook Bash 'git push --no-verify' "$owt";                assert_eq "$RC" 0 "a linked worktree of another repository passes"
 
 # The command is read, never run.
 marker="$TMPROOT/evaluated"
@@ -130,6 +148,20 @@ for r in '--get core.hooksPath' 'core.hooksPath' 'get core.hooksPath' '--get-all
     run_hook Bash "git config $r" "$root/home"; assert_eq "$RC" 0 "git config $r is a read"
 done
 run_hook Bash 'git config --list | grep -i core.hooksPath' "$root/home"; assert_eq "$RC" 0 "listing the config passes"
+
+# A redirection is not an argument (review I1): a read with a redirect stays a read.
+run_hook Bash 'git config core.hooksPath 2>/dev/null' "$root/home"; assert_eq "$RC" 0 "a bare-key read with 2>/dev/null passes"
+run_hook Bash 'git config --global core.hooksPath 2>/dev/null || echo unset' "$other"; assert_eq "$RC" 0 "a global bare-key read with 2>/dev/null passes"
+for r in 'core.hooksPath >/dev/null' 'core.hooksPath 2>&1' 'core.hooksPath &>/dev/null' 'core.hooksPath 2> /dev/null' \
+         'core.hooksPath <<<x' '--get core.hooksPath 2>/dev/null' '--get-all core.hooksPath >/dev/null 2>&1'; do
+    run_hook Bash "git config $r" "$root/home"; assert_eq "$RC" 0 "git config $r is a read"
+done
+run_hook Bash 'git config --global core.hooksPath /x 2>/dev/null' "$other"; assert_eq "$RC" 2 "a global write with a redirect is still refused"
+run_hook Bash 'git config core.hooksPath /x &>/dev/null' "$root/home"; assert_eq "$RC" 2 "a local write with &> is still refused"
+run_hook Bash 'git config core.hooksPath "7">/dev/null' "$root/home"; assert_eq "$RC" 2 "a quoted digit before > is a value, not an fd number"
+run_hook Bash 'git config core.hooksPath 2>&1 /x' "$root/home"; assert_eq "$RC" 2 "2>&1 does not end the command: a value after it is a write"
+run_hook Bash 'git config core.hooksPath &>/dev/null /x' "$root/home"; assert_eq "$RC" 2 "&> does not end the command: a value after it is a write"
+run_home Bash 'cd 2>/dev/null && git push --no-verify' "$other"; assert_eq "$RC" 2 "a bare cd with a redirect names the home directory"
 run_hook Bash 'git -c core.hooksPath=/dev/null commit -m x' "$root/home"; assert_eq "$RC" 0 "-c core.hooksPath on a command other than push passes"
 
 # Internal failures pass silently.

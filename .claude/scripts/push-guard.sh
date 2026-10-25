@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Second layer of the public dotfiles' publication check, run as a Claude Code
-# PreToolUse hook on the Bash tool (~/.claude/settings.json):
+# PreToolUse hook on the Bash and Monitor tools, which both run
+# tool_input.command in a shell (~/.claude/settings.json, matcher Bash|Monitor);
+# every other tool passes:
 #
 #   push-guard.sh hook    reads the hook JSON (tool_name, tool_input.command,
 #                         cwd) on stdin
@@ -30,8 +32,9 @@
 #                 a directory named after -C, cd, pushd, --work-tree or
 #                 GIT_WORK_TREE=; a git dir named after --git-dir or GIT_DIR=
 #                 (git follows a gitfile). A directory is public when
-#                 git -C <dir> rev-parse --absolute-git-dir resolves to
-#                 PUSH_GUARD_REPO.
+#                 git -C <dir> rev-parse --path-format=absolute --git-common-dir
+#                 resolves to PUSH_GUARD_REPO (git --git-dir=<dir> for a git
+#                 dir), so a linked worktree of the public repository counts.
 #   push refused  the word push (or git-push) and a bypass token anywhere in
 #                 the command, with a public target
 #   write refused git config (or yadm gitconfig) setting, adding, replacing or
@@ -48,8 +51,8 @@
 #     resolves to the public repository.
 #
 # Known gaps: a directory spelled another way ($PWD, $(...), a variable) is not
-# resolved. The shell parse is small (quotes, comments, operators, heredoc
-# bodies skipped); a command it cannot parse keeps only the yadm, repository
+# resolved. The shell parse is small (quotes, comments, operators,
+# redirections and heredoc bodies skipped); a command it cannot parse keeps only the yadm, repository
 # path and cwd checks, and a nested `sh -c '...'` string is one word.
 #
 # Environment: PUSH_GUARD_REPO, the public git dir (default
@@ -81,10 +84,27 @@ function add(ch) { if (wl++ < 4096) word = word ch; inword = 1 }
 function word_end() {
     if (inword) {
         if (wl > 4096) word = LONG
-        if (want) { delim[++nd] = word; strip[nd] = (want == 2); want = 0 }
+        if (want == 3) want = 0   # a redirection target is not an argument
+        else if (want) { delim[++nd] = word; strip[nd] = (want == 2); want = 0 }
         else W[++nw] = word
     }
-    word = ""; inword = 0; wl = 0
+    word = ""; inword = 0; wl = 0; wq = 0
+}
+
+# A redirection (< > >> <> >| <& >& &> &>> <<<) drops the unquoted fd number
+# before it (2>) and the word after it; << and <<- take a heredoc delimiter.
+function redirect(   nx) {
+    if (inword && !wq && word ~ /^[0-9]+$/) { word = ""; inword = 0; wl = 0 }
+    word_end()
+    if (c == "&") i++
+    if (substr(s, i, 2) == "<<" && substr(s, i + 2, 1) != "<") {
+        i++; want = 1
+        if (substr(s, i + 1, 1) == "-") { i++; want = 2 }
+        return
+    }
+    if (substr(s, i, 3) == "<<<") i += 2
+    else { nx = substr(s, i + 1, 1); if (nx != "" && index(">&|", nx)) i++ }
+    want = 3
 }
 function cmd_end() { word_end(); want = 0; W[++nw] = SEP }
 
@@ -109,18 +129,11 @@ function tokenize(   n) {
             } else add(c)
             continue
         }
-        if (c == SQ || c == DQ) { q = c; inword = 1; continue }
-        if (c == BS) { if (i < n) { i++; if (substr(s, i, 1) != "\n") add(substr(s, i, 1)) } continue }
+        if (c == SQ || c == DQ) { q = c; inword = 1; wq = 1; continue }
+        if (c == BS) { wq = 1; if (i < n) { i++; if (substr(s, i, 1) != "\n") add(substr(s, i, 1)) } continue }
         if (c == "#" && !inword) { while (i < n && substr(s, i + 1, 1) != "\n") i++; continue }
         if (c == " " || c == "\t") { word_end(); continue }
-        if (c == "<" || c == ">") {
-            word_end()
-            if (c == "<" && substr(s, i + 1, 1) == "<") {
-                if (substr(s, i + 2, 1) == "<") i += 2
-                else { i++; want = 1; if (substr(s, i + 1, 1) == "-") { i++; want = 2 } }
-            }
-            continue
-        }
+        if (c == "<" || c == ">" || (c == "&" && substr(s, i + 1, 1) == ">")) { redirect(); continue }
         if (index(";&|()\n", c)) {
             cmd_end()
             if (c == "\n" && nd) { inbody = 1; bk = 1; line = ""; ll = 0 }
@@ -222,15 +235,15 @@ pg_names_hookspath() { # text
 
 pg_has_bypass() { [[ $1 == *--no-veri* ]] || pg_names_hookspath "$1"; }
 
-pg_resolves_dir() { # dir: 0 when git finds the public git dir from it
+pg_resolves_dir() { # dir: 0 when its common git dir (shared by linked worktrees) is the public one
     local g
-    g="$(git -C "$1" rev-parse --absolute-git-dir)" || return 1
+    g="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir)" || return 1
     [ "$(realpath -m -- "$g")" = "$PG_REPO_REAL" ]
 }
 
-pg_resolves_gitdir() { # git dir value: git follows a gitfile; anything else is taken as is
+pg_resolves_gitdir() { # git dir value: its common git dir (git follows a gitfile), else the value
     local g
-    g="$(git --git-dir="$1" rev-parse --absolute-git-dir)" || g="$1"
+    g="$(git --git-dir="$1" rev-parse --path-format=absolute --git-common-dir)" || g="$1"
     [ "$(realpath -m -- "$g")" = "$PG_REPO_REAL" ]
 }
 
@@ -258,7 +271,7 @@ pg_hook() {
     pg_has_bypass "$input" || return 0
     command -v jq >/dev/null || return 0
     tool="$(jq -r '.tool_name // empty' <<<"$input")" || return 0
-    [ "$tool" = Bash ] || return 0
+    case $tool in Bash|Monitor) ;; *) return 0 ;; esac
     cmd="$(jq -r '.tool_input.command // empty' <<<"$input")" || return 0
     pg_has_bypass "$cmd" || return 0
     pg_has_word "$cmd" '(git-)?push' && push=1
