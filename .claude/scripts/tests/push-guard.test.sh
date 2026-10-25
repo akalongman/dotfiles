@@ -96,6 +96,8 @@ run_home Bash "git -C ~ push --no-verify 'unclosed" "$other"; assert_eq "$RC" 0 
 run_hook Bash 'git push --no-veri' "$root/home";            assert_eq "$RC" 2 "the abbreviation --no-veri is refused"
 run_hook Bash 'git push --no-verif' "$root/home";           assert_eq "$RC" 2 "the abbreviation --no-verif is refused"
 run_hook Bash 'git -c core.hookspath=/dev/null push' "$root/home"; assert_eq "$RC" 2 "core.hooksPath matches in any letter case"
+run_hook Bash 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git push' "$root/home"; assert_eq "$RC" 2 "core.hooksPath set through the config environment is refused"
+run_hook Bash 'git --config-env=core.hooksPath=HOOKS push' "$root/home"; assert_eq "$RC" 2 "core.hooksPath set through --config-env is refused"
 run_hook Bash '/usr/lib/git-core/git-push --no-verify' "$root/home"; assert_eq "$RC" 2 "the dashed git-push is a push"
 run_hook Bash 'git commit --no-verify -m "add push-guard"' "$root/home"; assert_eq "$RC" 0 "push inside a hyphenated word is not a push"
 
