@@ -112,6 +112,7 @@ __pycache__/
 !.claude/scripts
 .claude/scripts/*
 !.claude/scripts/worktree.sh
+!.claude/scripts/push-guard.sh
 !.claude/scripts/tests
 
 # ~/.opencode tree: nothing is tracked. opencode.json carries machine
