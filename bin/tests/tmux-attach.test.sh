@@ -52,10 +52,10 @@ trap teardown EXIT
 # unmanaged directory under ~ look like part of one repository), a private
 # dotfiles repository, and the project directories of the spec's key table.
 H="$T/home"
-mkdir -p "$H/projects/tsmu/iac/ansible" "$H/projects/personal/iac" \
-    "$H/projects/tsmu/tsmulms/.worktrees/feature-x" "$H/projects/tsmu/tsmulms/src" \
-    "$H/projects/oss/laravel/framework/src" "$H/projects/inex/inex-smpp" \
-    "$H/projects/longisoft" "$H/projects/longisoft/company" "$H/.dotfiles-private/machine" \
+mkdir -p "$H/projects/acme/iac/ansible" "$H/projects/personal/iac" \
+    "$H/projects/acme/widgets/.worktrees/feature-x" "$H/projects/acme/widgets/src" \
+    "$H/projects/oss/laravel/framework/src" "$H/projects/acme/acme-api" \
+    "$H/projects/globex" "$H/projects/globex/company" "$H/.dotfiles-private/machine" \
     "$H/Downloads" "$H/.claude" "$H/projects/personal/my_tool" \
     "$H/projects/personal/My Project" "$H/___"
 git -C "$H" init -q
@@ -91,43 +91,43 @@ n_tabs_n_windows() { # holder n
 # --- Task 1: the key
 key() { "$ATTACH" --key "$1"; }
 assert_eq "$(key "$H")" "main" "key: home is main"
-assert_eq "$(key "$H/projects/tsmu/iac/ansible")" "tsmu-iac" "key: org and project, subdirectory ignored"
+assert_eq "$(key "$H/projects/acme/iac/ansible")" "acme-iac" "key: org and project, subdirectory ignored"
 assert_eq "$(key "$H/projects/personal/iac")" "personal-iac" "key: same project name under another org"
-assert_eq "$(key "$H/projects/tsmu/tsmulms/.worktrees/feature-x")" "tsmu-tsmulms" "key: a worktree shares the project key"
+assert_eq "$(key "$H/projects/acme/widgets/.worktrees/feature-x")" "acme-widgets" "key: a worktree shares the project key"
 assert_eq "$(key "$H/projects/oss/laravel/framework/src")" "oss-laravel-framework" "key: three components under oss"
-assert_eq "$(key "$H/projects/inex/inex-smpp")" "inex-inex-smpp" "key: a repeated org name is kept"
-assert_eq "$(key "$H/projects/longisoft")" "longisoft" "key: an org directory falls through to its basename"
+assert_eq "$(key "$H/projects/acme/acme-api")" "acme-acme-api" "key: a repeated org name is kept"
+assert_eq "$(key "$H/projects/globex")" "globex" "key: an org directory falls through to its basename"
 assert_eq "$(key "$H/.dotfiles-private/machine")" "dotfiles-private" "key: git top level outside ~, leading dot dropped"
 assert_eq "$(key "$H/Downloads")" "Downloads" "key: the yadm gitlink does not make ~ the top level"
 assert_eq "$(key "$H/.claude")" "claude" "key: dotted directory under ~"
 assert_eq "$(key "$H/projects/personal/my_tool")" "personal-my-tool" "key: underscore becomes a dash"
 assert_eq "$(key "$H/projects/personal/My Project")" "personal-My-Project" "key: space becomes a dash, case kept"
-assert_eq "$(cd "$H/projects/tsmu/iac/ansible" && "$ATTACH" --key)" "tsmu-iac" "key: --key without a directory reads the current one"
+assert_eq "$(cd "$H/projects/acme/iac/ansible" && "$ATTACH" --key)" "acme-iac" "key: --key without a directory reads the current one"
 "$ATTACH" --key "$H/___" >/dev/null 2>&1; assert_eq "$?" "1" "key: a name of excluded characters only exits 1"
 assert_eq "$(key "$H/___" 2>/dev/null)" "" "key: the error prints nothing on stdout"
 "$ATTACH" --key "$H/gone" >/dev/null 2>&1; assert_eq "$?" "1" "key: a missing directory exits 1"
 
 # --- Task 2: first, second and third terminal
-P="$H/projects/tsmu/tsmulms"
+P="$H/projects/acme/widgets"
 tab "$P"
-assert_eq "$(attached tsmu-tsmulms)" "0" "first terminal: the holder stays unattached"
-v1=$(views_of tsmu-tsmulms)
+assert_eq "$(attached acme-widgets)" "0" "first terminal: the holder stays unattached"
+v1=$(views_of acme-widgets)
 assert_eq "$(printf '%s\n' "$v1" | grep -c .)" "1" "first terminal: one view"
-assert_eq "${v1%_*}" "tsmu-tsmulms" "first terminal: the view is named after the key"
+assert_eq "${v1%_*}" "acme-widgets" "first terminal: the view is named after the key"
 case "${v1##*_}" in ''|*[!0-9]*) assert_eq "${v1##*_}" "digits" "first terminal: the view suffix is a pid" ;; *) assert_eq 1 1 "first terminal: the view suffix is a pid" ;; esac
 assert_eq "$(attached "$v1")" "1" "first terminal: the view is attached"
 assert_eq "$(tmux show-option -t "=$v1:" -v destroy-unattached)" "on" "first terminal: the view destroys itself on detach"
 assert_eq "$(tmux show-option -t "=$v1:" -qv @view)" "1" "first terminal: the view carries the claim marker"
-assert_eq "$(window_of "$v1")" "$(tmux list-windows -t =tsmu-tsmulms -F '#{window_id}' | head -1)" "first terminal: the view shows the holder's first window"
+assert_eq "$(window_of "$v1")" "$(tmux list-windows -t =acme-widgets -F '#{window_id}' | head -1)" "first terminal: the view shows the holder's first window"
 assert_eq "$(path_of "$v1")" "$P" "first terminal: the holder's window is in the project directory"
-tmux new-window -d -t =tsmu-tsmulms: -c "$P"
+tmux new-window -d -t =acme-widgets: -c "$P"
 tab "$P"
-n_tabs_n_windows tsmu-tsmulms 2
-assert_eq "$(windows_of tsmu-tsmulms)" "2" "second terminal: the free window is reused, none added"
+n_tabs_n_windows acme-widgets 2
+assert_eq "$(windows_of acme-widgets)" "2" "second terminal: the free window is reused, none added"
 tab "$P/src"
-n_tabs_n_windows tsmu-tsmulms 3
-assert_eq "$(windows_of tsmu-tsmulms)" "3" "third terminal: no window was free, one was added"
-v3=$(views_of tsmu-tsmulms | tail -1)
+n_tabs_n_windows acme-widgets 3
+assert_eq "$(windows_of acme-widgets)" "3" "third terminal: no window was free, one was added"
+v3=$(views_of acme-widgets | tail -1)
 assert_eq "$(path_of "$v3")" "$P/src" "third terminal: the new window opens in the terminal's directory"
 
 # A legacy direct client on the holder (tmux attach by hand) takes its
@@ -158,55 +158,55 @@ assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "empty key: the plain sh
 rm -f "$T/shell.env"
 
 # --- Task 3: a claimed window is taken before its client attaches
-C="$H/projects/longisoft/company"
-tmux new-session -d -s longisoft-company -c "$C"
-tmux new-window -d -t =longisoft-company: -c "$C"
+C="$H/projects/globex/company"
+tmux new-session -d -s globex-company -c "$C"
+tmux new-window -d -t =globex-company: -c "$C"
 touch "$T/pause"
 TMUX_ATTACH_TEST_PAUSE="$T/pause" fake_client "$C" "$ATTACH"
 sleep 1
-assert_eq "$(views_of longisoft-company | grep -c .)" "1" "paused claim: the first view exists before it attaches"
-assert_eq "$(tmux list-sessions -F '#{session_name} #{session_attached}' | awk -v g="$(group_of longisoft-company)" -v h=longisoft-company '$1 != h && $1 ~ "^longisoft-company_" { print $2 }')" "0" "paused claim: the first view is not attached yet"
+assert_eq "$(views_of globex-company | grep -c .)" "1" "paused claim: the first view exists before it attaches"
+assert_eq "$(tmux list-sessions -F '#{session_name} #{session_attached}' | awk -v g="$(group_of globex-company)" -v h=globex-company '$1 != h && $1 ~ "^globex-company_" { print $2 }')" "0" "paused claim: the first view is not attached yet"
 tab "$C"
 sleep 3
-n_tabs_n_windows longisoft-company 2
-assert_eq "$(windows_of longisoft-company)" "2" "paused claim: the second terminal took the other free window"
+n_tabs_n_windows globex-company 2
+assert_eq "$(windows_of globex-company)" "2" "paused claim: the second terminal took the other free window"
 rm -f "$T/pause"
 
 # A stale view with this terminal's pid (pids repeat after a reboot): an
 # unattached one in the holder's group gives way, and the window it marked
 # as claimed is free again; anything else falls back.
-I="$H/projects/inex/inex-smpp"
-tmux new-session -d -s inex-inex-smpp -c "$I"
-fake_client "$I" "sh -c 'tmux new-session -d -t =inex-inex-smpp -s inex-inex-smpp_\$\$ \\; set-option -t =inex-inex-smpp_\$\$: @view 1; exec $ATTACH'"
+I="$H/projects/acme/acme-api"
+tmux new-session -d -s acme-acme-api -c "$I"
+fake_client "$I" "sh -c 'tmux new-session -d -t =acme-acme-api -s acme-acme-api_\$\$ \\; set-option -t =acme-acme-api_\$\$: @view 1; exec $ATTACH'"
 sleep 2
-assert_eq "$(views_of inex-inex-smpp | grep -c .)" "1" "stale view: one view of that pid remains"
-assert_eq "$(attached "$(views_of inex-inex-smpp)")" "1" "stale view: the remaining view is the live one"
-assert_eq "$(windows_of inex-inex-smpp)" "1" "stale view: its claimed window was free again, none added"
+assert_eq "$(views_of acme-acme-api | grep -c .)" "1" "stale view: one view of that pid remains"
+assert_eq "$(attached "$(views_of acme-acme-api)")" "1" "stale view: the remaining view is the live one"
+assert_eq "$(windows_of acme-acme-api)" "1" "stale view: its claimed window was free again, none added"
 ( cd "$H/projects/personal/iac" && SHELL="$T/fakeshell" sh -c 'tmux new-session -d -s personal-iac_$$; exec "$0"' "$ATTACH" 2>"$T/fallback.err" )
 assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "stale view outside the group: the plain shell runs"
 assert_eq "$(grep -c 'exists' "$T/fallback.err")" "1" "stale view outside the group: the message names the cause"
 rm -f "$T/shell.env"
 
 # --- Task 4: terminals that open together never share a window
-A="$H/projects/tsmu/iac"
-tmux new-session -d -s tsmu-iac -c "$A"
+A="$H/projects/acme/iac"
+tmux new-session -d -s acme-iac -c "$A"
 touch "$T/delay"
 export TMUX_ATTACH_TEST_DELAY="$T/delay"
 tab_now "$A"; tab_now "$A"; tab_now "$A"
 sleep 10
 unset TMUX_ATTACH_TEST_DELAY; rm -f "$T/delay"
-n_tabs_n_windows tsmu-iac 3
-assert_eq "$(windows_of tsmu-iac)" "3" "race: the holder has exactly three windows"
+n_tabs_n_windows acme-iac 3
+assert_eq "$(windows_of acme-iac)" "3" "race: the holder has exactly three windows"
 
 # The lock stays busy: a plain shell, never an unlocked pick.
-flock -o "$T/tmux-attach-tsmu-iac.lock" sleep 20 &
+flock -o "$T/tmux-attach-acme-iac.lock" sleep 20 &
 holder_pid=$!
 sleep 0.5
 ( cd "$A" && SHELL="$T/fakeshell" "$ATTACH" 2>"$T/fallback.err" )
 kill "$holder_pid" 2>/dev/null; wait "$holder_pid" 2>/dev/null
 assert_eq "$(grep -c '^NO_TMUX=1$' "$T/shell.env")" "1" "busy lock: the plain shell runs with NO_TMUX=1"
 assert_eq "$(grep -c 'lock' "$T/fallback.err")" "1" "busy lock: the message names the lock"
-assert_eq "$(views_of tsmu-iac | grep -c .)" "3" "busy lock: no view was created"
+assert_eq "$(views_of acme-iac | grep -c .)" "3" "busy lock: no view was created"
 rm -f "$T/shell.env"
 
 # A server started under the lock must not keep it. A second shim on its
@@ -251,12 +251,12 @@ assert_eq "$(attached oss-laravel-framework)" "0" "missing holder: the recreated
 
 # A lone surviving view with no group at all: tmux-resurrect recreates a
 # session whose group members are all gone as an ordinary session.
-G="$H/projects/sgp/sgp"; mkdir -p "$G"
-tmux new-session -d -s sgp-sgp_9 -c "$G"
-tmux new-window -d -t =sgp-sgp_9: -c "$G"
+G="$H/projects/xyz/xyz"; mkdir -p "$G"
+tmux new-session -d -s xyz-xyz_9 -c "$G"
+tmux new-window -d -t =xyz-xyz_9: -c "$G"
 tab "$G"
-assert_eq "$(views_of sgp-sgp | grep -c .)" "2" "lone view: the ungrouped survivor and the terminal are the holder's members"
-assert_eq "$(windows_of sgp-sgp)" "2" "lone view: the holder shares the survivor's windows"
+assert_eq "$(views_of xyz-xyz | grep -c .)" "2" "lone view: the ungrouped survivor and the terminal are the holder's members"
+assert_eq "$(windows_of xyz-xyz)" "2" "lone view: the holder shares the survivor's windows"
 
 # --- Task 6: the .bashrc sequence of finding 4, and a dotted directory
 # Terminal 1 and 2 at ~, terminal 1 exits its shell and closes, terminal 3

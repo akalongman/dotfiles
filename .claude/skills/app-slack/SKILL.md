@@ -9,8 +9,8 @@ Copied on 2026-10-08 from the `slack-messaging` and `slack-search` skills of
 Anthropic's `slack` plugin (claude-plugins-official, version 1.3.0, Apache
 License 2.0) and merged into one skill so the plugin could be disabled. The
 MCP tools named below are the ones Slack's hosted MCP server exposes through
-the per-repo `mcp-remote` bridges (`slack-power-it`, `slack-tsmu`,
-`slack-inex`). Block Kit JSON and direct Web API work are out of scope; the
+the per-repo `mcp-remote` bridges (one `slack-<workspace>` server per
+workspace). Block Kit JSON and direct Web API work are out of scope; the
 plugin skills that covered them (`block-kit`, `slack-api`) are disabled on
 this machine, so re-enable the `slack` plugin if that work ever comes up.
 
