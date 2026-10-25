@@ -403,5 +403,32 @@ if [ -n "$RL_5H" ] || [ -n "$RL_7D" ] || [ ${#RL_PARTS[@]} -gt 0 ]; then
     RL_SEG=" 🚦${RL_JOINED# ·} |"
 fi
 
-#echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% | ${YELLOW}${COST_FMT}${RESET} | ⏱️ ${DURATION}"
-echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% |${RL_SEG} ⏱️ ${DURATION}"
+# Prompt cache of the main conversation, one value: the clock time the cached
+# prefix goes cold, or "cold" once it has. The payload carries prompt_cache
+# since 2.1.251; it is absent before the first response and on providers that
+# report no cache tokens, and then the row is as it was. A clock time, not a
+# countdown: the script runs on events only and a countdown would sit stale
+# while the session idles. Claude Code re-runs the script at the expiry
+# moment, and the local clock is checked as well, so a payload that still
+# says warm cannot outlive its own deadline. The rest of the object (hit
+# ratio, misses, recache size) stays on the /usage screen.
+PC_SEG=""
+PC_LINE=$(echo "$input" | jq -r '
+    .prompt_cache // empty
+    | select(.caching_observed == true)
+    | [(.warm // false), (.expires_at // 0)] | @tsv')
+if [ -n "$PC_LINE" ]; then
+    IFS=$'\t' read -r PC_WARM PC_EXPIRES <<< "$PC_LINE"
+    [[ $PC_EXPIRES =~ ^[0-9]+$ ]] || PC_EXPIRES=0
+    if [ "$PC_WARM" = true ] && [ "$PC_EXPIRES" -gt "$(date +%s)" ]; then
+        PC_TEXT="till $(date -d "@$PC_EXPIRES" '+%H:%M')"
+        PC_COLOR="$GREEN"
+    else
+        PC_TEXT="cold"
+        PC_COLOR="$YELLOW"
+    fi
+    PC_SEG=" | 💿 ${PC_COLOR}${PC_TEXT}${RESET}"
+fi
+
+#echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}% | ${YELLOW}${COST_FMT}${RESET} | 🕐 ${DURATION}"
+echo -e "${BAR_COLOR}${BAR}${RESET} ${PCT}%${PC_SEG} |${RL_SEG} 🕐 ${DURATION}"
