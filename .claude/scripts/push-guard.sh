@@ -27,7 +27,10 @@
 # Rules. The command is read as text: nothing in it is expanded except ~,
 # $HOME and ${HOME}, and nothing in it is run.
 #   bypass token  --no-verify or an abbreviation git accepts for it
-#                 (--no-veri, --no-verif), or core.hooksPath in any letter case
+#                 (--no-veri, --no-verif), core.hooksPath in any letter case,
+#                 or DOTFILES_GUARD_, the prefix of the pre-push guard's
+#                 environment pointers, which aim its list and its secret
+#                 scanner at stand-ins
 #   target        the word yadm; the repository path in the command; the cwd;
 #                 a directory named after -C, cd, pushd, --work-tree or
 #                 GIT_WORK_TREE=; a git dir named after --git-dir or GIT_DIR=
@@ -92,9 +95,10 @@ function word_end() {
 }
 
 # A redirection (< > >> <> >| <& >& &> &>> <<<) drops the unquoted fd number
-# before it (2>) and the word after it; << and <<- take a heredoc delimiter.
+# before it (2>; &> and &>> take none, so 2&> keeps the 2) and the word after
+# it; << and <<- take a heredoc delimiter.
 function redirect(   nx) {
-    if (inword && !wq && word ~ /^[0-9]+$/) { word = ""; inword = 0; wl = 0 }
+    if (c != "&" && inword && !wq && word ~ /^[0-9]+$/) { word = ""; inword = 0; wl = 0 }
     word_end()
     if (c == "&") i++
     if (substr(s, i, 2) == "<<" && substr(s, i + 2, 1) != "<") {
@@ -233,7 +237,7 @@ pg_names_hookspath() { # text
     return "$rc"
 }
 
-pg_has_bypass() { [[ $1 == *--no-veri* ]] || pg_names_hookspath "$1"; }
+pg_has_bypass() { [[ $1 == *--no-veri* || $1 == *DOTFILES_GUARD_* ]] || pg_names_hookspath "$1"; }
 
 pg_resolves_dir() { # dir: 0 when its common git dir (shared by linked worktrees) is the public one
     local g

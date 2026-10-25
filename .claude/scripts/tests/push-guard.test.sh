@@ -119,6 +119,13 @@ run_hook Bash 'git --config-env=core.hooksPath=HOOKS push' "$root/home"; assert_
 run_hook Bash '/usr/lib/git-core/git-push --no-verify' "$root/home"; assert_eq "$RC" 2 "the dashed git-push is a push"
 run_hook Bash 'git commit --no-verify -m "add push-guard"' "$root/home"; assert_eq "$RC" 0 "push inside a hyphenated word is not a push"
 
+# The pre-push guard's DOTFILES_GUARD_ pointers aim its list and its scanner at
+# stand-ins (final review I1): a push that sets one is refused, a run without a
+# push passes.
+run_hook Bash 'DOTFILES_GUARD_DENYLIST=/tmp/x yadm push' "$other"; assert_eq "$RC" 2 "a push setting the guard's list pointer is refused from any directory"
+assert_contains "$ERR" "push-guard: a push of the public dotfiles with hooks disabled is refused" "with the push reason"
+run_hook Bash 'DOTFILES_GUARD_DENYLIST=/tmp/x bash tests/dotfiles-guard.test.sh' "$root/home"; assert_eq "$RC" 0 "the guard's list pointer without a push passes"
+
 # Known false positives, documented in the script header.
 run_hook Bash 'git commit -m "push --no-verify is refused"' "$root/home"; assert_eq "$RC" 2 "known false positive: a message that reads push --no-verify"
 run_hook Bash "git -C $other push --no-verify" "$root/home"; assert_eq "$RC" 2 "known false positive: another repository by -C from the public work tree"
@@ -161,6 +168,9 @@ run_hook Bash 'git config core.hooksPath /x &>/dev/null' "$root/home"; assert_eq
 run_hook Bash 'git config core.hooksPath "7">/dev/null' "$root/home"; assert_eq "$RC" 2 "a quoted digit before > is a value, not an fd number"
 run_hook Bash 'git config core.hooksPath 2>&1 /x' "$root/home"; assert_eq "$RC" 2 "2>&1 does not end the command: a value after it is a write"
 run_hook Bash 'git config core.hooksPath &>/dev/null /x' "$root/home"; assert_eq "$RC" 2 "&> does not end the command: a value after it is a write"
+# &> takes no fd number, so a digit before it is a value (final review I2).
+run_hook Bash 'git config core.hooksPath 2&>/dev/null' "$root/home"; assert_eq "$RC" 2 "a digit before &> is a value: a local write in the public work tree is refused"
+run_hook Bash 'git config --global core.hooksPath 2&>/dev/null' "$other"; assert_eq "$RC" 2 "a digit before &> is a value: a global write is refused from any directory"
 run_home Bash 'cd 2>/dev/null && git push --no-verify' "$other"; assert_eq "$RC" 2 "a bare cd with a redirect names the home directory"
 run_hook Bash 'git -c core.hooksPath=/dev/null commit -m x' "$root/home"; assert_eq "$RC" 0 "-c core.hooksPath on a command other than push passes"
 
