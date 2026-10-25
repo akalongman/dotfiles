@@ -23,6 +23,11 @@ branch, branch first" behavior.
   and do not re-ask on every subsequent commit.
 - Branch creation, switching, and renaming are actions the user initiates. Do
   not perform them silently to "protect" the user.
+- In a checkout other sessions share, fast-forward a branch before switching
+  to it (`git fetch . origin/<b>:<b>`, which refuses rather than rewinds a
+  diverged branch), so the working tree never passes through the branch's
+  stale local state (2026-10-25, `git switch dev` checked out a local `dev`
+  125 commits behind before the fast-forward).
 
 ## Commits
 
