@@ -28,8 +28,8 @@ unset CDPATH
 
 # The verified copy. Written only after a copy passes the verification of
 # the 2026-10-23 sub-skill spec (claude-subagent-apply repository).
-verified_version=7.0.0
-verified_loop=daeb4f493ead
+verified_version=7.0.1
+verified_loop=49e0f5325d56
 if [ -n "${SUB_SKILL_VERIFIED:-}" ]; then
   read -r verified_version verified_loop <<<"$SUB_SKILL_VERIFIED"
 fi
