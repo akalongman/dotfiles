@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Stage ~/.claude/settings.json for the public dotfiles repo with the
-# autoMode block filtered out. Claude Code's auto mode rewrites that block
-# with client-environment facts, which must never reach the public remote.
-# The block stays in the working file; only the staged blob excludes it.
+# Stage ~/.claude/settings.json for the public dotfiles repo with two keys
+# filtered out: autoMode (Claude Code's auto mode rewrites it with
+# client-environment facts) and enabledMcpjsonServers (project MCP server
+# names, which carry client and workspace names). Neither must reach the
+# public remote. Both stay in the working file; only the staged blob
+# excludes them.
 #
 # Usage: yadm-stage-settings   (then commit as usual)
 
@@ -18,14 +20,14 @@ if ! jq . "$TMP" | cmp -s - "$TMP"; then
     echo "warning: jq reformats this file; the staged diff will carry formatting noise" >&2
 fi
 
-jq 'del(.autoMode)' "$TMP" > "$FILE"
+jq 'del(.autoMode, .enabledMcpjsonServers)' "$TMP" > "$FILE"
 git -C "$HOME" add .claude/settings.json
 cp "$TMP" "$FILE"
 
-STAGED_HAS_BLOCK="$(git -C "$HOME" show :.claude/settings.json | jq 'has("autoMode")')"
-if [ "$STAGED_HAS_BLOCK" != "false" ]; then
-    echo "error: staged settings.json still contains autoMode; aborting" >&2
+STAGED_HAS_KEYS="$(git -C "$HOME" show :.claude/settings.json | jq 'has("autoMode") or has("enabledMcpjsonServers")')"
+if [ "$STAGED_HAS_KEYS" != "false" ]; then
+    echo "error: staged settings.json still contains autoMode or enabledMcpjsonServers; aborting" >&2
     exit 1
 fi
 
-echo "staged .claude/settings.json without autoMode (working file untouched)"
+echo "staged .claude/settings.json without autoMode and enabledMcpjsonServers (working file untouched)"

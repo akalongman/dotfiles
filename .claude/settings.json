@@ -117,6 +117,17 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/push-guard.sh hook"
+          }
+        ]
+      }
     ]
   },
   "disableAllHooks": false,
@@ -138,20 +149,14 @@
     "cowork-plugin-management@synced": false,
     "cc-plugin-you-should-know@builtin": true,
     "superpowers@superpowers-marketplace": true,
-    "later@akalongman": true,
-    "tmux-session-state@personal": true
+    "tmux-session-state@personal": true,
+    "laterbox@akalongman": true
   },
   "extraKnownMarketplaces": {
     "phpstorm-marketplace": {
       "source": {
         "source": "github",
         "repo": "jetbrains/phpstorm-claude-marketplace"
-      }
-    },
-    "akalongman": {
-      "source": {
-        "source": "directory",
-        "path": "/home/longman/projects/akalongman/claude-plugins"
       }
     },
     "superpowers-marketplace": {
@@ -164,6 +169,12 @@
       "source": {
         "source": "directory",
         "path": "/home/longman/projects/personal/claude-plugins"
+      }
+    },
+    "akalongman": {
+      "source": {
+        "source": "directory",
+        "path": "/home/longman/projects/akalongman/claude-laterbox"
       }
     }
   },
@@ -200,6 +211,7 @@
   "switchModelsOnFlag": false,
   "showTurnDuration": true,
   "remoteControlAtStartup": true,
-  "agentPushNotifEnabled": false,
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true
 }
