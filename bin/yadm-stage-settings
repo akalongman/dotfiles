@@ -1,33 +1,73 @@
 #!/usr/bin/env bash
-# Stage ~/.claude/settings.json for the public dotfiles repo with two keys
-# filtered out: autoMode (Claude Code's auto mode rewrites it with
-# client-environment facts) and enabledMcpjsonServers (project MCP server
-# names, which carry client and workspace names). Neither must reach the
-# public remote. Both stay in the working file; only the staged blob
-# excludes them.
+# Stage ~/.claude/settings.json for the public dotfiles repo without the three
+# keys that stay local: autoMode (Claude Code's auto mode rewrites it with
+# client-environment facts) and the MCP server lists enabledMcpjsonServers
+# and disabledMcpjsonServers (project server names, which carry client and
+# workspace names). None of them may reach the public remote; the push guard
+# refuses a settings.json blob that carries any of them.
+#
+# The live file is never written. The script copies it to a snapshot once,
+# and everything reads the snapshot: when the private dotfiles are present,
+# `mcp-approvals export` saves the approval list from it into the private
+# repo, and the filtered snapshot is staged straight into the index. The
+# working-tree copy therefore always differs from the staged blob, so commit
+# with a plain `git commit` from the index; a pathspec commit would take the
+# working tree.
 #
 # Usage: yadm-stage-settings   (then commit as usual)
 
 set -euo pipefail
 
 FILE="$HOME/.claude/settings.json"
-TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
+PRIVATE="$HOME/.dotfiles-private"
+TMPD="$(mktemp -d)"
+trap 'rm -rf -- "$TMPD"' EXIT
+SNAP="$TMPD/settings.json"
+FILTERED="$TMPD/filtered.json"
 
-cp "$FILE" "$TMP"
+cp -- "$FILE" "$SNAP"
 
-if ! jq . "$TMP" | cmp -s - "$TMP"; then
+if ! jq . "$SNAP" 2>/dev/null | cmp -s - "$SNAP"; then
     echo "warning: jq reformats this file; the staged diff will carry formatting noise" >&2
 fi
 
-jq 'del(.autoMode, .enabledMcpjsonServers)' "$TMP" > "$FILE"
-git -C "$HOME" add .claude/settings.json
-cp "$TMP" "$FILE"
+# A public clone on its own has no private repo and nothing to export to. With
+# the private repo present, the tool must be its own copy (a link made by its
+# link.sh); a failing export is loud but does not block this commit, since the
+# filter below is what keeps the list out of the public blob.
+if [ -d "$PRIVATE" ]; then
+    tool="$(readlink -f -- "$HOME/bin/mcp-approvals" 2>/dev/null || true)"
+    private_root="$(readlink -f -- "$PRIVATE")"
+    case "$tool" in
+        "$private_root/"*) ;;
+        *) tool='' ;;
+    esac
+    if [ -z "$tool" ] || [ ! -L "$HOME/bin/mcp-approvals" ] || [ ! -f "$tool" ] || [ ! -x "$tool" ]; then
+        echo "error: ~/bin/mcp-approvals does not resolve into ~/.dotfiles-private; run link.sh first" >&2
+        exit 1
+    fi
+    rc=0
+    MCP_SETTINGS_FILE="$SNAP" "$HOME/bin/mcp-approvals" export || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "warning: mcp-approvals export failed (exit $rc); rerun it by hand, the list is not saved" >&2
+    fi
+fi
 
-STAGED_HAS_KEYS="$(git -C "$HOME" show :.claude/settings.json | jq 'has("autoMode") or has("enabledMcpjsonServers")')"
-if [ "$STAGED_HAS_KEYS" != "false" ]; then
-    echo "error: staged settings.json still contains autoMode or enabledMcpjsonServers; aborting" >&2
+if ! jq 'del(.autoMode, .enabledMcpjsonServers, .disabledMcpjsonServers)' "$SNAP" >"$FILTERED" 2>/dev/null \
+    || ! jq -e -s 'length == 1 and (.[0] | type) == "object" and (.[0] | length > 0)
+        and (.[0] | has("autoMode") or has("enabledMcpjsonServers") or has("disabledMcpjsonServers") | not)' \
+        "$FILTERED" >/dev/null 2>&1; then
+    echo "error: settings.json does not filter to one non-empty JSON object without the local keys; nothing staged" >&2
     exit 1
 fi
 
-echo "staged .claude/settings.json without autoMode and enabledMcpjsonServers (working file untouched)"
+sha="$(git -C "$HOME" hash-object -w --path .claude/settings.json "$FILTERED")"
+git -C "$HOME" update-index --add --cacheinfo "100644,$sha,.claude/settings.json"
+
+if ! git -C "$HOME" show :.claude/settings.json \
+    | jq -e 'has("autoMode") or has("enabledMcpjsonServers") or has("disabledMcpjsonServers") | not' >/dev/null; then
+    echo "error: the staged settings.json still carries a local key; aborting" >&2
+    exit 1
+fi
+
+echo "staged .claude/settings.json without autoMode and the MCP server lists (live file untouched)"
