@@ -33,7 +33,9 @@
       "Bash(ftpx lsl:*)",
       "Bash(ftpx cat:*)",
       "Bash(ftpx size:*)",
-      "Bash(ftpx pull:*)"
+      "Bash(ftpx pull:*)",
+      "Read(~/.claude*/**)",
+      "Edit(~/.claude*/**)"
     ],
     "ask": [
       "Bash(sdp login:*)",
@@ -42,7 +44,12 @@
       "Bash(sdp task worklog:*)",
       "Bash(secrets:*)"
     ],
-    "defaultMode": "auto"
+    "defaultMode": "auto",
+    "additionalDirectories": [
+      "~/.claude",
+      "~/.claude2",
+      "~/.claude3"
+    ]
   },
   "model": "opus",
   "fallbackModel": [
