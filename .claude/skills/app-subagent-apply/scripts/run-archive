@@ -21,10 +21,12 @@
 # is reported "withdrawn: line <N>" and not parked; a line with no ": " or an
 # empty destination is reported "not parked (malformed marker): line <N>", one
 # with an empty item "not parked (empty item): line <N>". When the call
-# attempted a line (parked it, found it parked earlier or reported it not
-# parked) and the workspace's plan-path names a plan inside the repository,
-# each attempted destination with a heading "## Handed to <destination>" in
-# the plan gets the line
+# attempted a line (parked it, found it parked earlier, or reported it not
+# parked because later is missing or refused it; a malformed marker or an
+# empty item is never an attempt and adds nothing to a count) and the
+# workspace's plan-path names a plan inside the repository, each attempted
+# destination with a heading "## Handed to <destination>" in the plan gets
+# the line
 #   offer: docs commit adding <count> items to "## Handed to <destination>" of <plan path>
 #
 # Usage: run-archive WORKSPACE_DIR [NAME]
