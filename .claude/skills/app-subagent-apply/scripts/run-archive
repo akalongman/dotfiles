@@ -6,10 +6,20 @@
 # directory with every "/" replaced by "-"), so the run's transcript and its
 # archive sit under the same name.
 #
+# Since 2026-10-27 it also parks each ledger line "Handed to <destination>:
+# <item>" that has no "Parked: line <N>:" line yet in the project's queue
+# through the laterbox engine (later), as the note "<Destination>: <item>
+# Archive: <archive path>", and writes "Parked: line <N>: <destination>:
+# <first six words>" to the ledger before copying it into the archive once
+# more. Each park is reported as "parked: line <N>, now note <P>: <first six
+# words>" ("position unknown" in place of "now note <P>" when the queue no
+# longer lists it), in ledger line order.
+#
 # Usage: run-archive WORKSPACE_DIR [NAME]
 #   WORKSPACE_DIR  the run's .superpowers/sdd/<name>/ directory
 #   NAME           defaults to the workspace directory's basename
-# Prints the archive path. Exit 2 on usage or a missing workspace.
+# Prints the report lines, then the archive path, last. Exit 2 on usage or a
+# missing workspace; a failed park never fails the archive.
 set -euo pipefail
 
 ws="${1:-}"; [ -d "$ws" ] || { echo "usage: run-archive WORKSPACE_DIR [NAME]" >&2; exit 2; }
@@ -45,4 +55,82 @@ fi
   echo "${sub:-Sub-skill: not ledgered}"
   echo "Workspace: $ws"
 } > "$dest/run-facts.md"
+
+# The park step. canon: stdin to one line, canonicalised as the engine stores
+# a note (newlines, tabs and runs of whitespace to one space, ends trimmed).
+canon() { tr '\n\r\t' '   ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'; }
+# The first six whitespace-separated words of $1, fewer when it has fewer.
+first_words() { local -a w; read -r -a w <<< "$1"; printf '%s\n' "${w[*]:0:6}"; }
+# Sets to and item, both canonicalised, from ledger line $1 by the grammar
+# "Handed to <destination>: <item>", the destination running to the first
+# ": "; fails when the line has none.
+note_of() {
+  local rest=${1#Handed to }
+  case $rest in *': '*) ;; *) return 1 ;; esac
+  to=$(printf '%s' "${rest%%: *}" | canon)
+  item=$(printf '%s' "${rest#*: }" | canon)
+}
+# Prints the position of the first note in listing $2 (bare later's output)
+# whose text is key $1, alone or followed by " Archive: ...", and fails when
+# there is none. The whole line must match, so a note whose text only begins
+# with the key is never taken.
+position() {
+  local re='^ *([0-9]+)\. (.*) \([^()]*\)$' line
+  while IFS= read -r line; do
+    [[ $line =~ $re ]] || continue
+    if [ "${BASH_REMATCH[2]}" = "$1" ] || [[ ${BASH_REMATCH[2]} == "$1 Archive: "* ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done <<< "$2"
+  return 1
+}
+# Appends line $1 to the ledger on a line of its own, even when the ledger
+# lacks its final newline.
+ledger_line() {
+  if [ -n "$(tail -c1 "$ws/progress.md")" ]; then echo >> "$ws/progress.md"; fi
+  printf '%s\n' "$1" >> "$ws/progress.md"
+}
+# Parks each Handed to line of the ledger that has no Parked: line yet,
+# appending its Parked: line in the same iteration; then finds each new note's
+# position in the queue, copies the ledger into the archive once more and
+# prints the report lines in ledger line order.
+park_handed() {
+  local n line to item key note words why listing p archive
+  local -a lines report=() keys=() firsts=()
+  local -A parked=()
+  mapfile -t lines < "$ws/progress.md"
+  for line in "${lines[@]}"; do
+    if [[ $line =~ ^Parked:\ line\ ([0-9]+): ]]; then parked[${BASH_REMATCH[1]}]=1; fi
+  done
+  archive=$(printf '%s' "$dest" | canon)
+  for ((n = 1; n <= ${#lines[@]}; n++)); do
+    line=${lines[n - 1]}
+    [[ $line == 'Handed to '* ]] && [ -z "${parked[$n]:-}" ] || continue
+    note_of "$line" && [ -n "$to" ] && [ -n "$item" ] || continue
+    key="${to^}: $item"
+    note="$key Archive: $archive"
+    words=$(first_words "$item")
+    if why=$(later -- "$note" 2>&1 >/dev/null); then
+      ledger_line "Parked: line $n: $to: $words"
+      keys[n]=$key
+      firsts[n]=$words
+    elif [ -n "$why" ]; then
+      printf '%s\n' "$why" >&2
+    fi
+  done
+  if [ "${#keys[@]}" -gt 0 ]; then
+    listing=$(later 2>/dev/null) || listing=
+    for n in "${!keys[@]}"; do
+      if p=$(position "${keys[n]}" "$listing"); then
+        report[n]="parked: line $n, now note $p: ${firsts[n]}"
+      else
+        report[n]="parked: line $n, position unknown: ${firsts[n]}"
+      fi
+    done
+  fi
+  cp "$ws/progress.md" "$dest/progress.md"
+  for n in "${!report[@]}"; do printf '%s\n' "${report[n]}"; done
+}
+if [ -f "$ws/progress.md" ]; then park_handed; fi
 echo "$dest"
