@@ -109,7 +109,8 @@ the final message.
   same line, with the destination you recommend, instead of a
   `routed to driver` line; a routed line names in-run work only. An item
   handed earlier that the run settles after all gets
-  `Withdrawn: line <N>: <why>`.
+  `Withdrawn: line <N>: <why>`, `<N>` the ledger line number of the
+  `Handed to` line.
 - **Pause.** A pause reaches you through the ledger, never by message.
   Before every dispatch, every resume of a child and every `needs-ruling`
   return, run this with your unit's own prefix (`Section 3`, `Task 2`)
