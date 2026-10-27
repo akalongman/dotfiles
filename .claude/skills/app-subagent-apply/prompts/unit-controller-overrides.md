@@ -9,7 +9,7 @@ the final message.
   the brief is `final-brief.md`, then stop. Never start another unit; never
   edit code, the task file or the source's spec documents yourself.
 - **Ledger.** Read `progress.md` as `head -n 3`, then
-  `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Ruling \(controller\)|Open before merge|Final phase):|: (complete|parked|blocked|paused|pause requested|pause released|resumed)|stopped by hand'`,
+  `grep -nE '^(Run base|Commit mode|Model policy|Model fallback|Ruling|Ruling \(controller\)|Open before merge|Final phase):|: (complete|parked|blocked|paused|pause requested|pause released|resumed)|stopped by hand|^(Handed to|Withdrawn:) '`,
   then `tail -n 20`; never the whole file. Append your unit's lines to it as
   you go: each dispatch, each verdict, each fix round, each deferred minor.
   Append them in the same call as the action they record (the dispatch,
@@ -98,7 +98,18 @@ the final message.
   source: neither you nor an implementer adds or changes one. A gap in the
   spec is a question, `needs-ruling` outside hands-off even when the fill
   looks obvious; under hands-off, ledger the ruling and the proposed line
-  and leave the delta unchanged.
+  and leave the delta unchanged. A `Ruling (controller):`, a hands-off
+  `Ruling:` or an `Open before merge:` ruling that sends an item to later
+  work writes, in the same call, `Handed to <destination>: <item>` (the
+  destination without a colon, then `: `, then what, file and line at
+  HEAD, why it matters); one line per item, never one for an item an
+  earlier `Handed to` line already covers; an item joining an earlier
+  handed item names that line by its ledger number. An item you would
+  route to the driver for later work (a later plan, the owner) gets the
+  same line, with the destination you recommend, instead of a
+  `routed to driver` line; a routed line names in-run work only. An item
+  handed earlier that the run settles after all gets
+  `Withdrawn: line <N>: <why>`.
 - **Pause.** A pause reaches you through the ledger, never by message.
   Before every dispatch, every resume of a child and every `needs-ruling`
   return, run this with your unit's own prefix (`Section 3`, `Task 2`)
