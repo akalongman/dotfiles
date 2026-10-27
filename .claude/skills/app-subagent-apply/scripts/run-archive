@@ -11,9 +11,13 @@
 # through the laterbox engine (later), as the note "<Destination>: <item>
 # Archive: <archive path>", and writes "Parked: line <N>: <destination>:
 # <first six words>" to the ledger before copying it into the archive once
-# more. Each park is reported as "parked: line <N>, now note <P>: <first six
-# words>" ("position unknown" in place of "now note <P>" when the queue no
-# longer lists it), in ledger line order.
+# more. A note the queue already lists gets its Parked: line and is not parked
+# again. Each line is reported in ledger line order: "parked: line <N>, now
+# note <P>: <first six words>" ("position unknown" in place of "now note <P>"
+# when the queue no longer lists it), "parked earlier: line <N>, now note <P>:
+# ..." for a note the queue already held, or "not parked (<reason>):
+# <command>" when later is not on PATH or refuses, <command> parking the note
+# in this project from any terminal.
 #
 # Usage: run-archive WORKSPACE_DIR [NAME]
 #   WORKSPACE_DIR  the run's .superpowers/sdd/<name>/ directory
@@ -91,13 +95,20 @@ ledger_line() {
   if [ -n "$(tail -c1 "$ws/progress.md")" ]; then echo >> "$ws/progress.md"; fi
   printf '%s\n' "$1" >> "$ws/progress.md"
 }
-# Parks each Handed to line of the ledger that has no Parked: line yet,
-# appending its Parked: line in the same iteration; then finds each new note's
-# position in the queue, copies the ledger into the archive once more and
-# prints the report lines in ledger line order.
+# $1 single-quoted for the shell, each single quote in it written '\''.
+sq() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
+# The paste-ready command that parks note $1 in this project's queue from any
+# terminal.
+park_cmd() { printf '(cd %s && later -- %s)' "$(sq "$(pwd)")" "$(sq "$1")"; }
+# Parks each Handed to line of the ledger that has no Parked: line yet: with
+# no later on PATH, reports the command that parks it; else marks a note the
+# queue already lists (the guard, one listing before the loop), or parks it
+# and appends its Parked: line in the same iteration, or reports the refusal.
+# Then finds each new note's position in the queue, copies the ledger into
+# the archive once more and prints the report lines in ledger line order.
 park_handed() {
-  local n line to item key note words why listing p archive
-  local -a lines report=() keys=() firsts=()
+  local n line to item why k listing p archive
+  local -a lines report=() tos=() keys=() notes=() firsts=() fresh=()
   local -A parked=()
   mapfile -t lines < "$ws/progress.md"
   for line in "${lines[@]}"; do
@@ -108,20 +119,32 @@ park_handed() {
     line=${lines[n - 1]}
     [[ $line == 'Handed to '* ]] && [ -z "${parked[$n]:-}" ] || continue
     note_of "$line" && [ -n "$to" ] && [ -n "$item" ] || continue
-    key="${to^}: $item"
-    note="$key Archive: $archive"
-    words=$(first_words "$item")
-    if why=$(later -- "$note" 2>&1 >/dev/null); then
-      ledger_line "Parked: line $n: $to: $words"
-      keys[n]=$key
-      firsts[n]=$words
-    elif [ -n "$why" ]; then
-      printf '%s\n' "$why" >&2
-    fi
+    tos[n]=$to
+    keys[n]="${to^}: $item"
+    notes[n]="${keys[n]} Archive: $archive"
+    firsts[n]=$(first_words "$item")
   done
-  if [ "${#keys[@]}" -gt 0 ]; then
+  if [ "${#keys[@]}" -gt 0 ] && ! command -v later >/dev/null; then
+    for n in "${!keys[@]}"; do report[n]="not parked (later not on PATH): $(park_cmd "${notes[n]}")"; done
+  elif [ "${#keys[@]}" -gt 0 ]; then
     listing=$(later 2>/dev/null) || listing=
     for n in "${!keys[@]}"; do
+      if p=$(position "${keys[n]}" "$listing"); then
+        ledger_line "Parked: line $n: ${tos[n]}: ${firsts[n]}"
+        report[n]="parked earlier: line $n, now note $p: ${firsts[n]}"
+      elif why=$(later -- "${notes[n]}" 2>&1 >/dev/null); then
+        ledger_line "Parked: line $n: ${tos[n]}: ${firsts[n]}"
+        fresh[n]=1
+      else
+        k=$?
+        why=${why%%$'\n'*}
+        report[n]="not parked (${why:-later exited $k}): $(park_cmd "${notes[n]}")"
+      fi
+    done
+  fi
+  if [ "${#fresh[@]}" -gt 0 ]; then
+    listing=$(later 2>/dev/null) || listing=
+    for n in "${!fresh[@]}"; do
       if p=$(position "${keys[n]}" "$listing"); then
         report[n]="parked: line $n, now note $p: ${firsts[n]}"
       else
