@@ -94,6 +94,13 @@ branch, branch first" behavior.
 - Never mention Claude Code in PR or MR descriptions, PR or MR comments, or
   issue comments.
 - Do not include a "Test plan" section in PR or MR descriptions.
+- Before merging a change that moves dependency versions or static-analysis
+  tooling, make its pipeline judge the merged result: update the branch from
+  its target, or confirm `git log HEAD..origin/<target>` is empty, and let
+  that pipeline pass. An MR pipeline analyses the branch head, so code that
+  reached the target meanwhile meets the sharper checks only after the merge
+  (2026-10-27, a dependency upgrade turned the target's analysis gate red on
+  a file merged after the branch was cut).
 - After a merge lands (direct or auto-merge), watch the target branch's
   post-merge pipeline to its end and report its result; the merge is not done
   until that pipeline, including any deploy job, is green, and a green MR
