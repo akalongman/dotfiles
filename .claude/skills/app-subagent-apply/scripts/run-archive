@@ -17,13 +17,22 @@
 # when the queue no longer lists it), "parked earlier: line <N>, now note <P>:
 # ..." for a note the queue already held, or "not parked (<reason>):
 # <command>" when later is not on PATH or refuses, <command> parking the note
-# in this project from any terminal.
+# in this project from any terminal. A line with a "Withdrawn: line <N>:" line
+# is reported "withdrawn: line <N>" and not parked; a line with no ": " or an
+# empty destination is reported "not parked (malformed marker): line <N>", one
+# with an empty item "not parked (empty item): line <N>". When the call
+# attempted a line (parked it, found it parked earlier or reported it not
+# parked) and the workspace's plan-path names a plan inside the repository,
+# each attempted destination with a heading "## Handed to <destination>" in
+# the plan gets the line
+#   offer: docs commit adding <count> items to "## Handed to <destination>" of <plan path>
 #
 # Usage: run-archive WORKSPACE_DIR [NAME]
 #   WORKSPACE_DIR  the run's .superpowers/sdd/<name>/ directory
 #   NAME           defaults to the workspace directory's basename
-# Prints the report lines, then the archive path, last. Exit 2 on usage or a
-# missing workspace; a failed park never fails the archive.
+# Prints the report lines, then the offer lines, then the archive path, last.
+# Exit 2 on usage or a missing workspace; a failed park never fails the
+# archive.
 set -euo pipefail
 
 ws="${1:-}"; [ -d "$ws" ] || { echo "usage: run-archive WORKSPACE_DIR [NAME]" >&2; exit 2; }
@@ -100,25 +109,59 @@ sq() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
 # The paste-ready command that parks note $1 in this project's queue from any
 # terminal.
 park_cmd() { printf '(cd %s && later -- %s)' "$(sq "$(pwd)")" "$(sq "$1")"; }
-# Parks each Handed to line of the ledger that has no Parked: line yet: with
-# no later on PATH, reports the command that parks it; else marks a note the
+# Prints the offer lines: one per destination among the lines this call
+# attempted (tos, set by park_handed) that the workspace's plan has a heading
+# "## Handed to <destination>" for, compared lower-cased with whitespace
+# collapsed, in ledger order of the destination's first line. The plan is
+# plan-path resolved against the top level of the working directory's work
+# tree; an absolute plan-path (outside the repository), a working directory
+# outside every repository or a missing plan gives none.
+offers() {
+  local plan root heading d n
+  local -a order=()
+  local -A shown=() count=()
+  [ "${#tos[@]}" -gt 0 ] && [ -f "$ws/plan-path" ] && plan=$(cat "$ws/plan-path" 2>/dev/null) || return 0
+  case $plan in '' | /*) return 0 ;; esac
+  root=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) && [ -f "$root/$plan" ] || return 0
+  while IFS= read -r heading; do
+    d=$(printf '%s' "${heading#'## Handed to '}" | canon)
+    [ -n "$d" ] && [ -z "${shown[${d,,}]:-}" ] || continue
+    shown[${d,,}]=$d
+  done < <(grep -e '^## Handed to ' -- "$root/$plan" 2>/dev/null || true)
+  for n in "${!tos[@]}"; do
+    d=${tos[n],,}
+    [ -n "${count[$d]:-}" ] || order+=("$d")
+    count[$d]=$((${count[$d]:-0} + 1))
+  done
+  for d in "${order[@]}"; do
+    [ -n "${shown[$d]:-}" ] || continue
+    printf 'offer: docs commit adding %s items to "## Handed to %s" of %s\n' "${count[$d]}" "${shown[$d]}" "$plan"
+  done
+}
+# Parks each Handed to line of the ledger that has no Parked: line yet: reports
+# a withdrawn line, a malformed marker or an empty item and goes on; with no
+# later on PATH, reports the command that parks it; else marks a note the
 # queue already lists (the guard, one listing before the loop), or parks it
 # and appends its Parked: line in the same iteration, or reports the refusal.
 # Then finds each new note's position in the queue, copies the ledger into
-# the archive once more and prints the report lines in ledger line order.
+# the archive once more and prints the report lines in ledger line order,
+# then the offer lines.
 park_handed() {
   local n line to item why k listing p archive
   local -a lines report=() tos=() keys=() notes=() firsts=() fresh=()
-  local -A parked=()
+  local -A parked=() withdrawn=()
   mapfile -t lines < "$ws/progress.md"
   for line in "${lines[@]}"; do
     if [[ $line =~ ^Parked:\ line\ ([0-9]+): ]]; then parked[${BASH_REMATCH[1]}]=1; fi
+    if [[ $line =~ ^Withdrawn:\ line\ ([0-9]+): ]]; then withdrawn[${BASH_REMATCH[1]}]=1; fi
   done
   archive=$(printf '%s' "$dest" | canon)
   for ((n = 1; n <= ${#lines[@]}; n++)); do
     line=${lines[n - 1]}
     [[ $line == 'Handed to '* ]] && [ -z "${parked[$n]:-}" ] || continue
-    note_of "$line" && [ -n "$to" ] && [ -n "$item" ] || continue
+    if [ -n "${withdrawn[$n]:-}" ]; then report[n]="withdrawn: line $n"; continue; fi
+    if ! note_of "$line" || [ -z "$to" ]; then report[n]="not parked (malformed marker): line $n"; continue; fi
+    if [ -z "$item" ]; then report[n]="not parked (empty item): line $n"; continue; fi
     tos[n]=$to
     keys[n]="${to^}: $item"
     notes[n]="${keys[n]} Archive: $archive"
@@ -154,6 +197,7 @@ park_handed() {
   fi
   cp "$ws/progress.md" "$dest/progress.md"
   for n in "${!report[@]}"; do printf '%s\n' "${report[n]}"; done
+  offers
 }
 if [ -f "$ws/progress.md" ]; then park_handed; fi
 echo "$dest"
