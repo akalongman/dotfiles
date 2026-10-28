@@ -19,8 +19,10 @@
 # note <P>" when the queue no longer lists it), "parked earlier: line <N>, now
 # note <P>: ..." for a note the queue already held, or "not parked (<reason>):
 # <command>" when later is not on PATH or refuses, <command> parking the note
-# in this project from any terminal. A line with a "Withdrawn: line <N>:" line
-# is reported "withdrawn: line <N>" and not parked, whether or not it also has
+# in this project from any terminal, from the directory whose queue the note
+# belongs to (the main checkout inside a repository, since 2026-10-28). A line
+# with a "Withdrawn: line <N>:" line is reported "withdrawn: line <N>" and not
+# parked, whether or not it also has
 # a Parked: line; a line with no ": " or an empty destination is reported "not
 # parked (malformed marker): line <N>", one with an empty item "not parked
 # (empty item): line <N>". A Parked: line the ledger refuses (a write error)
@@ -125,9 +127,37 @@ ledger_line() {
 }
 # $1 single-quoted for the shell, each single quote in it written '\''.
 sq() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
+# Prints the directory whose queue a note parked from the working directory
+# belongs to, resolved as the laterbox engine's project_root and queue_file
+# resolve it (scripts/later.sh): one git call gives the top level, the git
+# directory and the common git directory; the root is the top level, or for
+# a linked worktree the common directory's parent (the main checkout),
+# spelled as cd -P spells it (as git printed it when cd cannot enter it). A
+# root equal to the home directory (a dotfiles repository) is discarded
+# unless the working directory is the home directory itself, an exception
+# pinned by case 16 of tools/test-run-archive.sh in the claude-subagent-apply
+# repository. A discarded root, a failed call (outside a work tree, a bare
+# repository, a git before 2.31 without --path-format) or a fourth line (a
+# path holding a newline) gives the working directory as cd -P spells it.
+# Untested here: the cd -P normalisation (git prints physical paths on this
+# machine) and the fallback for a git without --path-format.
+queue_dir() {
+  local out dir p home='' root=''
+  local -a l
+  dir=$(cd -P "$PWD" 2>/dev/null && pwd) || dir=$PWD
+  if [ -n "${HOME:-}" ]; then home=$(cd -P "$HOME" 2>/dev/null && pwd) || home=''; fi
+  if out=$(git -C "$PWD" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir 2>/dev/null) \
+    && mapfile -t l <<< "$out" && [ "${#l[@]}" -eq 3 ]; then
+    root=${l[0]}
+    if [ "${l[1]}" != "${l[2]}" ]; then root=${l[2]%/*}; root=${root:-/}; fi
+    if p=$(cd -P "$root" 2>/dev/null && pwd); then root=$p; fi
+    if [ -n "$home" ] && [ "$root" = "$home" ] && [ "$dir" != "$home" ]; then root=''; fi
+  fi
+  printf '%s\n' "${root:-$dir}"
+}
 # The paste-ready command that parks note $1 in this project's queue from any
-# terminal.
-park_cmd() { printf '(cd %s && later -- %s)' "$(sq "$(pwd)")" "$(sq "$1")"; }
+# terminal, from qdir, the queue's directory (a global park_handed sets once).
+park_cmd() { printf '(cd %s && later -- %s)' "$(sq "$qdir")" "$(sq "$1")"; }
 # Prints the offer lines: one per destination among the lines this call
 # attempted (tos, set by park_handed) that the workspace's plan has a heading
 # "## Handed to <destination>" for, the whole heading compared lower-cased
@@ -174,6 +204,7 @@ park_handed() {
   local n line to item why k listing p archive written='' copy_failed=''
   local -a lines report=() tos=() keys=() notes=() firsts=() kind=() unwritten=()
   local -A parked=() withdrawn=() seen=()
+  qdir=$(queue_dir)
   mapfile -t lines < "$ws/progress.md"
   for line in "${lines[@]}"; do
     if [[ $line =~ ^Parked:\ line\ ([0-9]+): ]]; then parked[${BASH_REMATCH[1]}]=1; fi
