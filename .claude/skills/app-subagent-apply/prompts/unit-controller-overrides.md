@@ -104,7 +104,7 @@ the final message.
   destination without a colon, then `: `, then what, file and line at
   HEAD, why it matters); one line per item, never one for an item an
   earlier `Handed to` line already covers; an item joining an earlier
-  handed item names that line by its ledger number. An item you would
+  handed item names that line by its ledger line number. An item you would
   route to the driver for later work (a later plan, the owner) gets the
   same line, with the destination you recommend, instead of a
   `routed to driver` line; a routed line names in-run work only. An item
