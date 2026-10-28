@@ -11,22 +11,30 @@
 # through the laterbox engine (later), as the note "<Destination>: <item>
 # Archive: <archive path>", and writes "Parked: line <N>: <destination>:
 # <first six words>" to the ledger before copying it into the archive once
-# more. A note the queue already lists gets its Parked: line and is not parked
-# again. Each line is reported in ledger line order: "parked: line <N>, now
-# note <P>: <first six words>" ("position unknown" in place of "now note <P>"
-# when the queue no longer lists it), "parked earlier: line <N>, now note <P>:
-# ..." for a note the queue already held, or "not parked (<reason>):
+# more. A note the queue already lists (its text the key, alone or followed
+# by " Archive: " and a path under a docs/tmp/apply-runs/ directory) gets its
+# Parked: line and is not parked again, and so does a second line of one call
+# with the same key. Each line is reported in ledger line order: "parked: line
+# <N>, now note <P>: <first six words>" ("position unknown" in place of "now
+# note <P>" when the queue no longer lists it), "parked earlier: line <N>, now
+# note <P>: ..." for a note the queue already held, or "not parked (<reason>):
 # <command>" when later is not on PATH or refuses, <command> parking the note
 # in this project from any terminal. A line with a "Withdrawn: line <N>:" line
-# is reported "withdrawn: line <N>" and not parked; a line with no ": " or an
-# empty destination is reported "not parked (malformed marker): line <N>", one
-# with an empty item "not parked (empty item): line <N>". When the call
+# is reported "withdrawn: line <N>" and not parked, whether or not it also has
+# a Parked: line; a line with no ": " or an empty destination is reported "not
+# parked (malformed marker): line <N>", one with an empty item "not parked
+# (empty item): line <N>". A Parked: line the ledger refuses (a write error)
+# leaves the park standing and adds "not marked (ledger write failed): line
+# <N>" after the line's report; a second ledger copy that fails adds "not
+# archived (ledger copy failed): <archive ledger path>" after the report
+# lines; neither fails the archive. When the call
 # attempted a line (parked it, found it parked earlier, or reported it not
 # parked because later is missing or refused it; a malformed marker or an
 # empty item is never an attempt and adds nothing to a count) and the
 # workspace's plan-path names a plan inside the repository, each attempted
-# destination with a heading "## Handed to <destination>" in the plan gets
-# the line
+# destination with a heading "## Handed to <destination>" in the plan (the
+# heading compared case-insensitively with its whitespace collapsed) gets the
+# line
 #   offer: docs commit adding <count> items to "## Handed to <destination>" of <plan path>
 #
 # Usage: run-archive WORKSPACE_DIR [NAME]
@@ -86,14 +94,16 @@ note_of() {
   item=$(printf '%s' "${rest#*: }" | canon)
 }
 # Prints the position of the first note in listing $2 (bare later's output)
-# whose text is key $1, alone or followed by " Archive: ...", and fails when
-# there is none. The whole line must match, so a note whose text only begins
-# with the key is never taken.
+# whose text is key $1, alone or followed by " Archive: " and a path under a
+# docs/tmp/apply-runs/ directory (the suffix this script and its pasted
+# command write, under any config directory), and fails when there is none.
+# The whole line must match, so a note whose text only begins with the key,
+# or carries another item's " Archive: " text, is never taken.
 position() {
   local re='^ *([0-9]+)\. (.*) \([^()]*\)$' line
   while IFS= read -r line; do
     [[ $line =~ $re ]] || continue
-    if [ "${BASH_REMATCH[2]}" = "$1" ] || [[ ${BASH_REMATCH[2]} == "$1 Archive: "* ]]; then
+    if [ "${BASH_REMATCH[2]}" = "$1" ] || [[ ${BASH_REMATCH[2]} == "$1 Archive: "*"/docs/tmp/apply-runs/"* ]]; then
       printf '%s\n' "${BASH_REMATCH[1]}"
       return 0
     fi
@@ -101,10 +111,13 @@ position() {
   return 1
 }
 # Appends line $1 to the ledger on a line of its own, even when the ledger
-# lacks its final newline.
+# lacks its final newline; fails, with nothing on stderr, when the ledger
+# cannot be written.
 ledger_line() {
-  if [ -n "$(tail -c1 "$ws/progress.md")" ]; then echo >> "$ws/progress.md"; fi
-  printf '%s\n' "$1" >> "$ws/progress.md"
+  {
+    if [ -n "$(tail -c1 "$ws/progress.md")" ]; then echo >> "$ws/progress.md"; fi
+    printf '%s\n' "$1" >> "$ws/progress.md"
+  } 2>/dev/null
 }
 # $1 single-quoted for the shell, each single quote in it written '\''.
 sq() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
@@ -113,23 +126,26 @@ sq() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
 park_cmd() { printf '(cd %s && later -- %s)' "$(sq "$(pwd)")" "$(sq "$1")"; }
 # Prints the offer lines: one per destination among the lines this call
 # attempted (tos, set by park_handed) that the workspace's plan has a heading
-# "## Handed to <destination>" for, compared lower-cased with whitespace
-# collapsed, in ledger order of the destination's first line. The plan is
+# "## Handed to <destination>" for, the whole heading compared lower-cased
+# with whitespace collapsed, in ledger order of the destination's first line.
+# The offer names the destination as the plan spells it. The plan is
 # plan-path resolved against the top level of the working directory's work
 # tree; an absolute plan-path (outside the repository), a working directory
 # outside every repository or a missing plan gives none.
 offers() {
-  local plan root heading d n
+  local plan root heading d n hre='^## handed to (.*)$'
   local -a order=()
   local -A shown=() count=()
   [ "${#tos[@]}" -gt 0 ] && [ -f "$ws/plan-path" ] && plan=$(cat "$ws/plan-path" 2>/dev/null) || return 0
   case $plan in '' | /*) return 0 ;; esac
   root=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) && [ -f "$root/$plan" ] || return 0
   while IFS= read -r heading; do
-    d=$(printf '%s' "${heading#'## Handed to '}" | canon)
+    heading=$(printf '%s' "$heading" | canon)
+    [[ ${heading,,} =~ $hre ]] || continue
+    d=${heading:${#heading}-${#BASH_REMATCH[1]}}
     [ -n "$d" ] && [ -z "${shown[${d,,}]:-}" ] || continue
     shown[${d,,}]=$d
-  done < <(grep -e '^## Handed to ' -- "$root/$plan" 2>/dev/null || true)
+  done < <(grep -iE '^##[[:space:]]+handed[[:space:]]+to[[:space:]]' -- "$root/$plan" 2>/dev/null || true)
   for n in "${!tos[@]}"; do
     d=${tos[n],,}
     [ -n "${count[$d]:-}" ] || order+=("$d")
@@ -141,17 +157,19 @@ offers() {
   done
 }
 # Parks each Handed to line of the ledger that has no Parked: line yet: reports
-# a withdrawn line, a malformed marker or an empty item and goes on; with no
-# later on PATH, reports the command that parks it; else marks a note the
-# queue already lists (the guard, one listing before the loop), or parks it
-# and appends its Parked: line in the same iteration, or reports the refusal.
-# Then finds each new note's position in the queue, copies the ledger into
-# the archive once more and prints the report lines in ledger line order,
-# then the offer lines.
+# a withdrawn line (Parked: or not), a malformed marker or an empty item and
+# goes on; with no later on PATH, reports the command that parks it; else
+# marks a note the queue already lists (the guard, one listing before the
+# loop) or one this call parked for an earlier line with the same key, or
+# parks it and appends its Parked: line in the same iteration, or reports the
+# refusal. Then finds each new note's position in the queue, reports a
+# Parked: line the ledger refused, copies the ledger into the archive once
+# more (reported when it fails) and prints the report lines in ledger line
+# order, then the offer lines.
 park_handed() {
-  local n line to item why k listing p archive
-  local -a lines report=() tos=() keys=() notes=() firsts=() fresh=()
-  local -A parked=() withdrawn=()
+  local n line to item why k listing p archive copy_failed=
+  local -a lines report=() tos=() keys=() notes=() firsts=() kind=() unwritten=()
+  local -A parked=() withdrawn=() seen=()
   mapfile -t lines < "$ws/progress.md"
   for line in "${lines[@]}"; do
     if [[ $line =~ ^Parked:\ line\ ([0-9]+): ]]; then parked[${BASH_REMATCH[1]}]=1; fi
@@ -160,8 +178,9 @@ park_handed() {
   archive=$(printf '%s' "$dest" | canon)
   for ((n = 1; n <= ${#lines[@]}; n++)); do
     line=${lines[n - 1]}
-    [[ $line == 'Handed to '* ]] && [ -z "${parked[$n]:-}" ] || continue
+    [[ $line == 'Handed to '* ]] || continue
     if [ -n "${withdrawn[$n]:-}" ]; then report[n]="withdrawn: line $n"; continue; fi
+    [ -z "${parked[$n]:-}" ] || continue
     if ! note_of "$line" || [ -z "$to" ]; then report[n]="not parked (malformed marker): line $n"; continue; fi
     if [ -z "$item" ]; then report[n]="not parked (empty item): line $n"; continue; fi
     tos[n]=$to
@@ -174,31 +193,37 @@ park_handed() {
   elif [ "${#keys[@]}" -gt 0 ]; then
     listing=$(later 2>/dev/null) || listing=
     for n in "${!keys[@]}"; do
-      if p=$(position "${keys[n]}" "$listing"); then
-        ledger_line "Parked: line $n: ${tos[n]}: ${firsts[n]}"
+      if [ -n "${seen["${keys[n]}"]:-}" ]; then
+        kind[n]='parked earlier'
+      elif p=$(position "${keys[n]}" "$listing"); then
         report[n]="parked earlier: line $n, now note $p: ${firsts[n]}"
       elif why=$(later -- "${notes[n]}" 2>&1 >/dev/null); then
-        ledger_line "Parked: line $n: ${tos[n]}: ${firsts[n]}"
-        fresh[n]=1
+        kind[n]=parked; seen["${keys[n]}"]=1
       else
         k=$?
         why=${why%%$'\n'*}
         report[n]="not parked (${why:-later exited $k}): $(park_cmd "${notes[n]}")"
+        continue
       fi
+      ledger_line "Parked: line $n: ${tos[n]}: ${firsts[n]}" || unwritten[n]=1
     done
   fi
-  if [ "${#fresh[@]}" -gt 0 ]; then
+  # The lines whose position is read after the parks: this call's own parks
+  # and the repeats of their keys.
+  if [ "${#kind[@]}" -gt 0 ]; then
     listing=$(later 2>/dev/null) || listing=
-    for n in "${!fresh[@]}"; do
+    for n in "${!kind[@]}"; do
       if p=$(position "${keys[n]}" "$listing"); then
-        report[n]="parked: line $n, now note $p: ${firsts[n]}"
+        report[n]="${kind[n]}: line $n, now note $p: ${firsts[n]}"
       else
-        report[n]="parked: line $n, position unknown: ${firsts[n]}"
+        report[n]="${kind[n]}: line $n, position unknown: ${firsts[n]}"
       fi
     done
   fi
-  cp "$ws/progress.md" "$dest/progress.md"
+  for n in "${!unwritten[@]}"; do report[n]+=$'\n'"not marked (ledger write failed): line $n"; done
+  cp "$ws/progress.md" "$dest/progress.md" 2>/dev/null || copy_failed=1
   for n in "${!report[@]}"; do printf '%s\n' "${report[n]}"; done
+  [ -z "$copy_failed" ] || echo "not archived (ledger copy failed): $dest/progress.md"
   offers
 }
 if [ -f "$ws/progress.md" ]; then park_handed; fi
