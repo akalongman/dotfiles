@@ -20,10 +20,12 @@
 # note <P>: ..." for a note the queue already held, or "not parked (<reason>):
 # <command>" when later is not on PATH or refuses, <command> parking the note
 # in this project from any terminal, from the directory whose queue the note
-# belongs to (the main checkout inside a repository, since 2026-10-28). A line
-# with a "Withdrawn: line <N>:" line is reported "withdrawn: line <N>" and not
-# parked, whether or not it also has
-# a Parked: line; a line with no ": " or an empty destination is reported "not
+# belongs to (since 2026-10-28: inside a repository its main checkout, except
+# that a root equal to the home directory gives way to the working directory
+# unless the run is in the home directory; outside one the working
+# directory). A line with a "Withdrawn: line <N>:" line is reported
+# "withdrawn: line <N>" and not parked, whether or not it also has a Parked:
+# line; a line with no ": " or an empty destination is reported "not
 # parked (malformed marker): line <N>", one with an empty item "not parked
 # (empty item): line <N>". A Parked: line the ledger refuses (a write error)
 # leaves the park standing and adds "not marked (ledger write failed): line
