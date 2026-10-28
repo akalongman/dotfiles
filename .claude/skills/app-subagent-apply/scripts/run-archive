@@ -12,9 +12,9 @@
 # Archive: <archive path>", and writes "Parked: line <N>: <destination>:
 # <first six words>" to the ledger before copying it into the archive once
 # more. A note the queue already lists (its text the key, alone or followed
-# by " Archive: " and a path under a docs/tmp/apply-runs/ directory) gets its
-# Parked: line and is not parked again, and so does a second line of one call
-# with the same key. Each line is reported in ledger line order: "parked: line
+# by " Archive: " and one absolute path under a docs/tmp/apply-runs/
+# directory) gets its Parked: line and is not parked again, and so does a
+# second line of one call with the same key. Each line is reported in ledger line order: "parked: line
 # <N>, now note <P>: <first six words>" ("position unknown" in place of "now
 # note <P>" when the queue no longer lists it), "parked earlier: line <N>, now
 # note <P>: ..." for a note the queue already held, or "not parked (<reason>):
@@ -25,9 +25,10 @@
 # parked (malformed marker): line <N>", one with an empty item "not parked
 # (empty item): line <N>". A Parked: line the ledger refuses (a write error)
 # leaves the park standing and adds "not marked (ledger write failed): line
-# <N>" after the line's report; a second ledger copy that fails adds "not
-# archived (ledger copy failed): <archive ledger path>" after the report
-# lines; neither fails the archive. When the call
+# <N>" after the line's report; the second ledger copy, made when the call
+# wrote a Parked: line, adds "not archived (ledger copy failed): <archive
+# ledger path>" after the report lines when it fails; neither fails the
+# archive. When the call
 # attempted a line (parked it, found it parked earlier, or reported it not
 # parked because later is missing or refused it; a malformed marker or an
 # empty item is never an attempt and adds nothing to a count) and the
@@ -94,16 +95,19 @@ note_of() {
   item=$(printf '%s' "${rest#*: }" | canon)
 }
 # Prints the position of the first note in listing $2 (bare later's output)
-# whose text is key $1, alone or followed by " Archive: " and a path under a
-# docs/tmp/apply-runs/ directory (the suffix this script and its pasted
-# command write, under any config directory), and fails when there is none.
-# The whole line must match, so a note whose text only begins with the key,
-# or carries another item's " Archive: " text, is never taken.
+# whose text is key $1, alone or followed by " Archive: " and one absolute
+# path under a docs/tmp/apply-runs/ directory (the suffix this script and its
+# pasted command write, under any config directory), and fails when there is
+# none. The whole line must match, so a note whose text only begins with the
+# key, or goes on with another item's " Archive: " text before the suffix
+# (a sibling item this script parked), is never taken.
 position() {
-  local re='^ *([0-9]+)\. (.*) \([^()]*\)$' line
+  local re='^ *([0-9]+)\. (.*) \([^()]*\)$' line text rest
   while IFS= read -r line; do
     [[ $line =~ $re ]] || continue
-    if [ "${BASH_REMATCH[2]}" = "$1" ] || [[ ${BASH_REMATCH[2]} == "$1 Archive: "*"/docs/tmp/apply-runs/"* ]]; then
+    text=${BASH_REMATCH[2]}
+    rest=${text#"$1 Archive: "}
+    if [ "$text" = "$1" ] || { [ "$rest" != "$text" ] && [[ $rest == /*/docs/tmp/apply-runs/* && $rest != *' Archive: '* ]]; }; then
       printf '%s\n' "${BASH_REMATCH[1]}"
       return 0
     fi
@@ -164,10 +168,10 @@ offers() {
 # parks it and appends its Parked: line in the same iteration, or reports the
 # refusal. Then finds each new note's position in the queue, reports a
 # Parked: line the ledger refused, copies the ledger into the archive once
-# more (reported when it fails) and prints the report lines in ledger line
-# order, then the offer lines.
+# more when a Parked: line was written (reported when the copy fails) and
+# prints the report lines in ledger line order, then the offer lines.
 park_handed() {
-  local n line to item why k listing p archive copy_failed=
+  local n line to item why k listing p archive written='' copy_failed=''
   local -a lines report=() tos=() keys=() notes=() firsts=() kind=() unwritten=()
   local -A parked=() withdrawn=() seen=()
   mapfile -t lines < "$ws/progress.md"
@@ -205,7 +209,7 @@ park_handed() {
         report[n]="not parked (${why:-later exited $k}): $(park_cmd "${notes[n]}")"
         continue
       fi
-      ledger_line "Parked: line $n: ${tos[n]}: ${firsts[n]}" || unwritten[n]=1
+      if ledger_line "Parked: line $n: ${tos[n]}: ${firsts[n]}"; then written=1; else unwritten[n]=1; fi
     done
   fi
   # The lines whose position is read after the parks: this call's own parks
@@ -221,7 +225,7 @@ park_handed() {
     done
   fi
   for n in "${!unwritten[@]}"; do report[n]+=$'\n'"not marked (ledger write failed): line $n"; done
-  cp "$ws/progress.md" "$dest/progress.md" 2>/dev/null || copy_failed=1
+  if [ -n "$written" ]; then cp "$ws/progress.md" "$dest/progress.md" 2>/dev/null || copy_failed=1; fi
   for n in "${!report[@]}"; do printf '%s\n' "${report[n]}"; done
   [ -z "$copy_failed" ] || echo "not archived (ledger copy failed): $dest/progress.md"
   offers
