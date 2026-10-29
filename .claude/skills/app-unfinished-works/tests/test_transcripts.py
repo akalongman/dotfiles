@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from typing import Any
 
-from scripts.unfinishedlib import model, transcripts
+from scripts.unfinishedlib import model, render, transcripts
 from tests import transcript_fixture as tf
 from tests.transcript_fixture import assistant, bridge, system, tool_result, user
 
@@ -701,3 +701,13 @@ class TranscriptsTest(unittest.TestCase):
         self.assertIs(invoked.ran_skill, True)
         plain = self._session([user("go"), assistant("ok")])
         self.assertIs(plain.ran_skill, False)
+
+        # The report's header, as the renderer prints it, in a request or an assistant text.
+        report = render.REPORT_HEADER + MAIN + "\n\ntip (certain): feature/x\n"
+        pasted = self._session([user("Here is the report:\n" + report + "Finish my-change"), assistant("On it")])
+        self.assertIs(pasted.ran_skill, True)
+        quoted = self._session([user("go"), assistant("```text\n" + report + "```")])
+        self.assertIs(quoted.ran_skill, True)
+        # Words of the header that are not the header count for nothing.
+        loose = self._session([user("Unfinished work report: later"), assistant("ok")])
+        self.assertIs(loose.ran_skill, False)

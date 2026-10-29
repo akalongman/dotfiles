@@ -173,13 +173,20 @@ class AssociateTest(unittest.TestCase):
                 [Evidence("mention", "feature/x", _ts(7)), Evidence("work", "feature/x", _ts(1))],
                 ran_skill=True,
             ),
+            # As built, a request still counts: whether a request holding a
+            # pasted report should is the owner's open question.
+            _session(
+                "report-and-request",
+                [Evidence("mention", "feature/x", _ts(6)), Evidence("request", "feature/x", _ts(2))],
+                ran_skill=True,
+            ),
             _session("plain-mention", [Evidence("mention", "feature/x", _ts(3))]),
         ]
 
         associate.associate([item], sessions)
 
-        self.assertEqual([a.session_id for a in item.sessions], ["report-and-work", "plain-mention"])
-        self.assertEqual(item.sessions[0].ts, _ts(1))
+        self.assertEqual([a.session_id for a in item.sessions], ["report-and-work", "report-and-request", "plain-mention"])
+        self.assertEqual([(a.evidence, a.ts) for a in item.sessions[:2]], [("work", _ts(1)), ("request", _ts(2))])
 
     def test_stash_association_compares_zoned_timestamps(self) -> None:
         # 12:15 at +04:00 is 08:15 UTC: 08:30Z is after it although "08:30" < "12:15" as text.

@@ -16,9 +16,10 @@ from typing import Any
 from scripts.unfinishedlib import associate, inventory, live
 from scripts.unfinishedlib.inventory import Inventory
 from scripts.unfinishedlib.model import Association, Item, LiveSession, Session
+# The report's first line is REPORT_HEADER and the main checkout's path. The
+# constant lives in transcripts, which reads it to tell that a session ran the skill.
+from scripts.unfinishedlib.transcripts import REPORT_HEADER
 
-# The report's first line is this prefix and the main checkout's path.
-REPORT_HEADER = "Unfinished work report for "
 GROUP_HEADINGS = {
     "openspec-pending": "Pending OpenSpec changes",
     "tip": "Branch tips not integrated",

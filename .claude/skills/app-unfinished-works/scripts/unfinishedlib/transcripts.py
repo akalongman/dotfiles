@@ -41,9 +41,12 @@ _LOCAL_PREFIXES = (*HARNESS_TAGS, INTERRUPTION_MARKER)
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit")
 QUESTION_TOOL = "AskUserQuestion"
 
-# How a session shows that it ran this skill.
+# How a session shows that it ran this skill: the script in a shell command,
+# the slash command in a request, or the report's header (render prints it
+# before the main checkout's path) in a request or an assistant text.
 SKILL_SCRIPT = "app-unfinished-works/scripts/unfinished.py"
 SKILL_COMMAND = "/app-unfinished-works"
+REPORT_HEADER = "Unfinished work report for "
 
 # A command that writes files, counted as the command word of a simple
 # command (sed only with an in-place option).
@@ -541,11 +544,12 @@ def _session(
             if node.user_class == "request":
                 user_turns += 1
                 last_request = node.request
-                ran_skill = ran_skill or SKILL_COMMAND in node.request
+                ran_skill = ran_skill or SKILL_COMMAND in node.request or REPORT_HEADER in node.request
                 evidence.extend(Evidence("request", name, node.ts) for name in matcher.find(node.request))
         elif node.kind == "assistant":
             for text in node.texts:
                 last_assistant = text
+                ran_skill = ran_skill or REPORT_HEADER in text
                 evidence.extend(Evidence("mention", name, node.ts) for name in matcher.find(text))
             for use_id, name, tool_input in node.tool_uses:
                 command = tool_input.get("command")
