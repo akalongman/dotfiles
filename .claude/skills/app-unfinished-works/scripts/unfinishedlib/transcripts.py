@@ -626,9 +626,14 @@ def _strings(value: Any) -> Iterator[str]:
 
 
 def _shell_tokens(command: str) -> list[str]:
-    """Shell words and operators; quoted text is one word, a newline an operator."""
+    """Shell words and operators; quoted text is one word, a newline an operator.
+
+    shlex drops a comment together with the newline that ends it, so every
+    newline is doubled first and one survives as the separator. A doubled
+    newline inside a quoted word changes no decision.
+    """
     text = command.replace("\\\n", " ")
-    lexer = shlex.shlex(text, posix=True, punctuation_chars=_OPERATOR_CHARS)
+    lexer = shlex.shlex(text.replace("\n", "\n\n"), posix=True, punctuation_chars=_OPERATOR_CHARS)
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     try:

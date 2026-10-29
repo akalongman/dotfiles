@@ -465,6 +465,13 @@ class TranscriptsTest(unittest.TestCase):
             ("git branch -a | grep -c x", False),
             # A newline ends a command: the -a of the second line is not the first one's.
             ("git branch -D feature/x\ngit branch -a", True),
+            # A trailing comment keeps the newline that ends it.
+            ("cd /p  # main checkout\ngit push origin feature/x", True),
+            ("git status  # check first\ngit commit -m done", True),
+            ("ls changes  # list\nrm -rf openspec/changes/my-change", True),
+            # A quoted # is a word, not a comment; an unquoted one at a word's start is.
+            ("echo '#x' && rm y", True),
+            ("echo #x && rm y", False),
             ("git stash", True),
             ("git stash pop", True),
             ("git stash show -p", False),
