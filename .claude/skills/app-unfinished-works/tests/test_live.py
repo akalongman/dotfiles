@@ -13,6 +13,7 @@ import os
 import tempfile
 import unittest
 from typing import Any
+from unittest import mock
 
 from scripts.unfinishedlib import live, model
 from scripts.unfinishedlib.model import LiveSession
@@ -32,13 +33,19 @@ NOW = 1_800_000_000.0
 CLAUDE_SESSIONS = ["claude-sessions", "--json", "--all"]
 
 
-def _runner(returncode: int, stdout: str, calls: list[tuple[list[str], str | None]] | None = None) -> model.Runner:
-    """A runner that answers every command with returncode and stdout, recording each call."""
+def _runner(
+    returncode: int,
+    stdout: str,
+    calls: list[tuple[list[str], str | None]] | None = None,
+    *,
+    stderr: str = "",
+) -> model.Runner:
+    """A runner that answers every command with returncode, stdout and stderr, recording each call."""
 
     def run(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
         if calls is not None:
             calls.append((argv, cwd))
-        return returncode, stdout, "" if returncode == 0 else "claude-sessions: failed"
+        return returncode, stdout, stderr
 
     return run
 
@@ -184,6 +191,33 @@ class LiveTest(unittest.TestCase):
         self.assertIsNone(live.from_claude_sessions(_runner(0, "{}")))
         self.assertIsNone(live.from_claude_sessions(_runner(0, "jq: error")))
 
+    def test_claude_sessions_failure_is_a_note(self) -> None:
+        command = "claude-sessions --json --all: "
+        fallback = "; registry read directly"
+        not_array = command + "output is not a JSON array" + fallback
+        cases = [
+            (127, "", "claude-sessions: command not found", "claude-sessions: not found" + fallback),
+            # The first non-blank line of stderr, stripped.
+            (1, "", "\n  jq: error: syntax error\nmore\n", command + "exit 1: jq: error: syntax error" + fallback),
+            (2, "", "", command + "exit 2" + fallback),
+            (0, "{}", "", not_array),
+            (0, "jq: error", "", not_array),
+        ]
+        for returncode, stdout, stderr, note in cases:
+            with self.subTest(returncode=returncode, stdout=stdout):
+                state = model.Run()
+
+                found = live.from_claude_sessions(_runner(returncode, stdout, stderr=stderr), run=state)
+
+                self.assertIsNone(found)
+                self.assertEqual(state.notes, [note])
+                self.assertEqual(state.errors, [])
+                self.assertTrue(state.complete)
+        state = model.Run()
+
+        self.assertEqual(live.from_claude_sessions(_runner(0, "[]"), run=state), [])
+        self.assertEqual(state.notes, [])
+
     # Registry files.
 
     def test_registry_requires_matching_start_time(self) -> None:
@@ -229,6 +263,35 @@ class LiveTest(unittest.TestCase):
         )
         self.assertEqual(self.state.errors, [broken + ": not JSON"])
         self.assertFalse(self.state.complete)
+
+    def test_registry_rereads_a_file_caught_mid_write(self) -> None:
+        for pid in (901, 902, 903, 904):
+            proc_fixture.make_proc(self.proc, pid, "claude", MAIN, None, START)
+        whole = self._register(self.slot1, 901, START)
+        broken = self._write_registry(self.slot1, "902.json", '{"pid": 902, "procStart"')
+        vanishing = self._register(self.slot1, 903, START)
+        locked = self._register(self.slot1, 904, START)
+        real_read = live._read_registry_file
+        reads: list[str] = []
+
+        def read(path: str) -> bytes:
+            """The first read of every file but the broken one is cut short, as mid-write."""
+            reads.append(path)
+            data = real_read(path)
+            if path != broken and reads.count(path) == 1:
+                return data[: len(data) // 2]
+            if path == vanishing:
+                raise FileNotFoundError(2, "No such file or directory", path)
+            if path == locked:
+                raise PermissionError(13, "Permission denied", path)
+            return data
+
+        with mock.patch.object(live, "_read_registry_file", read):
+            found = live.from_registry([self.slot1], self.proc, self.state)
+
+        self.assertEqual(found, [LiveSession("s-901", 901, MAIN, "1", "n-901", "idle", "registry")])
+        self.assertEqual(reads, [path for path in (whole, broken, vanishing, locked) for _ in (1, 2)])
+        self.assertEqual(self.state.errors, [broken + ": not JSON", "read " + locked + ": Permission denied"])
 
     # The process scan.
 
@@ -314,7 +377,7 @@ class LiveTest(unittest.TestCase):
             [LiveSession("s-701", 701, MAIN, "1", "n-701", "idle", "registry"), _process(702, MAIN, "2")],
         )
         self.assertEqual(self.state.errors, [])
-        self.assertEqual(self.state.notes, [])
+        self.assertEqual(self.state.notes, ["claude-sessions: not found; registry read directly"])
 
     # The repository and the marks.
 
@@ -376,3 +439,19 @@ class LiveTest(unittest.TestCase):
         self.assertEqual(in_outside.live, "possibly live")
         self.assertEqual(notes, [_note(gone), _note(OUTSIDE)])
 
+
+    def test_process_in_a_removed_worktree_marks_it_possibly_live(self) -> None:
+        gone = MAIN + "/.worktrees/gone"
+        # The kernel marks a removed cwd with " (deleted)"; only one marker is stripped.
+        proc_fixture.make_proc(self.proc, 801, "claude", gone + " (deleted)", None, START)
+        proc_fixture.make_proc(self.proc, 802, "claude", "/w/x (deleted) (deleted)", None, START)
+        in_gone = _session("s-gone", gone, NOW)
+        in_main = _session("s-main", MAIN, NOW)
+
+        found = live.live_sessions([self.slot1], self.proc, _runner(0, "[]"), self.state)
+        notes = live.mark_live([in_gone, in_main], found, CHECKOUTS, MAIN, NOW)
+
+        self.assertEqual(found, [_process(801, gone), _process(802, "/w/x (deleted)")])
+        self.assertEqual(in_gone.live, "possibly live")
+        self.assertIsNone(in_main.live)
+        self.assertEqual(notes, [_note(gone)])

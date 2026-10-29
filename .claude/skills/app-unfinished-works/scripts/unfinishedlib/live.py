@@ -32,6 +32,8 @@ POSSIBLY_LIVE_SECONDS = 600
 _STATES = {"busy": "working", "waiting": "waiting"}
 _SLOT_DIR = re.compile(r"\.claude([0-9]*)")
 _CONFIG_DIR = b"CLAUDE_CONFIG_DIR="
+# What the kernel appends to the cwd link of a process whose directory was removed.
+_DELETED = " (deleted)"
 
 
 def proc_start(stat_text: str) -> str:
@@ -43,23 +45,31 @@ def proc_start(stat_text: str) -> str:
     return stat_text[stat_text.rfind(")") + 2 :].split()[19]
 
 
-def from_claude_sessions(runner: Runner = model.default_runner) -> list[LiveSession] | None:
+def from_claude_sessions(runner: Runner = model.default_runner, *, run: Run | None = None) -> list[LiveSession] | None:
     """The rows of `claude-sessions --json --all`, or None when it gives none.
 
     None on any non-zero exit (127 when the command is absent) or a stdout
-    that is not a JSON array; neither is an error, as the registry read
-    covers the same files. A row that is not an object, or has no integer
-    pid or no string cwd (an older claude-sessions prints no pid), is
-    skipped; a row without a string sessionId gives session_id None.
+    that is not a JSON array. Neither is an error, as the registry read
+    covers the same files; given a run, the reason is one footer note. A
+    row that is not an object, or has no integer pid or no string cwd (an
+    older claude-sessions prints no pid), is skipped; a row without a
+    string sessionId gives session_id None.
     """
-    returncode, stdout, _ = runner(CLAUDE_SESSIONS, None)
+    returncode, stdout, stderr = runner(CLAUDE_SESSIONS, None)
+    command = " ".join(CLAUDE_SESSIONS)
+    if returncode == 127:
+        _note_fallback(run, CLAUDE_SESSIONS[0] + ": not found")
+        return None
     if returncode != 0:
+        line = _first_line(stderr)
+        _note_fallback(run, command + ": exit " + str(returncode) + (": " + line if line else ""))
         return None
     try:
         rows = json.loads(stdout)
     except ValueError:
-        return None
+        rows = None
     if not isinstance(rows, list):
+        _note_fallback(run, command + ": output is not a JSON array")
         return None
     found: list[LiveSession] = []
     for row in rows:
@@ -89,11 +99,14 @@ def from_registry(slot_roots: list[str], proc_root: str, run: Run) -> list[LiveS
     Roots are read in the order given, each one's files sorted by name. An
     entry is kept only when <proc_root>/<pid>/stat reads and its start time
     equals the entry's procStart, so an entry left behind after pid reuse is
-    dropped; a missing or unreadable stat means the process is gone. A file
-    that is not JSON or cannot be read is an error; one that vanished since
-    the listing, and a root without a sessions directory, are not. An entry
-    that is not an object, or has no integer pid, no procStart or no string
-    cwd, is skipped, as claude-sessions skips it.
+    dropped; a missing or unreadable stat means the process is gone. The
+    harness rewrites a file in place, so a read can land between the
+    truncation and the write: a file that does not parse is read once more,
+    and is an error only when the second read does not parse either. A file
+    that cannot be read is an error; one that vanished (on either read), and
+    a root without a sessions directory, are not. An entry that is not an
+    object, or has no integer pid, no procStart or no string cwd, is
+    skipped, as claude-sessions skips it.
     """
     found: list[LiveSession] = []
     for root in slot_roots:
@@ -107,18 +120,7 @@ def from_registry(slot_roots: list[str], proc_root: str, run: Run) -> list[LiveS
             _record_unreadable(run, folder, exc)
             continue
         for name in names:
-            path = os.path.join(folder, name)
-            try:
-                with open(path, encoding="utf-8") as handle:
-                    entry = json.loads(handle.read())
-            except FileNotFoundError:
-                continue
-            except OSError as exc:
-                _record_unreadable(run, path, exc)
-                continue
-            except ValueError:
-                _record_error(run, path + ": not JSON")
-                continue
+            entry = _load_entry(os.path.join(folder, name), run)
             if not isinstance(entry, dict):
                 continue
             pid, start, cwd = entry.get("pid"), entry.get("procStart"), entry.get("cwd")
@@ -149,8 +151,10 @@ def from_processes(proc_root: str, run: Run) -> list[LiveSession]:
     programs and users, whose files may be unreadable, and an entry can exit
     before it is read. For a claude process stat, the cwd link and environ
     are read; a failure on any of them (the process exited mid-read) is one
-    error naming that file, and the process gives no row. The slot comes
-    from CLAUDE_CONFIG_DIR in environ.
+    error naming that file, and the process gives no row. One trailing
+    " (deleted)", the kernel's marker for a removed directory, is stripped
+    from the cwd, so a process left in a removed worktree still names it.
+    The slot comes from CLAUDE_CONFIG_DIR in environ.
     """
     try:
         names = os.listdir(proc_root)
@@ -173,7 +177,7 @@ def from_processes(proc_root: str, run: Run) -> list[LiveSession]:
             with open(path, "rb") as handle:
                 handle.read()
             path = os.path.join(folder, "cwd")
-            cwd = os.readlink(path)
+            cwd = os.readlink(path).removesuffix(_DELETED)
             path = os.path.join(folder, "environ")
             with open(path, "rb") as handle:
                 environ = handle.read()
@@ -189,9 +193,10 @@ def live_sessions(slot_roots: list[str], proc_root: str, runner: Runner, run: Ru
 
     The rows of claude-sessions come first, then the registry's, then the
     processes'. The first row for a pid is kept; when it names no session,
-    the first later row for that pid that names one lends it its id.
+    the first later row for that pid that names one lends it its id. When
+    claude-sessions gives no rows, run gets a note saying why.
     """
-    rows = (from_claude_sessions(runner) or []) + from_registry(slot_roots, proc_root, run)
+    rows = (from_claude_sessions(runner, run=run) or []) + from_registry(slot_roots, proc_root, run)
     rows += from_processes(proc_root, run)
     kept: dict[int, LiveSession] = {}
     for row in rows:
@@ -281,6 +286,34 @@ def _config_slot(environ: bytes) -> str:
     return "1"
 
 
+def _load_entry(path: str, run: Run) -> Any:
+    """The parsed JSON of one registry file, or None when it is skipped or recorded.
+
+    A file that does not parse is read once more before it counts as not
+    JSON (see from_registry); a vanished file is None with no record.
+    """
+    for _ in range(2):
+        try:
+            data = _read_registry_file(path)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            _record_unreadable(run, path, exc)
+            return None
+        try:
+            return json.loads(data)
+        except ValueError:
+            continue
+    _record_error(run, path + ": not JSON")
+    return None
+
+
+def _read_registry_file(path: str) -> bytes:
+    """The bytes of one registry file; json.loads decodes them, so bad UTF-8 is a parse failure."""
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
 def _start_time(proc_root: str, pid: int) -> str | None:
     """The start time of a running pid, or None when its stat is missing, unreadable or malformed."""
     try:
@@ -301,6 +334,19 @@ def _under(path: str, root: str) -> bool:
 
 def _string(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _first_line(text: str) -> str:
+    """The first non-blank line of text, stripped; "" when there is none."""
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _note_fallback(run: Run | None, reason: str) -> None:
+    if run is not None:
+        run.notes.append(reason + "; registry read directly")
 
 
 def _record_unreadable(run: Run, path: str, exc: OSError) -> None:
