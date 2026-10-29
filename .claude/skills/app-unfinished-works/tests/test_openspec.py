@@ -177,16 +177,48 @@ class OpenspecTest(unittest.TestCase):
         self.assertEqual(rows, [("edited", "modified", 1, 1), ("fresh", "untracked", 0, 2), ("kept", "tracked", 1, 0)])
         self.assertEqual(run.errors, [])
 
-    def test_checkout_status_reads_the_change_name_literally(self) -> None:
+    def test_committed_change_with_an_edit_and_a_new_file_is_modified(self) -> None:
         work = self._repo()
-        # A glob pathspec "a*" would also match the untracked sibling "ab".
-        repo_fixture.commit(work, "openspec/changes/a*/proposal.md", "# a*\n", "Propose a*")
-        self._write(work, "openspec/changes/ab/proposal.md", "# ab\n")
+        repo_fixture.commit(work, "openspec/changes/mix/tasks.md", "- [x] a\n", "Propose mix")
+        self._write(work, "openspec/changes/mix/tasks.md", "- [x] a\n- [ ] b\n")
+        self._write(work, "openspec/changes/mix/design.md", "# design\n")
         run = model.Run()
 
         rows = openspec.change_dirs_in_checkout(self._main_checkout(work, run), run)
 
-        self.assertEqual(rows, [("a*", "tracked", 0, 0), ("ab", "untracked", 0, 0)])
+        self.assertEqual(rows, [("mix", "modified", 1, 1)])
+        self.assertEqual(run.errors, [])
+
+    def test_status_ignores_the_show_untracked_files_setting(self) -> None:
+        work = self._repo()
+        repo_fixture.git(work, "config", "status.showUntrackedFiles", "no")
+        repo_fixture.commit(work, "openspec/changes/kept/tasks.md", "- [x] a\n", "Propose kept")
+        # A new file beside committed ones, and a change git has never seen.
+        self._write(work, "openspec/changes/kept/design.md", "# design\n")
+        self._write(work, "openspec/changes/new/tasks.md", "- [ ] n\n")
+        run = model.Run()
+
+        rows = openspec.change_dirs_in_checkout(self._main_checkout(work, run), run)
+
+        self.assertEqual(rows, [("kept", "modified", 1, 0), ("new", "untracked", 0, 1)])
+        self.assertEqual(run.errors, [])
+
+    def test_checkout_status_reads_the_change_name_literally(self) -> None:
+        work = self._repo()
+        # A glob pathspec "a*" would also match the untracked sibling "ab" in
+        # the status read, and "b*" the committed sibling "bc" in the index read.
+        repo_fixture.commit(work, "openspec/changes/a*/proposal.md", "# a*\n", "Propose a*")
+        repo_fixture.commit(work, "openspec/changes/bc/proposal.md", "# bc\n", "Propose bc")
+        self._write(work, "openspec/changes/ab/proposal.md", "# ab\n")
+        self._write(work, "openspec/changes/b*/proposal.md", "# b*\n")
+        run = model.Run()
+
+        rows = openspec.change_dirs_in_checkout(self._main_checkout(work, run), run)
+
+        self.assertEqual(
+            rows,
+            [("a*", "tracked", 0, 0), ("ab", "untracked", 0, 0), ("b*", "untracked", 0, 0), ("bc", "tracked", 0, 0)],
+        )
         self.assertEqual(run.errors, [])
 
     def test_unborn_checkout_change_has_no_date_and_no_error(self) -> None:
@@ -252,6 +284,54 @@ class OpenspecTest(unittest.TestCase):
                 )
             ],
         )
+        self.assertEqual(run.errors, [])
+
+    def test_change_held_only_by_the_base_is_pending(self) -> None:
+        work = self._repo()
+        # The only checkout sits on a branch cut before the change landed.
+        repo_fixture.git(work, "branch", "feature")
+        sha = repo_fixture.commit(work, "openspec/changes/onbase/proposal.md", "# onbase\n", "Propose onbase")
+        repo_fixture.git(work, "push", "-q", "origin", "main")
+        repo_fixture.git(work, "switch", "-q", "feature")
+        run = model.Run()
+        _, tips, _ = self._state(work, run)
+        # Every tip is merged, the base's own among them.
+        self.assertEqual({tip.integration for tip in tips}, {"merged"})
+
+        pending, stale, run = self._items(work, run)
+
+        self.assertEqual([(item.title, item.lines, item.date) for item in pending], [("onbase", ["ref origin/main"], self._date(work, sha))])
+        self.assertEqual(stale, [])
+        self.assertEqual(run.errors, [])
+
+    def test_archived_change_left_on_the_base_is_stale(self) -> None:
+        work = self._repo()
+        repo_fixture.git(work, "branch", "older")
+        sha = repo_fixture.commit(work, "openspec/changes/foo/proposal.md", "# foo\n", "Leave a copy of foo")
+        repo_fixture.git(work, "push", "-q", "origin", "main")
+        repo_fixture.git(work, "switch", "-q", "older")
+
+        pending, stale, run = self._items(work)
+
+        self.assertEqual(pending, [])
+        self.assertEqual(
+            [(item.kind, item.title, item.lines, item.date) for item in stale],
+            [("openspec-stale", "foo", ["archived on origin/main", "ref origin/main"], self._date(work, sha))],
+        )
+        self.assertEqual(run.errors, [])
+
+    def test_base_place_follows_checkouts_and_precedes_tips(self) -> None:
+        work = self._repo()
+        sha = repo_fixture.commit(work, "openspec/changes/shared/proposal.md", "# shared\n", "Propose shared")
+        repo_fixture.git(work, "push", "-q", "origin", "main")
+        self._commit_on(work, "topic", "openspec/changes/shared/design.md", "# design\n")
+
+        pending, _, run = self._items(work)
+
+        self.assertEqual([item.title for item in pending], ["shared"])
+        self.assertEqual(pending[0].lines, [work + "  tracked  tasks 0/0", "ref origin/main", "ref topic"])
+        # The first place, the checkout, has a commit, so the date is read there.
+        self.assertEqual(pending[0].date, self._date(work, sha))
         self.assertEqual(run.errors, [])
 
     def test_merged_branch_is_not_scanned_for_stale_copies(self) -> None:
@@ -371,8 +451,11 @@ class OpenspecTest(unittest.TestCase):
 
         self.assertEqual([item.title for item in pending], ["bar"])
         self.assertEqual(stale, [])
-        self.assertEqual(len(run.errors), 2)
+        # The base's tree is a place (after the checkouts, before the tips)
+        # and holds the archive, so a base that does not resolve fails twice.
+        self.assertEqual(len(run.errors), 3)
         prefixes = [
+            "git ls-tree -d --name-only -z --full-tree origin/gone openspec/changes/: ",
             "git ls-tree -d --name-only -z --full-tree " + missing + " openspec/changes/: ",
             "git ls-tree -d --name-only -z --full-tree origin/gone openspec/changes/archive/: ",
         ]
@@ -383,7 +466,8 @@ class OpenspecTest(unittest.TestCase):
 
     def test_failing_status_reads_unknown_and_is_recorded(self) -> None:
         work = self._repo()
-        self._write(work, "openspec/changes/bar/tasks.md", "- [ ] one\n")
+        # Committed, so the index knows it and the status read is reached.
+        repo_fixture.commit(work, "openspec/changes/bar/tasks.md", "- [ ] one\n", "Propose bar")
         run = model.Run()
         checkout = self._main_checkout(work, run)
 
@@ -397,8 +481,25 @@ class OpenspecTest(unittest.TestCase):
         self.assertEqual(rows, [("bar", "unknown", 0, 1)])
         self.assertEqual(
             run.errors,
-            ["git --no-optional-locks status --porcelain=v1 -z -- :(top,literal)openspec/changes/bar: fatal: index file corrupt"],
+            ["git --no-optional-locks status --porcelain=v1 -z -uall -- :(top,literal)openspec/changes/bar: fatal: index file corrupt"],
         )
+        self.assertIs(run.complete, False)
+
+    def test_failing_index_read_reads_unknown_and_is_recorded(self) -> None:
+        work = self._repo()
+        self._write(work, "openspec/changes/bar/tasks.md", "- [ ] one\n")
+        run = model.Run()
+        checkout = self._main_checkout(work, run)
+
+        def failing_ls_files(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
+            if "ls-files" in argv:
+                return 128, "", "fatal: index file corrupt\n"
+            return model.default_runner(argv, cwd)
+
+        rows = openspec.change_dirs_in_checkout(checkout, run, failing_ls_files)
+
+        self.assertEqual(rows, [("bar", "unknown", 0, 1)])
+        self.assertEqual(run.errors, ["git ls-files -z -- :(top,literal)openspec/changes/bar: fatal: index file corrupt"])
         self.assertIs(run.complete, False)
 
     def test_failing_date_read_is_recorded(self) -> None:

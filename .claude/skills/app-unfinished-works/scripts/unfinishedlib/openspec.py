@@ -1,8 +1,9 @@
-"""Pending and stale OpenSpec changes across checkouts and branch tips.
+"""Pending and stale OpenSpec changes across checkouts, the base and branch tips.
 
 A change is a directory under openspec/changes/ outside archive/, seen in a
-present checkout's filesystem or in the tree of a tip the base has not
-merged. It is pending unless the base's openspec/changes/archive/ holds a
+present checkout's filesystem, in the base's tree, or in the tree of a tip
+the base has not merged (whatever a merged tip holds that the base still
+holds is seen on the base). It is pending unless the base's openspec/changes/archive/ holds a
 directory named <YYYY-MM-DD>-<change>, the full change name after the date
 prefix; an archived change still present somewhere is a stale copy. A change
 seen in several places is one item listing every place. Every git call reads
@@ -73,9 +74,10 @@ def change_dirs_in_checkout(
 ) -> list[tuple[str, str, int, int]]:
     """List the changes in one checkout's filesystem: (name, status, done, open).
 
-    status is tracked (git status names nothing under the directory),
-    untracked (any `??` entry), modified (any other entry), or unknown when
-    git status fails, which run_git records. Counts come from the change's
+    status is untracked when the index holds no path under the directory,
+    else modified when git status reports any entry under it and tracked
+    when it reports none; unknown when either read fails, which run_git
+    records. Counts come from the change's
     tasks.md, (0, 0) when it is absent; an unreadable tasks.md or changes
     directory is recorded. A gone checkout, a bare entry, or a checkout
     without openspec/changes/ gives []. Names are sorted.
@@ -110,9 +112,10 @@ def openspec_items(
     """Return (pending, stale): one item per change name seen anywhere.
 
     Places, in order: every present checkout in checkouts order
-    (`<path>  <status>  tasks <done>/<total>`), then every tip the base has
-    not merged, in tips order, read by its SHA (`ref <r>` for each of its
-    refs, `ref <sha>` for a detached tip no ref names). date is the oldest
+    (`<path>  <status>  tasks <done>/<total>`), then the base's tree when the
+    base is known (`ref <base>`), then every tip the base has not merged, in
+    tips order, read by its SHA (`ref <r>` for each of its refs, `ref <sha>`
+    for a detached tip no ref names). date is the oldest
     committer date of the commits touching the change directory in the first
     place that has one, None when none has. A change the base's archive holds
     is stale, its lines led by `archived on <base>`; any other is pending.
@@ -123,6 +126,10 @@ def openspec_items(
         for name, status, done, open_ in change_dirs_in_checkout(checkout, run, runner):
             line = checkout.path + "  " + status + "  tasks " + str(done) + "/" + str(done + open_)
             places.setdefault(name, []).append(_Place([line], checkout.path, rev))
+    # The base's own tip is always merged, so its tree is read here.
+    if base.ref is not None:
+        for name in change_dirs_in_tree(repo, base.ref, run, runner):
+            places.setdefault(name, []).append(_Place(["ref " + base.ref], repo, base.ref))
     for tip in tips:
         if tip.integration == "merged":
             continue
@@ -174,13 +181,26 @@ def _tree_dirs(repo: str, ref: str, prefix: str, run: Run, runner: Runner) -> li
 
 
 def _checkout_status(path: str, name: str, run: Run, runner: Runner) -> str:
+    """untracked, modified or tracked for one change directory; unknown when git fails.
+
+    The index decides whether git knows the change at all, so a committed
+    change with an edit and a new file reads modified, not untracked. -uall
+    names every untracked file, so status.showUntrackedFiles cannot hide a
+    new file beside committed ones and turn modified into tracked.
+    """
     before = len(run.errors)
+    indexed = gitstate.run_git(path, "ls-files", "-z", "--", _pathspec(name), run=run, runner=runner)
+    if len(run.errors) > before:
+        return "unknown"
+    if not indexed:
+        return "untracked"
     out = gitstate.run_git(
         path,
         "--no-optional-locks",
         "status",
         "--porcelain=v1",
         "-z",
+        "-uall",
         "--",
         _pathspec(name),
         run=run,
@@ -188,21 +208,9 @@ def _checkout_status(path: str, name: str, run: Run, runner: Runner) -> str:
     )
     if len(run.errors) > before:
         return "unknown"
-    codes: list[str] = []
-    records = iter(out.split("\0"))
-    for record in records:
-        # Each record is "XY <path>"; the final NUL leaves one empty string.
-        if not record:
-            continue
-        code = record[:2]
-        if "R" in code or "C" in code:
-            next(records, None)
-        codes.append(code)
-    if not codes:
-        return "tracked"
-    if "??" in codes:
-        return "untracked"
-    return "modified"
+    if out:
+        return "modified"
+    return "tracked"
 
 
 def _tasks_in(path: str, run: Run) -> tuple[int, int]:
