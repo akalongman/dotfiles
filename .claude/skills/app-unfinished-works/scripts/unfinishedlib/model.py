@@ -142,3 +142,51 @@ class Item:
     sha: str | None
     sessions: list["Association"]
     attrs: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class Evidence:
+    """One event of a session naming an item.
+
+    cls is work, request, mention or lookup, ranked in that order; token is
+    the name or item path that matched; ts is the matching record's
+    timestamp as the transcript gives it (UTC with a Z).
+    """
+
+    cls: str
+    token: str
+    ts: str
+
+
+@dataclass
+class Session:
+    """One transcript that belongs to the repository, read from its active chain.
+
+    id is the transcript's file stem, path its file, mtime its modification
+    time. cwds maps each cwd seen to the gitBranch last seen with it (None
+    when none was), and cwd_counts counts the chain's records per cwd.
+    first_ts and last_ts are the earliest and latest timestamps, compared as
+    instants. last_request is the last genuine user request and
+    last_assistant the last assistant text, both "" when there is none.
+    account_uuid comes from the bridge-session record and slot is the slot
+    it maps to, else "unknown"; live is set by the liveness stage. Every
+    field but account_uuid and mtime is read from the active chain.
+    """
+
+    id: str
+    path: str
+    mtime: float
+    cwds: dict[str, str | None]
+    first_ts: str
+    last_ts: str
+    user_turns: int
+    last_request: str
+    last_assistant: str
+    ended_on_question: bool
+    entrypoint: str | None
+    account_uuid: str | None
+    slot: str
+    live: str | None
+    ran_skill: bool
+    evidence: list[Evidence]
+    cwd_counts: dict[str, int] = field(default_factory=dict)
