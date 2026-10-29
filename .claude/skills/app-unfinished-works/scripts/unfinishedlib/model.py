@@ -1,0 +1,122 @@
+"""Shared types: the run record, the command runner, and the inventory items."""
+
+import subprocess
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+# Every external command goes through a runner: (argv, cwd) to
+# (returncode, stdout, stderr). Tests inject fakes of this type.
+Runner = Callable[[list[str], str | None], tuple[int, str, str]]
+
+
+def default_runner(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
+    """Run argv in cwd and capture its output; never raises for a failed start.
+
+    A missing binary returns (127, "", "<name>: command not found"). Any other
+    failure to start (an unusable cwd, a file that is not executable) returns
+    126 with the operating system's reason. Output is decoded as UTF-8 with
+    replacement, so a stray byte in a file name or commit message never aborts
+    the run. Standard input is closed, so no command can wait for an answer.
+    """
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        if exc.filename == argv[0]:
+            return 127, "", argv[0] + ": command not found"
+        return 126, "", str(exc.filename) + ": " + str(exc.strerror)
+    except OSError as exc:
+        return 126, "", str(exc.filename) + ": " + str(exc.strerror)
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+@dataclass
+class Run:
+    """State every gatherer shares: errors, completeness, and footer notes.
+
+    A source that cannot be read appends one line to errors and sets complete
+    to False; notes are footer lines that are not errors.
+    """
+
+    errors: list[str] = field(default_factory=list)
+    complete: bool = True
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Checkout:
+    """One entry of `git worktree list`: the main checkout or a worktree.
+
+    branch is the short name (no refs/heads/), None when detached or bare;
+    present is False when git reports the worktree prunable (its directory
+    is gone).
+    """
+
+    path: str
+    branch: str | None
+    head: str
+    is_main: bool
+    present: bool
+
+
+@dataclass
+class Remotes:
+    """The included remotes (origin, then upstream) and the canonical one."""
+
+    included: list[str]
+    canonical: str | None
+
+
+@dataclass
+class Base:
+    """The integration base and how it was chosen.
+
+    source is one of override, remote-head, remote-name, local-name, unknown;
+    ref is None exactly when source is unknown.
+    """
+
+    ref: str | None
+    source: str
+
+
+@dataclass
+class Association:
+    """One session tied to an item, with the evidence that ties it."""
+
+    session_id: str
+    evidence: str
+    token: str
+    ts: str
+    slot: str
+    checkout: str
+    last_request: str
+    live: str | None
+
+
+@dataclass
+class Item:
+    """One unit of unfinished work in the inventory.
+
+    paths are relative to a checkout root; date is ISO 8601 with an offset;
+    attrs holds kind-specific facts that later stages read instead of
+    parsing lines.
+    """
+
+    kind: str
+    title: str
+    certainty: str
+    lines: list[str]
+    paths: list[str]
+    names: list[str]
+    date: str | None
+    sha: str | None
+    sessions: list["Association"]
+    attrs: dict[str, str] = field(default_factory=dict)
