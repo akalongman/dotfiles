@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from unittest import mock
 
-from scripts.unfinishedlib import cli, inventory, model, transcripts
+from scripts.unfinishedlib import cli, inventory, live, model, transcripts
 from tests import proc_fixture, repo_fixture
 from tests import transcript_fixture as tf
 
@@ -115,11 +115,31 @@ class EndToEndTest(unittest.TestCase):
             ],
         )
 
-    def _main(self, home: str, *args: str, now: float = NOW) -> tuple[int, dict[str, Any]]:
+    def _main(
+        self, home: str, *args: str, now: float = NOW, runner: model.Runner | None = None
+    ) -> tuple[int, dict[str, Any]]:
         out = io.StringIO()
         with mock.patch.dict(os.environ, {"UNFINISHED_HOME": home}), contextlib.redirect_stdout(out):
-            code = cli.main(["--json", *args], proc_root=self._proc_root, runner=self._runner(), now=now)
+            code = cli.main(["--json", *args], proc_root=self._proc_root, runner=runner or self._runner(), now=now)
         return code, json.loads(out.getvalue())
+
+    def _gone_worktrees(self) -> tuple[str, str, str]:
+        """make_repo plus two registered worktrees whose directories were deleted: (work, outside, inside).
+
+        outside sits beside the main checkout on feature/outside, inside under
+        <work>/.worktrees/ on feature/inside; each branch holds one commit
+        main lacks, and git lists both worktrees as prunable.
+        """
+        base = os.path.join(self.tmp, "gone")
+        os.makedirs(base)
+        work = repo_fixture.make_repo(base)["work"]
+        outside = os.path.join(base, "wt-outside")
+        inside = os.path.join(work, ".worktrees", "inside")
+        for path, branch in ((outside, "feature/outside"), (inside, "feature/inside")):
+            repo_fixture.git(work, "worktree", "add", "-q", "-b", branch, path)
+            repo_fixture.commit(path, os.path.basename(path) + ".txt", "x\n", "Add " + branch)
+            shutil.rmtree(path)
+        return work, outside, inside
 
     def _scenario(self) -> tuple[dict[str, str], str]:
         repo = self._repository(os.path.join(self.tmp, "repo"))
@@ -311,6 +331,131 @@ class EndToEndTest(unittest.TestCase):
                 self.assertIn("33333333-3333-4333-8333-333333333333", "\n".join(removed[0]["lines"]))
                 self.assertEqual([tip["title"] for tip in data["tips"]], ["origin/feature/old"])
 
+    def test_removed_worktree_names_its_last_session_with_the_live_tag(self) -> None:
+        self._proc_root = self._proc()
+        base = os.path.join(self.tmp, "live")
+        os.makedirs(base)
+        work = repo_fixture.make_repo(base)["work"]
+        repo_fixture.git(work, "switch", "-q", "-c", "feature/old")
+        repo_fixture.commit(work, "old.txt", "old\n", "Add old")
+        repo_fixture.git(work, "switch", "-q", "main")
+        home = self._home()
+        gone = os.path.join(work, ".worktrees", "old")
+        session_id = "33333333-3333-4333-8333-333333333333"
+        tf.write_transcript(
+            self._folder(home, gone),
+            session_id,
+            [
+                tf.user("carry on", cwd=gone, gitBranch="feature/old"),
+                tf.assistant("Carrying on.", cwd=gone, gitBranch="feature/old"),
+            ],
+        )
+        # claude-sessions names the session as running elsewhere, so it is live.
+        row = {"pid": 4343, "cwd": "/elsewhere", "sessionId": session_id, "slot": 1, "name": "old", "state": "idle"}
+        plain = self._runner()
+
+        def listing(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
+            if argv == live.CLAUDE_SESSIONS:
+                return 0, json.dumps([row]), ""
+            return plain(argv, cwd)
+
+        code, data = self._main(home, "--root", work, runner=listing)
+
+        self.assertEqual(code, 0, data["meta"]["errors"])
+        removed = data["removed_worktrees"]
+        self.assertEqual(len(removed), 1)
+        named = [line for line in removed[0]["lines"] if line.startswith("last session there: " + session_id + ", ")]
+        self.assertEqual(len(named), 1, removed[0]["lines"])
+        self.assertTrue(named[0].endswith(", live"), named[0])
+
+    def test_local_base_keeps_the_unpublished_row_of_its_own_branch(self) -> None:
+        base = os.path.join(self.tmp, "local-base")
+        os.makedirs(base)
+        work = repo_fixture.make_repo(base)["work"]
+        # Local main two commits ahead of origin/main, which it tracks.
+        repo_fixture.commit(work, "one.txt", "one\n", "Add one")
+        repo_fixture.commit(work, "two.txt", "two\n", "Add two")
+        home = self._home()
+        self._proc_root = self._proc()
+
+        code, data = self._main(home, "--root", work, "--base", "main")
+
+        self.assertEqual(code, 0, data["meta"]["errors"])
+        self.assertEqual((data["meta"]["base"], data["meta"]["base_source"]), ("main", "override"))
+        self.assertEqual(
+            [(item["title"], item["lines"]) for item in data["unpublished"]],
+            [("main", ["2 commits not on its upstream"])],
+        )
+
+    def test_a_gone_worktree_outside_worktrees_is_not_a_transcript_root(self) -> None:
+        work, outside, inside = self._gone_worktrees()
+        home = self._home()
+        self._proc_root = self._proc()
+        # Each session asks about its own branch from inside its gone worktree, and ends on a question.
+        for path, branch, session_id in (
+            (outside, "feature/outside", "44444444-4444-4444-8444-444444444444"),
+            (inside, "feature/inside", "55555555-5555-4555-8555-555555555555"),
+        ):
+            tf.write_transcript(
+                self._folder(home, path),
+                session_id,
+                [
+                    tf.user("carry on with " + branch, cwd=path, gitBranch=branch),
+                    tf.assistant("Shall I push " + branch + "?", cwd=path, gitBranch=branch),
+                ],
+            )
+
+        code, data = self._main(home, "--root", work)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            sorted(data["meta"]["errors"]),
+            sorted(["worktree " + outside + ": directory is gone", "worktree " + inside + ": directory is gone"]),
+        )
+        self.assertEqual([session["id"] for session in data["questions"]], ["55555555-5555-4555-8555-555555555555"])
+        outside_tips = self._by_name(data["tips"], "feature/outside")
+        inside_tips = self._by_name(data["tips"], "feature/inside")
+        self.assertEqual((len(outside_tips), len(inside_tips)), (1, 1))
+        self.assertEqual(outside_tips[0]["sessions"], [])
+        self.assertEqual(
+            [association["session_id"] for association in inside_tips[0]["sessions"]],
+            ["55555555-5555-4555-8555-555555555555"],
+        )
+
+    def test_an_edit_in_a_gone_worktree_outside_worktrees_matches_no_path(self) -> None:
+        work, outside, _ = self._gone_worktrees()
+        with open(os.path.join(work, "notes.txt"), "w", encoding="utf-8") as handle:
+            handle.write("notes\n")
+        home = self._home()
+        self._proc_root = self._proc()
+        # A session in the main checkout edits notes.txt in the gone worktree beside it.
+        edit = {
+            "name": "Edit",
+            "input": {"file_path": os.path.join(outside, "notes.txt"), "old_string": "a", "new_string": "b"},
+            "id": "toolu_edit",
+        }
+        session_id = "66666666-6666-4666-8666-666666666666"
+        tf.write_transcript(
+            self._folder(home, work),
+            session_id,
+            [
+                tf.user("tidy the notes", cwd=work),
+                tf.assistant("Editing.", tool_use=edit, cwd=work),
+                tf.tool_result("toolu_edit", cwd=work),
+                tf.assistant("Done. Anything else?", cwd=work),
+            ],
+        )
+
+        code, data = self._main(home, "--root", work)
+
+        self.assertEqual(code, 1)
+        # The session was read: it is the one question session.
+        self.assertEqual([session["id"] for session in data["questions"]], [session_id])
+        dirty = [item for item in data["dirty"] if item["attrs"]["checkout"] == work]
+        self.assertEqual(len(dirty), 1)
+        self.assertEqual(dirty[0]["paths"], ["notes.txt"])
+        self.assertEqual(dirty[0]["sessions"], [])
+
 
 class ItemBuildersTest(unittest.TestCase):
     """The item builders over model values: no repository, no transcript."""
@@ -352,7 +497,7 @@ class ItemBuildersTest(unittest.TestCase):
         self.assertEqual(items[0].lines[0], "merged: unknown (no base)")
         self.assertEqual(items[0].names, ["feature/x"])
 
-    def test_unpublished_items_skip_merged_branches(self) -> None:
+    def test_unpublished_items_list_every_row_merged_or_not(self) -> None:
         tips = [
             model.Tip("1" * 40, ["done"], "merged", 0, "2026-10-01T10:00:00+04:00", "a@b", None),
             model.Tip("2" * 40, ["open"], "not", 1, "2026-10-02T10:00:00+04:00", "a@b", None),
@@ -362,8 +507,22 @@ class ItemBuildersTest(unittest.TestCase):
 
         items = inventory.unpublished_items(rows, tips)
 
-        self.assertEqual([(item.title, item.lines) for item in items], [("open", ["no upstream: never pushed"]), ("ahead", ["1 commit not on its upstream"])])
-        self.assertEqual([(item.names, item.date, item.sha) for item in items], [(["open"], "2026-10-02T10:00:00+04:00", "2" * 40), (["ahead"], None, "3" * 40)])
+        self.assertEqual(
+            [(item.title, item.lines) for item in items],
+            [
+                ("done", ["upstream gone: its remote branch no longer exists"]),
+                ("open", ["no upstream: never pushed"]),
+                ("ahead", ["1 commit not on its upstream"]),
+            ],
+        )
+        self.assertEqual(
+            [(item.names, item.date, item.sha) for item in items],
+            [
+                (["done"], "2026-10-01T10:00:00+04:00", "1" * 40),
+                (["open"], "2026-10-02T10:00:00+04:00", "2" * 40),
+                (["ahead"], None, "3" * 40),
+            ],
+        )
 
     def test_dirty_item_counts_and_keeps_every_path(self) -> None:
         checkout = model.Checkout("/r/main", "main", "1" * 40, True, True)
@@ -430,6 +589,20 @@ class RemovedWorktreesTest(unittest.TestCase):
         self.assertEqual([(item.title, item.names, item.certainty) for item in items], [("feature/old", ["feature/old"], "likely")])
         self.assertIsNone(items[0].date)
         self.assertEqual(items[0].attrs, {"worktree": self.MAIN + "/.worktrees/old"})
+
+    def test_last_session_line_carries_the_live_tag(self) -> None:
+        checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
+        tips = [model.Tip("3" * 40, ["feature/old"], "not", 1, "", "a@b", None)]
+        remotes = model.Remotes(["origin"], "origin")
+        for tag, suffix in ((None, ""), ("live", ", live"), ("possibly live", ", possibly live")):
+            with self.subTest(live=tag):
+                session = self._session({self.MAIN + "/.worktrees/old": "feature/old"})
+                session.live = tag
+
+                items = inventory.removed_worktrees([session], checkouts, tips, remotes, self.MAIN)
+
+                expected = "last session there: s, " + inventory.local_minute(session.last_ts) + suffix
+                self.assertIn(expected, items[0].lines)
 
 
 class ParkedCountTest(unittest.TestCase):

@@ -176,16 +176,17 @@ def read_transcripts(
     """Parse every top-level .jsonl of the candidate folders: (sessions, scan facts).
 
     The folders are those of every slot's projects root that may hold this
-    repository's transcripts; every registered checkout, present or gone, is
-    a root for membership and path matching. The facts are count and bytes
-    over every file read, oldest the earliest first timestamp and newest the
-    latest last timestamp of the sessions found (None without any). A folder
-    that cannot be listed is recorded.
+    repository's transcripts; the present checkouts are the roots for
+    membership and path matching (parse_transcript adds <main>/.worktrees/),
+    so a gone worktree outside .worktrees/ is out of reach. The facts are
+    count and bytes over every file read, oldest the earliest first
+    timestamp and newest the latest last timestamp of the sessions found
+    (None without any). A folder that cannot be listed is recorded.
     """
     accounts = transcripts.slot_accounts(slot_roots)
     projects = [os.path.join(root, "projects") for root in slot_roots]
     folders = transcripts.candidate_folders(projects, main_path, checkouts)
-    roots = [checkout.path for checkout in checkouts] or [main_path]
+    roots = [checkout.path for checkout in checkouts if checkout.present] or [main_path]
     sessions: list[Session] = []
     count = 0
     size = 0
@@ -261,18 +262,15 @@ def tip_items(tips: list[Tip], remotes: Remotes, base: Base, divergences: list[t
 
 
 def unpublished_items(rows: list[tuple[str, str, int]], tips: list[Tip]) -> list[Item]:
-    """One item per local branch with commits its upstream lacks.
+    """One item per row gitstate.unpublished gives, whether the base has merged the branch or not.
 
-    date and sha are the branch tip's. A branch whose tip the base has
-    merged is left out: every commit of it is already on the base, so
-    nothing is unpublished (a merged branch left undeleted is cleanup).
+    date and sha are the branch tip's. A merged branch stays: when the base
+    is a local ref, its commits may be on no remote.
     """
     tip_of = {ref: tip for tip in tips for ref in tip.refs}
     items: list[Item] = []
     for branch, state, count in rows:
         tip = tip_of.get(branch)
-        if tip is not None and tip.integration == "merged":
-            continue
         if state == "ahead":
             line = _count(count, "commit") + " not on its upstream"
         elif state == "no-upstream":
@@ -367,7 +365,8 @@ def removed_worktrees(
     recorded is a trace. It becomes an item when some tip whose
     remote-stripped refs hold that branch is not merged; certainty is the
     strongest of those tips', date the newest of their last commit dates,
-    names [branch]. A merged or deleted branch gives nothing.
+    names [branch]; the last session there carries its live or possibly live
+    tag, so run it after live.mark_live. A merged or deleted branch gives nothing.
     """
     present = {os.path.normpath(checkout.path) for checkout in checkouts if checkout.present}
     worktrees = os.path.join(os.path.normpath(main_path), ".worktrees")
@@ -394,6 +393,9 @@ def removed_worktrees(
             continue
         certainty = min((_CERTAINTY.get(tip.integration, "unknown") for tip in open_tips), key=_CERTAINTY_ORDER.index)
         last = max(seen, key=lambda session: (_epoch(session.last_ts), session.id))
+        last_line = "last session there: " + last.id + ", " + local_minute(last.last_ts)
+        if last.live:
+            last_line += ", " + last.live
         refs = list(dict.fromkeys(ref for tip in open_tips for ref in tip.refs))
         items.append(
             Item(
@@ -403,7 +405,7 @@ def removed_worktrees(
                 lines=[
                     place + "  (no longer a checkout)",
                     "not integrated: " + ", ".join(refs),
-                    "last session there: " + last.id + ", " + local_minute(last.last_ts),
+                    last_line,
                 ],
                 paths=[],
                 names=[branch],
