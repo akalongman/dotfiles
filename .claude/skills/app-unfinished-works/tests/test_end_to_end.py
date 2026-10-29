@@ -817,7 +817,7 @@ class RemovedWorktreesTest(unittest.TestCase):
             items[0].lines,
             [
                 self._place("old") + "  (no longer a checkout)",
-                "not integrated: feature/old, origin/feature/old",
+                "probably integrated, verify: feature/old, origin/feature/old",
                 "last session there: s, " + inventory.local_minute("2026-10-01T11:00:00.000Z"),
             ],
         )
@@ -980,6 +980,23 @@ class RemovedWorktreesTest(unittest.TestCase):
 
         self.assertEqual(items[0].certainty, "certain")
         self.assertEqual(items[0].lines[1], "not integrated: feature/old, origin/feature/old")
+
+    def test_a_likely_item_says_probably_integrated(self) -> None:
+        checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
+        likely = model.Tip("3" * 40, ["feature/old"], "likely", 1, "", "a@b", None)
+        session = self._session({self._place("old"): {"feature/old": 1}})
+        # No open tip is not integrated and one is likely, so the item is likely.
+        for integration in ("merges-only", "unknown"):
+            with self.subTest(other=integration):
+                other = model.Tip("4" * 40, ["origin/feature/old"], integration, 2, "", "a@b", None)
+
+                items = inventory.removed_worktrees(
+                    [session], checkouts, [likely, other], self.REMOTES, self.MAIN, self.BASE
+                )
+
+                self.assertEqual(items[0].certainty, "likely")
+                self.assertEqual(items[0].lines[1], "probably integrated, verify: feature/old, origin/feature/old")
+                self.assertFalse(any("not integrated" in text for text in items[0].lines))
 
     def test_last_session_line_carries_the_live_tag(self) -> None:
         checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]

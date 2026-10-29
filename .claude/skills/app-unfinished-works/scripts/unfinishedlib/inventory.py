@@ -52,6 +52,8 @@ QUEUE_LINE = "- [ ]"
 # A tip's certainty from its integration; anything else (unknown) is unknown.
 _CERTAINTY = {"not": "certain", "likely": "likely", "merges-only": "likely"}
 _CERTAINTY_ORDER = ("certain", "likely", "unknown")
+# How a likely integration is worded, on a tip item and a removed worktree alike.
+_LIKELY_LINE = "probably integrated, verify"
 # Characters a plain laterbox.file name never holds (the laterbox README).
 _NOT_IN_A_FILE_NAME = frozenset("/\\*?[")
 # The gitBranch Claude Code records in a detached checkout; it names no branch.
@@ -472,12 +474,16 @@ def removed_worktrees(
     deleted) gives nothing either, whatever else was recorded there.
     certainty is the strongest of those tips', date the newest of their last
     commit dates, title and names the branch. The line naming the tips' refs
-    opens with `not integrated` when git judged a tip, and never when every
-    tip is unknown: then it opens with the tip items' own line against base,
-    `merged: unknown (no base)` or `merged: unknown (git could not judge
-    it ...)`. The last session there is the newest one with a cwd at the
-    place, whatever branch it recorded, and carries its live or possibly
-    live tag, so run it after live.mark_live.
+    opens by that certainty: `not integrated` when it is certain (git judged
+    a tip not integrated); `probably integrated, verify`, the tip items'
+    wording for a likely integration, when it is likely (no tip is not
+    integrated and one is likely or merges-only), without their ahead count
+    and kind, as the item may group several tips; and when it is unknown
+    (every tip is), the tip items' own line against base, `merged: unknown
+    (no base)` or `merged: unknown (git could not judge it ...)`. The last
+    session there is the newest one with a cwd at the place, whatever
+    branch it recorded, and carries its live or possibly live tag, so run it
+    after live.mark_live.
     """
     present = {os.path.normpath(checkout.path) for checkout in checkouts if checkout.present}
     held = {checkout.branch for checkout in checkouts if checkout.present and checkout.branch}
@@ -526,6 +532,8 @@ def removed_worktrees(
         if certainty == "unknown":
             # Every tip is unknown, so all of them share one wording against base.
             state = _integration_line(open_tips[0], base) + ": " + refs
+        elif certainty == "likely":
+            state = _LIKELY_LINE + ": " + refs
         else:
             state = "not integrated: " + refs
         items.append(
@@ -590,9 +598,9 @@ def _integration_line(tip: Tip, base: Base) -> str:
     if tip.integration == "not":
         return "not integrated: " + ahead
     if tip.integration == "likely":
-        return "probably integrated, verify: every commit has a patch twin on " + base.ref + " (" + ahead + ")"
+        return _LIKELY_LINE + ": every commit has a patch twin on " + base.ref + " (" + ahead + ")"
     if tip.integration == "merges-only":
-        return "probably integrated, verify: only merge commits are missing from " + base.ref + " (" + ahead + ")"
+        return _LIKELY_LINE + ": only merge commits are missing from " + base.ref + " (" + ahead + ")"
     return "merged: unknown (git could not judge it against " + base.ref + ")"
 
 

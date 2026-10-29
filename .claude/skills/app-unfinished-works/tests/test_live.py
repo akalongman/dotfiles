@@ -8,10 +8,13 @@ case reads this machine's /proc, slots or registry. Checkout paths and cwds
 are fixed strings that no case reads from disk.
 """
 
+import errno
+import io
 import json
 import os
 import tempfile
 import unittest
+from stat import ST_UID
 from typing import Any
 from unittest import mock
 
@@ -126,6 +129,13 @@ class LiveTest(unittest.TestCase):
         }
         entry.update(fields)
         return self._write_registry(slot_root, str(pid) + ".json", json.dumps(entry))
+
+    def _write_status(self, pid: int, *lines: str) -> str:
+        """Replace <proc>/<pid>/status with a Name line followed by lines; return its path."""
+        path = os.path.join(self.proc, str(pid), "status")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("".join(line + "\n" for line in ("Name:\tclaude", *lines)))
+        return path
 
     def _write_registry(self, slot_root: str, name: str, text: str) -> str:
         folder = os.path.join(slot_root, "sessions")
@@ -353,45 +363,106 @@ class LiveTest(unittest.TestCase):
         self.assertFalse(self.state.complete)
 
     def test_another_users_claude_process_is_skipped_silently(self) -> None:
-        proc_fixture.make_proc(self.proc, 801, "claude", MAIN, None, START)
-        proc_fixture.make_proc(self.proc, 802, "claude", WORKTREE, "/h/.claude2", START)
-        environ = os.path.join(self.proc, "801", "environ")
-        # As for another user's process, environ cannot be read.
-        os.chmod(environ, 0)
-        if os.access(environ, os.R_OK):
-            self.skipTest("this user can read a file of mode 0")
         other = os.getuid() + 1
+        proc_fixture.make_proc(self.proc, 801, "claude", MAIN, None, START, with_stat=False, uid=other)
+        proc_fixture.make_proc(self.proc, 802, "claude", WORKTREE, "/h/.claude2", START)
+        proc_fixture.make_proc(self.proc, 803, "claude", MAIN, None, START)
+        # Nothing past status is read for another user's process: its stat,
+        # cwd and environ are gone, so a read of any of them would be an error.
+        for name in ("cwd", "environ"):
+            os.remove(os.path.join(self.proc, "801", name))
+        # A setuid process: the real uid, the first field after Uid:, decides.
+        mine = str(os.getuid())
+        self._write_status(803, "Uid:\t" + str(other) + "\t" + mine + "\t" + mine + "\t" + mine)
 
-        found = live.from_processes(self.proc, self.state, uid=other)
+        found = live.from_processes(self.proc, self.state)
 
-        self.assertEqual(found, [])
+        self.assertEqual(found, [_process(802, WORKTREE, "2")])
         self.assertEqual(self.state.errors, [])
         self.assertTrue(self.state.complete)
 
-        # The same processes as this user's own: the denied read stays an error.
-        found = live.from_processes(self.proc, self.state, uid=os.getuid())
-
-        self.assertEqual(found, [_process(802, WORKTREE, "2")])
-        self.assertEqual(self.state.errors, ["read " + environ + ": Permission denied"])
-        self.assertFalse(self.state.complete)
-
-    def test_claude_process_whose_owner_cannot_be_read_is_an_error(self) -> None:
+    def test_this_users_claude_process_with_an_unreadable_environ_is_an_error(self) -> None:
         proc_fixture.make_proc(self.proc, 811, "claude", MAIN, None, START)
         proc_fixture.make_proc(self.proc, 812, "claude", MAIN, None, START)
         folder = os.path.join(self.proc, "811")
+        environ = os.path.join(folder, "environ")
+        # A process that is not dumpable: the kernel gives its /proc directory
+        # and environ to root, while its status stays readable and names this user.
+        os.chmod(environ, 0)
+        if os.access(environ, os.R_OK):
+            self.skipTest("this user can read a file of mode 0")
         real_stat = os.stat
 
-        def stat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
-            # The process exits after its comm is read and before its owner is.
-            if path == folder:
-                raise FileNotFoundError(2, "No such file or directory", path)
-            return real_stat(path, *args, **kwargs)
+        def owned_by_root(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+            result = real_stat(path, *args, **kwargs)
+            if path != folder:
+                return result
+            fields = list(result)
+            fields[ST_UID] = 0
+            return os.stat_result(fields)
 
-        with mock.patch.object(live.os, "stat", stat):
+        with mock.patch.object(live.os, "stat", owned_by_root):
             found = live.from_processes(self.proc, self.state)
 
         self.assertEqual(found, [_process(812, MAIN)])
-        self.assertEqual(self.state.errors, ["read " + folder + ": No such file or directory"])
+        self.assertEqual(self.state.errors, ["read " + environ + ": Permission denied"])
+        self.assertFalse(self.state.complete)
+
+    def test_claude_process_whose_status_vanishes_is_skipped_silently(self) -> None:
+        for pid in (821, 822, 823):
+            proc_fixture.make_proc(self.proc, pid, "claude", MAIN, None, START)
+        # The process exits after its comm is read: its status is gone at the
+        # open (ENOENT), or opens and then fails at the read (ESRCH).
+        os.remove(os.path.join(self.proc, "821", "status"))
+        exited = os.path.join(self.proc, "823", "status")
+        real_open = open
+
+        class Exited(io.StringIO):
+            def read(self, size: int | None = -1) -> str:
+                raise ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH))
+
+        def exiting_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+            if file == exited:
+                return Exited()
+            return real_open(file, *args, **kwargs)
+
+        with mock.patch.object(live, "open", exiting_open, create=True):
+            found = live.from_processes(self.proc, self.state)
+
+        self.assertEqual(found, [_process(822, MAIN)])
+        self.assertEqual(self.state.errors, [])
+        self.assertTrue(self.state.complete)
+
+    def test_claude_process_whose_status_cannot_be_read_is_an_error(self) -> None:
+        proc_fixture.make_proc(self.proc, 831, "claude", MAIN, None, START)
+        proc_fixture.make_proc(self.proc, 832, "claude", MAIN, None, START)
+        status = os.path.join(self.proc, "831", "status")
+        os.chmod(status, 0)
+        if os.access(status, os.R_OK):
+            self.skipTest("this user can read a file of mode 0")
+
+        found = live.from_processes(self.proc, self.state)
+
+        self.assertEqual(found, [_process(832, MAIN)])
+        self.assertEqual(self.state.errors, ["read " + status + ": Permission denied"])
+        self.assertFalse(self.state.complete)
+
+    def test_claude_process_whose_status_names_no_real_uid_is_an_error(self) -> None:
+        for pid in (841, 842, 843, 844):
+            proc_fixture.make_proc(self.proc, pid, "claude", MAIN, None, START)
+        mine = str(os.getuid())
+        no_line = self._write_status(841, "Gid:\t0\t0\t0\t0")
+        # A lenient parse would read this user's uid from the field's digits.
+        not_integer = self._write_status(842, "Uid:\t" + mine + "x\t" + mine + "\t" + mine + "\t" + mine)
+        empty = self._write_status(843, "Uid:")
+
+        found = live.from_processes(self.proc, self.state)
+
+        self.assertEqual(found, [_process(844, MAIN)])
+        self.assertEqual(
+            self.state.errors,
+            [path + ": no real uid" for path in (no_line, not_integer, empty)],
+        )
         self.assertFalse(self.state.complete)
 
     # The union.

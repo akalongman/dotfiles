@@ -34,6 +34,8 @@ _SLOT_DIR = re.compile(r"\.claude([0-9]*)")
 _CONFIG_DIR = b"CLAUDE_CONFIG_DIR="
 # What the kernel appends to the cwd link of a process whose directory was removed.
 _DELETED = " (deleted)"
+# The status line naming a process's real, effective, saved and filesystem uid.
+_UID_LINE = "Uid:"
 
 
 def proc_start(stat_text: str) -> str:
@@ -144,21 +146,26 @@ def from_registry(slot_roots: list[str], proc_root: str, run: Run) -> list[LiveS
 
 
 def from_processes(proc_root: str, run: Run, *, uid: int | None = None) -> list[LiveSession]:
-    """Every process named claude under proc_root that uid owns, in ascending pid order.
+    """Every process named claude under proc_root whose real uid is uid, in ascending pid order.
 
     comm is read first, and an entry whose comm is not exactly claude, or
     cannot be read, is skipped silently: most of /proc belongs to other
     programs and users, whose files may be unreadable, and an entry can exit
-    before it is read. A claude process whose <proc_root>/<pid> directory
-    another user owns is not one of this user's sessions and is skipped
-    silently too, before any of its files is read (its cwd link and environ
-    are closed to this user); uid is the user, os.getuid() when None. Of
-    this user's claude process, stat, the cwd link and environ are read; a
-    failure on any of them, or on the owner's stat (the process exited
-    mid-read), is one error naming that path, and the process gives no row.
-    One trailing " (deleted)", the kernel's marker for a removed directory,
-    is stripped from the cwd, so a process left in a removed worktree still
-    names it. The slot comes from CLAUDE_CONFIG_DIR in environ.
+    before it is read. Of a claude process, status is read next: the first
+    field of its Uid: line, the real uid, says whose it is (uid is the user,
+    os.getuid() when None). The owner of <proc_root>/<pid> does not, as the
+    kernel gives that directory to root when the process is not dumpable. A
+    status that vanished (the process exited) is skipped silently, as no
+    one's session; any other failure to read it, or a status with no Uid:
+    line whose first field is an integer, is one error naming it. A process
+    of another real uid is skipped silently, before its stat, cwd link or
+    environ is read (the last two are closed to this user). Of this user's
+    claude process, stat, the cwd link and environ are read; a failure on
+    any of them, its exit mid-read included, is one error naming that path.
+    A process with an error gives no row. One trailing " (deleted)", the
+    kernel's marker for a removed directory, is stripped from the cwd, so a
+    process left in a removed worktree still names it. The slot comes from
+    CLAUDE_CONFIG_DIR in environ.
     """
     if uid is None:
         uid = os.getuid()
@@ -178,10 +185,23 @@ def from_processes(proc_root: str, run: Run, *, uid: int | None = None) -> list[
         if comm.removesuffix("\n") != PROCESS_NAME:
             continue
         # path names the file being read, for the error when one fails.
-        path = folder
+        path = os.path.join(folder, "status")
         try:
-            if os.stat(path).st_uid != uid:
-                continue
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                status = handle.read()
+        except (FileNotFoundError, ProcessLookupError):
+            # ENOENT or ESRCH: the process exited, and until its uid is known it is no one's.
+            continue
+        except OSError as exc:
+            _record_unreadable(run, path, exc)
+            continue
+        real_uid = _real_uid(status)
+        if real_uid is None:
+            _record_error(run, path + ": no real uid")
+            continue
+        if real_uid != uid:
+            continue
+        try:
             path = os.path.join(folder, "stat")
             with open(path, "rb") as handle:
                 handle.read()
@@ -284,6 +304,16 @@ def _slot(config_dir: str) -> str:
     if match is None:
         return "unknown"
     return match.group(1) or "1"
+
+
+def _real_uid(status: str) -> int | None:
+    """The real uid in a /proc/<pid>/status text: the first field of a Uid: line, when it is an integer."""
+    for line in status.splitlines():
+        if line.startswith(_UID_LINE):
+            fields = line[len(_UID_LINE) :].split()
+            if fields and fields[0].isascii() and fields[0].isdigit():
+                return int(fields[0])
+    return None
 
 
 def _config_slot(environ: bytes) -> str:
