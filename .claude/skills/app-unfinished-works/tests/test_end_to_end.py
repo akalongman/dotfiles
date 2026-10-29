@@ -1,0 +1,492 @@
+"""End-to-end tests of cli.main over a fixture repository, and the inventory's
+own rules (removed worktrees, the parked-note count).
+
+Every case builds its repositories with tests/repo_fixture.py, its
+transcripts with tests/transcript_fixture.py under a temporary home, and a
+temporary /proc tree with tests/proc_fixture.py, and passes them in; a
+runner answers claude-sessions with exit 127 and hands every other command
+to the default runner. No case reads this machine's slots, transcripts,
+registry or /proc.
+"""
+
+import contextlib
+import io
+import json
+import os
+import shutil
+import tempfile
+import unittest
+from datetime import datetime
+from typing import Any
+from unittest import mock
+
+from scripts.unfinishedlib import cli, inventory, model, transcripts
+from tests import proc_fixture, repo_fixture
+from tests import transcript_fixture as tf
+
+# Two days after the transcript fixture's first timestamp, so the question
+# window holds its sessions whatever the date of the run.
+NOW = datetime.fromisoformat("2026-10-03T10:00:00+00:00").timestamp()
+
+
+class EndToEndTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="unfinished-e2e-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.calls: list[list[str]] = []
+        # One flag per git command after the environment query: whether a
+        # repository variable was still set when it ran. Only booleans are
+        # kept, so a failing case never prints the environment.
+        self.inherited: list[bool] = []
+
+    # Fixture builders.
+
+    def _runner(self) -> model.Runner:
+        def run(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
+            if argv and argv[0] == "claude-sessions":
+                self.calls.append(argv)
+                return 127, "", "claude-sessions: command not found"
+            if argv[:1] == ["git"] and argv != ["git", "rev-parse", "--local-env-vars"]:
+                self.inherited.append("GIT_DIR" in os.environ or "GIT_WORK_TREE" in os.environ)
+            return model.default_runner(argv, cwd)
+
+        return run
+
+    def _home(self, name: str = "home") -> str:
+        """A home whose .claude holds only projects/ (R13): no state file, no registry."""
+        home = os.path.join(self.tmp, name)
+        os.makedirs(os.path.join(home, ".claude", "projects"))
+        return home
+
+    def _proc(self) -> str:
+        """A /proc tree with one process that is not claude."""
+        proc = os.path.join(self.tmp, "proc")
+        os.makedirs(proc)
+        proc_fixture.make_proc(proc, 4242, "bash", "/", None, 100)
+        return proc
+
+    def _folder(self, home: str, cwd: str) -> str:
+        return os.path.join(home, ".claude", "projects", transcripts.encode_path(cwd))
+
+    def _repository(self, base: str) -> dict[str, str]:
+        """make_repo plus a stash, an untracked change bar, and feature/x checked out in a worktree.
+
+        The worktree sits outside the main checkout, so the main checkout's
+        status names the change and nothing of the worktree.
+        """
+        os.makedirs(base)
+        repo = repo_fixture.make_repo(base)
+        work = repo["work"]
+        with open(os.path.join(work, "README.md"), "a", encoding="utf-8") as handle:
+            handle.write("more\n")
+        repo_fixture.git(work, "stash", "push", "-q", "-m", "wip readme")
+        change = os.path.join(work, "openspec", "changes", "bar")
+        os.makedirs(change)
+        with open(os.path.join(change, "tasks.md"), "w", encoding="utf-8") as handle:
+            handle.write("- [x] one\n- [ ] two\n")
+        worktree = os.path.join(base, "wt-x")
+        repo_fixture.git(work, "worktree", "add", "-q", "-b", "feature/x", worktree)
+        repo_fixture.commit(worktree, "x.txt", "x\n", "Add x")
+        repo["worktree"] = worktree
+        return repo
+
+    def _transcripts(self, home: str, work: str) -> None:
+        """One interactive session that switched to feature/x, and one headless run naming it too."""
+        folder = self._folder(home, work)
+        switch = {"name": "Bash", "input": {"command": "git switch feature/x"}, "id": "toolu_switch"}
+        tf.write_transcript(
+            folder,
+            "11111111-1111-4111-8111-111111111111",
+            [
+                tf.user("switch to the feature branch", cwd=work),
+                tf.assistant("Switching.", tool_use=switch, cwd=work),
+                tf.tool_result("toolu_switch", cwd=work),
+                tf.assistant("Done. Shall I merge feature/x into main?", cwd=work),
+            ],
+        )
+        headless = {"name": "Bash", "input": {"command": "git switch feature/x"}, "id": "toolu_headless"}
+        tf.write_transcript(
+            folder,
+            "22222222-2222-4222-8222-222222222222",
+            [
+                tf.user("headless run on feature/x", cwd=work, entrypoint="sdk-py"),
+                tf.assistant("On it.", tool_use=headless, cwd=work, entrypoint="sdk-py"),
+                tf.tool_result("toolu_headless", cwd=work, entrypoint="sdk-py"),
+            ],
+        )
+
+    def _main(self, home: str, *args: str, now: float = NOW) -> tuple[int, dict[str, Any]]:
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"UNFINISHED_HOME": home}), contextlib.redirect_stdout(out):
+            code = cli.main(["--json", *args], proc_root=self._proc_root, runner=self._runner(), now=now)
+        return code, json.loads(out.getvalue())
+
+    def _scenario(self) -> tuple[dict[str, str], str]:
+        repo = self._repository(os.path.join(self.tmp, "repo"))
+        home = self._home()
+        self._transcripts(home, repo["work"])
+        self._proc_root = self._proc()
+        return repo, home
+
+    @staticmethod
+    def _by_name(items: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
+        return [item for item in items if name in item["names"]]
+
+    # The cases.
+
+    def test_end_to_end_on_fixture_repo(self) -> None:
+        repo, home = self._scenario()
+
+        code, data = self._main(home, "--root", repo["work"])
+
+        self.assertEqual(code, 0, data["meta"]["errors"])
+        self.assertEqual([item["title"] for item in data["openspec_pending"]], ["bar"])
+        tips = self._by_name(data["tips"], "feature/x")
+        self.assertEqual(len(tips), 1)
+        self.assertEqual(tips[0]["attrs"]["worktree"], repo["worktree"])
+        self.assertEqual(len(tips[0]["sessions"]), 1)
+        association = tips[0]["sessions"][0]
+        self.assertEqual(association["evidence"], "work")
+        self.assertEqual(association["session_id"], "11111111-1111-4111-8111-111111111111")
+        self.assertEqual(association["checkout"], repo["work"])
+        self.assertEqual(len(data["stashes"]), 1)
+        self.assertEqual(data["stashes"][0]["paths"], ["README.md"])
+        self.assertEqual([item["attrs"]["checkout"] for item in data["dirty"]], [repo["work"]])
+        self.assertIn("openspec/changes/bar/tasks.md", data["dirty"][0]["paths"])
+        self.assertEqual(data["live_sessions"], [])
+        self.assertEqual([session["id"] for session in data["questions"]], ["11111111-1111-4111-8111-111111111111"])
+        meta = data["meta"]
+        self.assertIs(meta["complete"], True)
+        self.assertEqual(meta["errors"], [])
+        self.assertIn(inventory.OUT_OF_REACH_NOTE, meta["notes"])
+        self.assertTrue(any(note.startswith("claude-sessions") and "registry read directly" in note for note in meta["notes"]))
+        self.assertEqual(self.calls, [["claude-sessions", "--json", "--all"]])
+        self.assertEqual((meta["remote"], meta["base"], meta["base_source"]), ("origin", "origin/main", "remote-head"))
+        self.assertEqual(meta["question_window_days"], 30)
+        self.assertEqual(meta["transcripts"]["count"], 2)
+        self.assertGreater(meta["transcripts"]["bytes"], 0)
+        self.assertEqual(meta["transcripts"]["oldest"], tf.timestamp(0))
+        self.assertEqual(meta["transcripts"]["newest"], tf.timestamp(3))
+        self.assertIsNone(data["parked"])
+
+    def test_end_to_end_text_report(self) -> None:
+        repo, home = self._scenario()
+        out = io.StringIO()
+
+        with mock.patch.dict(os.environ, {"UNFINISHED_HOME": home}), contextlib.redirect_stdout(out):
+            code = cli.main(["--root", repo["work"]], proc_root=self._proc_root, runner=self._runner(), now=NOW)
+
+        text = out.getvalue()
+        self.assertEqual(code, 0)
+        self.assertTrue(text.startswith("Unfinished work report for " + repo["work"] + "\n"))
+        self.assertIn("tip (certain): feature/x\n", text)
+        self.assertIn("11111111-1111-4111-8111-111111111111  unknown slot  work  ", text)
+        self.assertIn("\n  " + repo["work"] + "/README.md\n", text)
+        self.assertIn("claude-sessions: not found; registry read directly", text)
+
+    def test_no_questions_turns_the_window_off(self) -> None:
+        repo, home = self._scenario()
+
+        code, data = self._main(home, "--root", repo["work"], "--no-questions")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(data["questions"], [])
+        self.assertIsNone(data["meta"]["question_window_days"])
+
+    def test_end_to_end_incomplete_on_error(self) -> None:
+        repo, home = self._scenario()
+        folder = self._folder(home, repo["work"])
+        with open(os.path.join(folder, "broken.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write("{not json\n")
+
+        code, data = self._main(home, "--root", repo["work"])
+
+        self.assertEqual(code, 1)
+        self.assertIs(data["meta"]["complete"], False)
+        self.assertEqual(data["meta"]["errors"], [os.path.join(folder, "broken.jsonl") + ":1: not JSON"])
+        self.assertEqual([item["title"] for item in data["openspec_pending"]], ["bar"])
+        self.assertEqual(len(self._by_name(data["tips"], "feature/x")[0]["sessions"]), 1)
+        self.assertEqual(len(data["stashes"]), 1)
+        self.assertEqual(data["meta"]["transcripts"]["count"], 3)
+
+    def test_inherited_git_dir_is_ignored(self) -> None:
+        repo, home = self._scenario()
+        other_base = os.path.join(self.tmp, "other-base")
+        os.makedirs(other_base)
+        other = repo_fixture.make_repo(other_base)
+        repo_fixture.git(other["work"], "switch", "-q", "-c", "other/y")
+        repo_fixture.commit(other["work"], "y.txt", "y\n", "Add y")
+        os.makedirs(os.path.join(other["work"], "openspec", "changes", "elsewhere"))
+        git_dir = os.path.join(other["work"], ".git")
+
+        with mock.patch.dict(os.environ, {"GIT_DIR": git_dir, "GIT_WORK_TREE": other["work"]}):
+            code, data = self._main(home, "--root", repo["work"])
+
+        self.assertTrue(self.inherited)
+        self.assertFalse(any(self.inherited), "a git command ran with GIT_DIR or GIT_WORK_TREE set")
+        self.assertEqual(code, 0, data["meta"]["errors"])
+        self.assertEqual(len(self._by_name(data["tips"], "feature/x")), 1)
+        self.assertEqual(self._by_name(data["tips"], "other/y"), [])
+        self.assertEqual([item["title"] for item in data["openspec_pending"]], ["bar"])
+
+    def test_divergence_is_shown_and_a_failing_count_recorded(self) -> None:
+        base = os.path.join(self.tmp, "diverged")
+        os.makedirs(base)
+        work = repo_fixture.make_repo(base)["work"]
+        # Local staging one commit ahead of and one behind origin/staging.
+        repo_fixture.git(work, "branch", "staging")
+        repo_fixture.git(work, "push", "-q", "-u", "origin", "staging")
+        repo_fixture.git(work, "switch", "-q", "-c", "elsewhere")
+        repo_fixture.commit(work, "remote.txt", "remote\n", "Add the remote side")
+        repo_fixture.git(work, "push", "-q", "origin", "elsewhere:staging")
+        repo_fixture.git(work, "switch", "-q", "staging")
+        repo_fixture.git(work, "branch", "-q", "-D", "elsewhere")
+        repo_fixture.commit(work, "local.txt", "local\n", "Add the local side")
+        repo_fixture.git(work, "switch", "-q", "main")
+        home = self._home()
+        self._proc_root = self._proc()
+
+        code, data = self._main(home, "--root", work)
+
+        self.assertEqual(code, 0, data["meta"]["errors"])
+        lines = [line for tip in self._by_name(data["tips"], "staging") for line in tip["lines"]]
+        self.assertIn("local 1 ahead, 1 behind origin/staging", lines)
+
+        plain = self._runner()
+
+        def failing(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
+            if "--left-right" in argv:
+                return 128, "", "fatal: injected failure"
+            return plain(argv, cwd)
+
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"UNFINISHED_HOME": home}), contextlib.redirect_stdout(out):
+            code = cli.main(["--json", "--root", work], proc_root=self._proc_root, runner=failing, now=NOW)
+        data = json.loads(out.getvalue())
+
+        self.assertEqual(code, 1)
+        self.assertIs(data["meta"]["complete"], False)
+        self.assertEqual(
+            data["meta"]["errors"],
+            ["git rev-list --left-right --count refs/heads/staging...refs/remotes/origin/staging: fatal: injected failure"],
+        )
+
+    def test_removed_worktree_with_unmerged_branch_is_an_item(self) -> None:
+        self._proc_root = self._proc()
+        for merged in (False, True):
+            with self.subTest(merged=merged):
+                base = os.path.join(self.tmp, "merged" if merged else "unmerged")
+                os.makedirs(base)
+                work = repo_fixture.make_repo(base)["work"]
+                if merged:
+                    repo_fixture.git(work, "push", "-q", "origin", "main:feature/old")
+                else:
+                    repo_fixture.git(work, "switch", "-q", "-c", "feature/old")
+                    repo_fixture.commit(work, "old.txt", "old\n", "Add old")
+                    repo_fixture.git(work, "push", "-q", "origin", "feature/old")
+                    repo_fixture.git(work, "switch", "-q", "main")
+                    repo_fixture.git(work, "branch", "-q", "-D", "feature/old")
+                home = self._home("home-" + ("merged" if merged else "unmerged"))
+                gone = os.path.join(work, ".worktrees", "old")
+                tf.write_transcript(
+                    self._folder(home, gone),
+                    "33333333-3333-4333-8333-333333333333",
+                    [
+                        tf.user("carry on", cwd=gone + "/src", gitBranch="feature/old"),
+                        tf.assistant("Carrying on.", cwd=gone + "/src", gitBranch="feature/old"),
+                    ],
+                )
+
+                code, data = self._main(home, "--root", work)
+
+                self.assertEqual(code, 0, data["meta"]["errors"])
+                removed = data["removed_worktrees"]
+                if merged:
+                    self.assertEqual(removed, [])
+                    continue
+                self.assertEqual(len(removed), 1)
+                self.assertIn("feature/old", removed[0]["names"])
+                self.assertEqual(removed[0]["attrs"]["worktree"], gone)
+                self.assertEqual(removed[0]["certainty"], "certain")
+                self.assertIn("33333333-3333-4333-8333-333333333333", "\n".join(removed[0]["lines"]))
+                self.assertEqual([tip["title"] for tip in data["tips"]], ["origin/feature/old"])
+
+
+class ItemBuildersTest(unittest.TestCase):
+    """The item builders over model values: no repository, no transcript."""
+
+    REMOTES = model.Remotes(["origin", "upstream"], "upstream")
+    BASE = model.Base("upstream/main", "remote-head")
+
+    def test_tip_items_map_integration_names_lines_and_dates(self) -> None:
+        tips = [
+            model.Tip("1" * 40, ["main", "upstream/main"], "merged", 0, "2026-10-01T10:00:00+04:00", "a@b", None),
+            model.Tip("2" * 40, ["staging"], "not", 2, "2026-10-02T10:00:00+04:00", "a@b", "/r/main"),
+            model.Tip("3" * 40, ["origin/staging"], "likely", 1, "", "", None),
+            model.Tip("4" * 40, ["origin/feature/m"], "merges-only", 1, "2026-10-03T10:00:00+04:00", "c@d", None),
+            model.Tip("5" * 40, [], "unknown", 0, "2026-10-04T10:00:00+04:00", "c@d", "/r/main/.worktrees/d"),
+        ]
+        divergences = [("staging", 1, 2707, "origin/staging")]
+
+        items = inventory.tip_items(tips, self.REMOTES, self.BASE, divergences)
+
+        self.assertEqual([item.title for item in items], ["staging", "origin/staging", "origin/feature/m", "detached HEAD in /r/main/.worktrees/d"])
+        self.assertEqual([item.certainty for item in items], ["certain", "likely", "likely", "unknown"])
+        self.assertEqual(items[0].names, ["staging", "origin/staging", "upstream/staging"])
+        self.assertEqual(items[1].names, ["staging", "origin/staging", "upstream/staging"])
+        self.assertEqual(items[3].names, [])
+        self.assertIn("local 1 ahead, 2707 behind origin/staging", items[0].lines)
+        self.assertIn("local 1 ahead, 2707 behind origin/staging", items[1].lines)
+        self.assertEqual(items[0].lines[0], "not integrated: 2 commits ahead of upstream/main")
+        self.assertIn("/r/main  (checked out)", items[0].lines)
+        self.assertEqual(items[0].attrs, {"author_email": "a@b", "integration": "not", "worktree": "/r/main"})
+        self.assertIsNone(items[1].date)
+        self.assertEqual(items[1].lines[1], "last commit unknown date by unknown author")
+        self.assertEqual((items[0].sha, items[0].date), ("2" * 40, "2026-10-02T10:00:00+04:00"))
+
+    def test_tip_without_a_base_says_so(self) -> None:
+        tips = [model.Tip("2" * 40, ["feature/x"], "unknown", 0, "", "a@b", None)]
+
+        items = inventory.tip_items(tips, model.Remotes([], None), model.Base(None, "unknown"), [])
+
+        self.assertEqual(items[0].lines[0], "merged: unknown (no base)")
+        self.assertEqual(items[0].names, ["feature/x"])
+
+    def test_unpublished_items_skip_merged_branches(self) -> None:
+        tips = [
+            model.Tip("1" * 40, ["done"], "merged", 0, "2026-10-01T10:00:00+04:00", "a@b", None),
+            model.Tip("2" * 40, ["open"], "not", 1, "2026-10-02T10:00:00+04:00", "a@b", None),
+            model.Tip("3" * 40, ["ahead", "origin/ahead"], "unknown", 0, "", "a@b", None),
+        ]
+        rows = [("done", "upstream-gone", 0), ("open", "no-upstream", 0), ("ahead", "ahead", 1)]
+
+        items = inventory.unpublished_items(rows, tips)
+
+        self.assertEqual([(item.title, item.lines) for item in items], [("open", ["no upstream: never pushed"]), ("ahead", ["1 commit not on its upstream"])])
+        self.assertEqual([(item.names, item.date, item.sha) for item in items], [(["open"], "2026-10-02T10:00:00+04:00", "2" * 40), (["ahead"], None, "3" * 40)])
+
+    def test_dirty_item_counts_and_keeps_every_path(self) -> None:
+        checkout = model.Checkout("/r/main", "main", "1" * 40, True, True)
+        entries = [("M ", "a"), (" M", "b"), ("MM", "c"), ("??", "d"), ("UU", "e")]
+
+        item = inventory.dirty_item(checkout, entries)
+
+        assert item is not None
+        self.assertEqual(item.lines, ["5 changed paths: 2 staged, 2 modified, 1 conflicted, 1 untracked"])
+        self.assertEqual(item.paths, ["a", "b", "c", "d", "e"])
+        self.assertEqual((item.title, item.attrs, item.date), ("/r/main", {"checkout": "/r/main"}, None))
+        self.assertIsNone(inventory.dirty_item(checkout, []))
+
+
+class RemovedWorktreesTest(unittest.TestCase):
+    MAIN = "/r/main"
+
+    def _session(self, cwds: dict[str, str | None]) -> model.Session:
+        return model.Session(
+            id="s",
+            path="/t/s.jsonl",
+            mtime=0.0,
+            cwds=cwds,
+            first_ts="2026-10-01T10:00:00.000Z",
+            last_ts="2026-10-01T11:00:00.000Z",
+            user_turns=1,
+            last_request="",
+            last_assistant="",
+            ended_on_question=False,
+            entrypoint="cli",
+            account_uuid=None,
+            slot="1",
+            live=None,
+            ran_skill=False,
+            evidence=[],
+            cwd_counts={cwd: 1 for cwd in cwds},
+        )
+
+    def test_one_item_per_worktree_and_branch_and_none_for_present_or_unknown(self) -> None:
+        checkouts = [
+            model.Checkout(self.MAIN, "main", "1" * 40, True, True),
+            model.Checkout(self.MAIN + "/.worktrees/here", "feature/here", "2" * 40, False, True),
+        ]
+        tips = [
+            model.Tip("3" * 40, ["feature/old", "origin/feature/old"], "likely", 2, "", "a@b", None),
+            model.Tip("4" * 40, ["feature/here"], "not", 1, "", "a@b", None),
+        ]
+        sessions = [
+            self._session(
+                {
+                    self.MAIN + "/.worktrees/old/src": "feature/old",
+                    self.MAIN + "/.worktrees/old": "feature/old",
+                    self.MAIN + "/.worktrees/here/src": "feature/here",
+                    self.MAIN + "/.worktrees/nobranch": None,
+                    self.MAIN + "/.worktrees/deleted": "feature/deleted",
+                    self.MAIN + "/src": "feature/old",
+                }
+            )
+        ]
+        remotes = model.Remotes(["origin"], "origin")
+
+        items = inventory.removed_worktrees(sessions, checkouts, tips, remotes, self.MAIN)
+
+        self.assertEqual([(item.title, item.names, item.certainty) for item in items], [("feature/old", ["feature/old"], "likely")])
+        self.assertIsNone(items[0].date)
+        self.assertEqual(items[0].attrs, {"worktree": self.MAIN + "/.worktrees/old"})
+
+
+class ParkedCountTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="unfinished-parked-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = os.path.join(self.tmp, "home")
+        self.main = os.path.join(self.tmp, "main")
+        os.makedirs(os.path.join(self.home, ".claude"))
+        os.makedirs(self.main)
+
+    def _write(self, path: str, text: str) -> None:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def _settings(self, text: str) -> None:
+        self._write(os.path.join(self.home, ".claude", "settings.json"), text)
+
+    def test_counts_open_lines_of_the_default_queue(self) -> None:
+        self._write(os.path.join(self.main, "LATER.local.md"), "# Parked\n- [ ] one\n  - [ ] two\n- [x] done\n-[ ] not one\n")
+        run = model.Run()
+
+        self.assertEqual(inventory.parked_count(self.home, self.main, run), 2)
+        self.assertEqual((run.errors, run.notes), ([], []))
+
+    def test_absent_queue_is_none(self) -> None:
+        self.assertIsNone(inventory.parked_count(self.home, self.main, model.Run()))
+
+    def test_setting_names_the_queue_top_level_or_nested(self) -> None:
+        self._write(os.path.join(self.main, "NOTES.md"), "- [ ] a\n")
+        self._write(os.path.join(self.main, "LATER.local.md"), "- [ ] a\n- [ ] b\n")
+        for settings in ('{"laterbox.file": "NOTES.md"}', '{"laterbox": {"file": "NOTES.md"}}'):
+            with self.subTest(settings=settings):
+                self._settings(settings)
+                run = model.Run()
+                self.assertEqual(inventory.parked_count(self.home, self.main, run), 1)
+                self.assertEqual(run.notes, [])
+
+    def test_unusable_setting_or_settings_file_falls_back_with_a_note(self) -> None:
+        self._write(os.path.join(self.main, "LATER.local.md"), "- [ ] a\n")
+        for settings in ('{"laterbox.file": "a/b"}', '{"laterbox.file": ".."}', '{"laterbox.file": ""}', '{"laterbox.file": 3}', "{oops"):
+            with self.subTest(settings=settings):
+                self._settings(settings)
+                run = model.Run()
+                self.assertEqual(inventory.parked_count(self.home, self.main, run), 1)
+                self.assertEqual(len(run.notes), 1)
+                self.assertIn("LATER.local.md", run.notes[0])
+                self.assertEqual(run.errors, [])
+
+    def test_unreadable_queue_is_an_error(self) -> None:
+        os.makedirs(os.path.join(self.main, "LATER.local.md"))
+        run = model.Run()
+
+        self.assertIsNone(inventory.parked_count(self.home, self.main, run))
+        self.assertFalse(run.complete)
+        self.assertEqual(len(run.errors), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
