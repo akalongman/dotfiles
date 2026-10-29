@@ -223,7 +223,11 @@ def _best(
     cutoff: datetime | None,
     own: str | None = None,
 ) -> tuple[_Key, Evidence] | None:
-    """The best evidence among tokens; with a cutoff, only events strictly before it; with own, only from that checkout."""
+    """The best evidence among tokens.
+
+    With a cutoff, only events strictly before it; with own, only events
+    from that checkout ("" admits none).
+    """
     best: tuple[_Key, Evidence] | None = None
     for token in tokens:
         for key, at, checkout, evidence in by_token.get(token, ()):

@@ -171,12 +171,13 @@ class Session:
     when none was), and cwd_counts counts the chain's records per cwd.
     branch_counts counts the chain's records per cwd and gitBranch, each
     cwd's branches in the order first seen; a record without a branch adds
-    nothing, so a cwd seen only without one is absent. first_ts and last_ts are the earliest and latest timestamps, compared as
-    instants. last_request is the last genuine user request and
-    last_assistant the last assistant text, both "" when there is none.
-    account_uuid comes from the bridge-session record and slot is the slot
-    it maps to, else "unknown"; live is set by the liveness stage. Every
-    field but account_uuid and mtime is read from the active chain.
+    nothing, so a cwd seen only without one is absent. first_ts and last_ts
+    are the earliest and latest timestamps, compared as instants.
+    last_request is the last genuine user request and last_assistant the
+    last assistant text, both "" when there is none. account_uuid comes from
+    the bridge-session record and slot is the slot it maps to, else
+    "unknown"; live is set by the liveness stage. Every field but
+    account_uuid and mtime is read from the active chain.
     """
 
     id: str
