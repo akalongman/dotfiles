@@ -32,9 +32,12 @@ elif command -v brew >/dev/null 2>&1; then
 fi
 
 # TPM (tmux plugin manager): .tmux.conf runs ~/.tmux/plugins/tpm/tpm, which
-# does not exist until cloned. Plugins themselves install via prefix+I.
+# does not exist until cloned. The clone is full, not shallow: the private
+# machine playbook pins TPM to a commit, and its git task cannot reach a
+# commit below a shallow clone's tip. The plugins themselves install through
+# that playbook's tmux tag, or with prefix+I on a machine without it.
 if [ ! -d "$HOME/.tmux/plugins/tpm" ]; then
-    git clone --depth 1 https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm" \
+    git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm" \
         || echo "TPM clone skipped (offline?)."
 fi
 
@@ -82,7 +85,8 @@ yadm clone complete. Manual follow-ups:
      curl -sS https://starship.rs/install.sh | sh
   6. Install uv (Python packaging; upgrade later with `uv self update`):
      curl -LsSf https://astral.sh/uv/install.sh | sh
-  7. In tmux, press prefix+I to install tmux-resurrect/continuum via TPM.
+  7. tmux-resurrect/continuum: on a machine with the private playbook, its
+     `tmux` tag (step 8) installs them; elsewhere press prefix+I in tmux.
   8. Everything else (apt repos and packages, Flatpaks, snaps, CLIs):
      uv tool install ansible-core && ~/.dotfiles-private/machine  (see its README)
 
