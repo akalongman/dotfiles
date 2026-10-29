@@ -54,7 +54,8 @@ def worktrees(repo: str, run: Run, runner: Runner = model.default_runner) -> lis
 
     Reads `git worktree list --porcelain -z` (NUL-separated, so a path may
     hold any character). A `detached` or `bare` entry has branch None; a
-    `prunable` entry, whose directory is gone, has present False.
+    `prunable` entry, whose directory is gone, has present False and
+    records `worktree <path>: directory is gone` as an error.
     """
     out = run_git(repo, "worktree", "list", "--porcelain", "-z", run=run, runner=runner)
     checkouts: list[Checkout] = []
@@ -69,6 +70,10 @@ def worktrees(repo: str, run: Run, runner: Runner = model.default_runner) -> lis
         fields = {}
     if "worktree" in fields:
         checkouts.append(_checkout(fields, is_main=not checkouts))
+    for checkout in checkouts:
+        if not checkout.present:
+            run.errors.append("worktree " + checkout.path + ": directory is gone")
+            run.complete = False
     return checkouts
 
 

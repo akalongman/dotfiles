@@ -5,11 +5,14 @@ through tests/repo_fixture.py; no case reads this machine's repositories.
 """
 
 import contextlib
+import importlib
 import io
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.unfinishedlib import cli, gitstate, model
 from tests import repo_fixture
@@ -40,6 +43,7 @@ class GitstateTest(unittest.TestCase):
             ],
         )
         self.assertEqual(run.errors, [])
+        self.assertIs(run.complete, True)
 
     def test_prunable_worktree_is_not_present(self) -> None:
         repo = repo_fixture.make_repo(self.tmp)
@@ -47,14 +51,17 @@ class GitstateTest(unittest.TestCase):
         added = os.path.join(self.tmp, "wt")
         repo_fixture.git(work, "worktree", "add", added, "-b", "feature/x")
         shutil.rmtree(added)
+        run = model.Run()
 
-        checkouts = gitstate.worktrees(work, model.Run())
+        checkouts = gitstate.worktrees(work, run)
 
         self.assertEqual(len(checkouts), 2)
         self.assertTrue(checkouts[0].present)
         self.assertEqual(checkouts[1].path, added)
         self.assertEqual(checkouts[1].branch, "feature/x")
         self.assertIs(checkouts[1].present, False)
+        self.assertEqual(run.errors, ["worktree " + added + ": directory is gone"])
+        self.assertIs(run.complete, False)
 
     def test_detached_worktree_has_no_branch(self) -> None:
         repo = repo_fixture.make_repo(self.tmp)
@@ -62,10 +69,13 @@ class GitstateTest(unittest.TestCase):
         added = os.path.join(self.tmp, "det")
         repo_fixture.git(work, "worktree", "add", "--detach", added)
         head = repo_fixture.git(work, "rev-parse", "HEAD").strip()
+        run = model.Run()
 
-        checkouts = gitstate.worktrees(work, model.Run())
+        checkouts = gitstate.worktrees(work, run)
 
         self.assertEqual(checkouts[1], model.Checkout(added, None, head, False, True))
+        self.assertEqual(run.errors, [])
+        self.assertIs(run.complete, True)
 
     def test_remotes_prefers_upstream_as_canonical(self) -> None:
         repo = repo_fixture.make_repo(self.tmp, with_upstream=True)
@@ -209,6 +219,26 @@ class GitstateTest(unittest.TestCase):
         result = model.default_runner(["unfinished-no-such-binary"], None)
 
         self.assertEqual(result, (127, "", "unfinished-no-such-binary: command not found"))
+
+    def test_fixture_import_scrubs_git_local_env_vars(self) -> None:
+        names = subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        self.assertIn("GIT_DIR", names)
+        # Values under this case's own temp root; nothing ever runs git on them.
+        decoy = {name: os.path.join(self.tmp, "decoy", name) for name in names}
+        decoy["UNFINISHED_HOME"] = os.path.join(self.tmp, "decoy-home")
+
+        with mock.patch.dict(os.environ, decoy):
+            importlib.reload(repo_fixture)
+            left = sorted(name for name in decoy if name in os.environ)
+
+        self.assertEqual(left, [])
+        self.assertEqual(sorted(name for name in decoy if name in os.environ), [])
 
     def test_cli_help_exits_zero(self) -> None:
         stdout = io.StringIO()

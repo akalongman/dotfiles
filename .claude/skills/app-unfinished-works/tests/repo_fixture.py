@@ -2,6 +2,11 @@
 
 Each repository carries its own identity and turns signing off, so a fixture
 commit never reaches the machine's signing agent or its global identity.
+
+Importing this module removes the git local environment variables from
+os.environ, so a GIT_DIR exported by yadm enter or a hook can send neither
+the fixture's git calls nor the gitstate calls under test into another
+repository, however the suite is started.
 """
 
 import os
@@ -9,6 +14,33 @@ import subprocess
 
 EMAIL = "owner@example.test"
 NAME = "Fixture Owner"
+
+# The knob of this suite; a value left set would change what a case sees.
+SUITE_KNOBS = ("UNFINISHED_HOME",)
+
+
+def _scrub_git_environment() -> None:
+    # The query runs without any GIT_ variable, so a malformed one the caller
+    # exported (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT) cannot break it.
+    clean = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    completed = subprocess.run(
+        ["git", "rev-parse", "--local-env-vars"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        env=clean,
+        check=False,
+    )
+    names = completed.stdout.split()
+    if completed.returncode != 0 or "GIT_DIR" not in names:
+        raise RuntimeError(
+            "git rev-parse --local-env-vars failed, refusing to run unisolated: " + completed.stderr.strip()
+        )
+    for name in (*names, *SUITE_KNOBS):
+        os.environ.pop(name, None)
+
+
+_scrub_git_environment()
 
 
 def git(repo: str, *args: str) -> str:
