@@ -190,3 +190,24 @@ class Session:
     ran_skill: bool
     evidence: list[Evidence]
     cwd_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class LiveSession:
+    """One Claude Code session running now, as one source reports it.
+
+    source is claude-sessions, registry or process. session_id is None when
+    the source does not name it (a process with no registry row yet, or an
+    older claude-sessions); cwd is where the process runs, which need not
+    be a cwd its transcript records. slot is the slot number as a string,
+    else "unknown"; state is working, waiting or idle from the registry
+    status, unknown for a process row, whose name is "" too.
+    """
+
+    session_id: str | None
+    pid: int
+    cwd: str
+    slot: str
+    name: str
+    state: str
+    source: str
