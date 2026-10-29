@@ -88,6 +88,28 @@ class Base:
 
 
 @dataclass
+class Tip:
+    """One distinct commit at the tip of a branch, a remote branch or a detached HEAD.
+
+    refs are short names (feature/x, origin/feature/x) in ref order, local
+    first, and empty for a detached HEAD that no ref points at. integration is
+    merged, likely, not, merges-only or unknown (no base, or git failed);
+    ahead counts the tip's commits the base lacks. last_date is the tip
+    commit's committer date (ISO 8601 with offset) and author_email its author
+    email, both "" when git could not read them. worktree is the present
+    checkout whose HEAD is the tip, a linked worktree before the main checkout.
+    """
+
+    sha: str
+    refs: list[str]
+    integration: str
+    ahead: int
+    last_date: str
+    author_email: str
+    worktree: str | None
+
+
+@dataclass
 class Association:
     """One session tied to an item, with the evidence that ties it."""
 
