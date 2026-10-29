@@ -22,14 +22,21 @@ from typing import Any
 from scripts.unfinishedlib.model import Checkout, Evidence, Run, Session
 
 # A user text block, or a whole string content, starting with one of these
-# is written by the harness, not typed by the user.
+# is written by the harness, not typed by the user: local commands and their
+# output, reminders, notifications, the ! shell mode, and the marker the CLI
+# writes when the user interrupts a turn.
 HARNESS_TAGS = (
     "<command-name>",
     "<local-command-stdout>",
     "<local-command-caveat>",
     "<system-reminder>",
     "<task-notification>",
+    "<bash-input>",
+    "<bash-stdout>",
+    "<bash-stderr>",
 )
+INTERRUPTION_MARKER = "[Request interrupted by user"
+_LOCAL_PREFIXES = (*HARNESS_TAGS, INTERRUPTION_MARKER)
 
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit")
 QUESTION_TOOL = "AskUserQuestion"
@@ -38,14 +45,58 @@ QUESTION_TOOL = "AskUserQuestion"
 SKILL_SCRIPT = "app-unfinished-works/scripts/unfinished.py"
 SKILL_COMMAND = "/app-unfinished-works"
 
-# A shell word from this list makes a command state-changing.
-STATE_WORDS = frozenset(
-    {"commit", "switch", "checkout", "push", "merge", "rebase", "cherry-pick", "openspec", "mv", "cp", "rm", "mkdir", "tee"}
+# A command that writes files, counted as the command word of a simple
+# command (sed only with an in-place option).
+FILE_COMMANDS = frozenset({"mv", "cp", "rm", "mkdir", "tee", "openspec"})
+# The spec's closed list of state-changing git verbs, counted as git's
+# subcommand; branch, stash and worktree have read-only forms.
+GIT_VERBS = frozenset(
+    {"commit", "switch", "checkout", "branch", "push", "merge", "rebase", "cherry-pick", "stash", "worktree"}
 )
-# git branch with none of its arguments, or with any of these, only lists.
-BRANCH_READ_ONLY = frozenset(
-    {"-a", "-r", "-l", "--list", "-v", "-vv", "--contains", "--merged", "--no-merged", "--show-current"}
+# Words after which the next word is still in command position: the shell's
+# reserved words that precede a command, these prefixes (and a prefix's
+# options), NAME=value assignments. timeout also takes a duration, and its -s
+# and -k a value, before the command.
+_COMMAND_KEYWORDS = frozenset({"then", "do", "else", "if", "elif", "while", "until", "!", "{"})
+_COMMAND_PREFIXES = frozenset({"sudo", "env", "xargs", "time", "nohup", "command", "exec", "timeout"})
+_TIMEOUT_VALUE_OPTIONS = frozenset({"-s", "-k", "--signal", "--kill-after"})
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# git branch: a short option clustering any of these letters, or one of
+# these long options, changes refs.
+_BRANCH_MUTATING_LETTERS = frozenset("dDmMcCfut")
+_BRANCH_MUTATING_OPTIONS = frozenset(
+    {
+        "--delete",
+        "--move",
+        "--copy",
+        "--force",
+        "--set-upstream-to",
+        "--unset-upstream",
+        "--edit-description",
+        "--track",
+        "--no-track",
+    }
 )
+# git branch list mode: a short cluster of only these letters, or one of
+# these long options; the last group takes the next word as its value.
+_BRANCH_LIST_LETTERS = frozenset("arlv")
+_BRANCH_LIST_OPTIONS = frozenset(
+    {
+        "--list",
+        "--all",
+        "--remotes",
+        "--verbose",
+        "--format",
+        "--sort",
+        "--points-at",
+        "--contains",
+        "--no-contains",
+        "--merged",
+        "--no-merged",
+        "--show-current",
+    }
+)
+_BRANCH_VALUE_OPTIONS = frozenset({"--format", "--sort", "--points-at", "--contains", "--no-contains", "--merged", "--no-merged"})
 # git options that take their value as the next word.
 _GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"})
 
@@ -105,8 +156,8 @@ def classify_user(record: dict[str, Any]) -> str:
     tool_result when any block is a tool result; meta when isMeta is true or
     the record is the summary the CLI writes after a compaction
     (isCompactSummary); otherwise every text block (or the whole string)
-    starting with a harness tag is dropped, and the record is local when
-    nothing remains, else a genuine request.
+    starting with a harness tag or the interruption marker is dropped, and
+    the record is local when nothing remains, else a genuine request.
     """
     return _classify(record)[0]
 
@@ -122,25 +173,35 @@ def strip_fd_redirects(command: str) -> str:
 def is_state_changing(command: str) -> bool:
     """Whether a shell command may change a repository or a file.
 
-    On the command with strip_fd_redirects applied, true when a shell word
-    is one of STATE_WORDS, sed runs in place, a > or >> redirection writes a
-    file (one to /dev/null or onto another descriptor writes nothing), or a
-    git branch, git stash or git worktree invocation is not one of the
-    read-only forms (branch with no argument or any BRANCH_READ_ONLY one,
-    stash list, stash show, worktree list). Quoted text is one word, so a
-    verb inside a quoted search pattern does not count.
+    Read on the command with strip_fd_redirects applied. True when:
+    - a > or >> redirection anywhere writes a file (one to /dev/null, or
+      onto another descriptor, writes nothing);
+    - the command word of a simple command is one of FILE_COMMANDS, or is
+      sed with an in-place option. The command word is the first word
+      after the start, a separator (; && || | & ( or a newline) or a
+      reserved word that precedes a command (then, do, else, if, elif,
+      while, until, !, {), past NAME=value assignments and the
+      prefixes sudo, env, xargs, time, nohup, command, exec and timeout
+      (with its duration);
+    - a git command word's subcommand, past git's global options, is one of
+      GIT_VERBS and not a read-only form: branch in list mode or with no
+      argument, stash list, stash show, worktree list.
+
+    A command name as an argument or a search term (grep -rn x openspec,
+    git log --grep merge) changes nothing, and quoted text is one word.
     """
     tokens = _shell_tokens(strip_fd_redirects(command))
-    for index, token in enumerate(tokens):
-        if token in STATE_WORDS:
+    if any(_is_redirect(token) and _writes_a_file(tokens, index) for index, token in enumerate(tokens)):
+        return True
+    for index in _command_words(tokens):
+        word = tokens[index]
+        if word in FILE_COMMANDS:
             return True
-        if _is_redirect(token) and _writes_a_file(tokens, index):
+        if word == "sed" and any(_IN_PLACE.match(argument) for argument in _arguments(tokens, index + 1)):
             return True
-        if token == "sed" and any(_IN_PLACE.match(argument) for argument in _arguments(tokens, index + 1)):
-            return True
-        if token == "git":
+        if word == "git":
             subcommand, arguments = _git_invocation(tokens, index + 1)
-            if subcommand in ("branch", "stash", "worktree") and not _git_reads_only(subcommand, arguments):
+            if subcommand in GIT_VERBS and not _git_reads_only(subcommand, arguments):
                 return True
     return False
 
@@ -149,18 +210,19 @@ class NameMatcher:
     """Whole-name matching of an inventory's names, and path matching of its paths."""
 
     def __init__(self, names: list[str], paths: list[str]) -> None:
-        self.paths = [path.rstrip("/") for path in paths if path.strip("/")]
+        self.paths = list(dict.fromkeys(path.rstrip("/") for path in paths if path.strip("/")))
         ordered = sorted({name for name in names if name}, key=lambda name: (-len(name), name))
         self._pattern: re.Pattern[str] | None = None
         if ordered:
             # Before: no name character, so / may precede and dev-2 holds no
-            # dev; never the dev of a literal /dev/. After: no name character
-            # and no dot followed by one, so a sentence period may follow but
-            # dev.local holds no dev.
+            # dev. After: no name character and no dot followed by one, so a
+            # sentence period may follow but dev.local holds no dev; and not
+            # a match ending in the dev of a literal /dev/, which refuses
+            # 2>/dev/null while origin/dev/feature still finds dev/feature.
             self._pattern = re.compile(
-                r"(?<![A-Za-z0-9_.-])(?!(?<=/)dev/)(?:"
+                r"(?<![A-Za-z0-9_.-])(?:"
                 + "|".join(re.escape(name) for name in ordered)
-                + r")(?![A-Za-z0-9_-])(?!\.[A-Za-z0-9_])"
+                + r")(?![A-Za-z0-9_-])(?!\.[A-Za-z0-9_])(?!(?<=/dev)/)"
             )
 
     def find(self, text: str) -> list[str]:
@@ -174,12 +236,18 @@ class NameMatcher:
         return found
 
     def find_path(self, file_path: str, checkouts: list[str]) -> str | None:
-        """Return the paths entry an absolute file path lies under, else None.
+        """Return the first paths entry an absolute file path lies under, else None."""
+        found = self.find_paths(file_path, checkouts)
+        return found[0] if found else None
+
+    def find_paths(self, file_path: str, checkouts: list[str]) -> list[str]:
+        """Return every paths entry an absolute file path lies under, in paths order.
 
         The longest checkout root containing the path is stripped, then a
         leading .worktrees/<name>/ too, so a file in a gone worktree under
         the main checkout still maps. An entry p matches a relative path rel
-        when rel == p or rel starts with p + "/".
+        when rel == p or rel starts with p + "/", so nested entries (a change
+        directory and a dirty file inside it) all match.
         """
         path = os.path.normpath(file_path)
         root: str | None = None
@@ -188,15 +256,12 @@ class NameMatcher:
             if _under(path, candidate) and (root is None or len(candidate) > len(root)):
                 root = candidate
         if root is None:
-            return None
+            return []
         relative = "" if path == root else path[len(root.rstrip("/")) + 1 :]
         parts = relative.split("/", 2)
         if len(parts) == 3 and parts[0] == ".worktrees" and parts[1]:
             relative = parts[2]
-        for candidate in self.paths:
-            if relative == candidate or relative.startswith(candidate + "/"):
-                return candidate
-        return None
+        return [candidate for candidate in self.paths if relative == candidate or relative.startswith(candidate + "/")]
 
 
 def parse_transcript(
@@ -389,7 +454,7 @@ def _harness_or_blank(block: dict[str, Any]) -> bool:
     if not isinstance(text, str):
         return True
     stripped = text.lstrip()
-    return not stripped or stripped.startswith(HARNESS_TAGS)
+    return not stripped or stripped.startswith(_LOCAL_PREFIXES)
 
 
 def _collect_results(record: dict[str, Any], results: dict[str, bool]) -> None:
@@ -494,15 +559,20 @@ def _session(
 def _tool_evidence(
     name: str, tool_input: dict[str, Any], node: _Node, matcher: NameMatcher, checkouts: list[str]
 ) -> list[Evidence]:
-    """Evidence from one successful tool call: work, else lookup, else none."""
+    """Evidence from one successful tool call: work, else lookup, else none.
+
+    An edit or write gives one work per paths entry its file lies under, so
+    an edit inside a change directory that is also a dirty path counts for
+    both items.
+    """
     if name in EDIT_TOOLS:
         target = tool_input.get("file_path") or tool_input.get("notebook_path")
         if isinstance(target, str) and target:
             if not os.path.isabs(target) and node.cwd:
                 target = os.path.join(node.cwd, target)
-            hit = matcher.find_path(target, checkouts)
-            if hit is not None:
-                return [Evidence("work", hit, node.ts)]
+            hits = matcher.find_paths(target, checkouts)
+            if hits:
+                return [Evidence("work", hit, node.ts) for hit in hits]
     searched = tool_input
     if name == "Bash" and isinstance(tool_input.get("command"), str):
         stripped = strip_fd_redirects(tool_input["command"])
@@ -604,6 +674,37 @@ def _arguments(tokens: list[str], start: int) -> list[str]:
     return arguments
 
 
+def _command_words(tokens: list[str]) -> Iterator[int]:
+    """Yield the index of the command word of every simple command in tokens."""
+    expecting = True
+    prefix: str | None = None
+    skip_value = False
+    awaiting_duration = False
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if _is_separator(token):
+            expecting, prefix, skip_value, awaiting_duration = True, None, False, False
+        elif expecting:
+            if _is_operator(token):
+                # A redirection before the command word, with its target.
+                index += 1
+            elif skip_value:
+                skip_value = False
+            elif prefix is not None and token.startswith("-"):
+                skip_value = prefix == "timeout" and token in _TIMEOUT_VALUE_OPTIONS
+            elif token in _COMMAND_KEYWORDS or _ASSIGNMENT.match(token):
+                pass
+            elif awaiting_duration:
+                awaiting_duration = False
+            elif token in _COMMAND_PREFIXES:
+                prefix, awaiting_duration = token, token == "timeout"
+            else:
+                yield index
+                expecting, prefix = False, None
+        index += 1
+
+
 def _git_invocation(tokens: list[str], start: int) -> tuple[str | None, list[str]]:
     """The subcommand and arguments of a git invocation whose words begin at start."""
     index = start
@@ -616,10 +717,44 @@ def _git_invocation(tokens: list[str], start: int) -> tuple[str | None, list[str
 
 def _git_reads_only(subcommand: str, arguments: list[str]) -> bool:
     if subcommand == "branch":
-        return not arguments or any(argument.split("=", 1)[0] in BRANCH_READ_ONLY for argument in arguments)
+        return not _branch_mutates(arguments)
     if subcommand == "stash":
         return bool(arguments) and arguments[0] in ("list", "show")
-    return bool(arguments) and arguments[0] == "list"
+    if subcommand == "worktree":
+        return bool(arguments) and arguments[0] == "list"
+    return False
+
+
+def _branch_mutates(arguments: list[str]) -> bool:
+    """Whether git branch with these arguments changes refs.
+
+    It does on a mutating option (alone or in a short cluster), or on a
+    positional argument with no list-mode option. A list-mode option's own
+    value (--contains abc, --sort -committerdate) is never a positional.
+    """
+    list_mode = False
+    positional = False
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument.startswith("--"):
+            name = argument.split("=", 1)[0]
+            if name in _BRANCH_MUTATING_OPTIONS:
+                return True
+            if name in _BRANCH_LIST_OPTIONS:
+                list_mode = True
+            if name in _BRANCH_VALUE_OPTIONS and "=" not in argument:
+                index += 1
+        elif argument.startswith("-") and len(argument) > 1:
+            letters = set(argument[1:])
+            if letters & _BRANCH_MUTATING_LETTERS:
+                return True
+            if letters <= _BRANCH_LIST_LETTERS:
+                list_mode = True
+        else:
+            positional = True
+        index += 1
+    return positional and not list_mode
 
 
 def _under(path: str, root: str) -> bool:

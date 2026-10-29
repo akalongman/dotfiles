@@ -119,6 +119,20 @@ class TranscriptsTest(unittest.TestCase):
         self.assertIsNone(matcher.find_path(MAIN + "-frontend/src/app.py", [MAIN]))
         self.assertIsNone(matcher.find_path("src/app.py", [MAIN]))
 
+        # Nested entries (a change directory and a dirty file inside it) all
+        # match, in paths order; find_path gives the first of them.
+        nested = transcripts.NameMatcher([], ["openspec/changes/my-change", "openspec/changes/my-change/tasks.md", "src"])
+        tasks = MAIN + "/openspec/changes/my-change/tasks.md"
+        self.assertEqual(
+            nested.find_paths(tasks, [MAIN]), ["openspec/changes/my-change", "openspec/changes/my-change/tasks.md"]
+        )
+        self.assertEqual(nested.find_path(tasks, [MAIN]), "openspec/changes/my-change")
+        self.assertEqual(nested.find_paths(MAIN + "/docs/x.md", [MAIN]), [])
+        self.assertEqual(nested.find_paths("/elsewhere/src/x", [MAIN]), [])
+        # A path two items share is one entry, so one edit gives one token for it.
+        shared = transcripts.NameMatcher([], ["src", "src/"])
+        self.assertEqual(shared.find_paths(MAIN + "/src/app.py", [MAIN]), ["src"])
+
     # Membership and the headless filter.
 
     def test_membership_by_cwd_not_folder_name(self) -> None:
@@ -162,6 +176,16 @@ class TranscriptsTest(unittest.TestCase):
         self.assertEqual(transcripts.classify_user(user("Caveat: the messages below", isMeta=True)), "meta")
         # A skill invocation leads with <command-message>, which is no harness tag.
         self.assertEqual(transcripts.classify_user(user(SKILL_INVOCATION)), "request")
+        # The ! shell mode: the command typed and its output.
+        self.assertEqual(transcripts.classify_user(user("<bash-input>git branch -a</bash-input>")), "local")
+        self.assertEqual(
+            transcripts.classify_user(user("<bash-stdout>* feature/x\n  my-change</bash-stdout><bash-stderr></bash-stderr>")),
+            "local",
+        )
+        self.assertEqual(transcripts.classify_user(user("<bash-stderr>fatal: bad ref</bash-stderr>")), "local")
+        # The markers the CLI writes when the user interrupts.
+        self.assertEqual(transcripts.classify_user(user(["[Request interrupted by user]"])), "local")
+        self.assertEqual(transcripts.classify_user(user("[Request interrupted by user for tool use]")), "local")
 
     def test_compaction_summary_is_not_a_request(self) -> None:
         summary = user(
@@ -297,6 +321,15 @@ class TranscriptsTest(unittest.TestCase):
             ("git log origin/feature/x > /dev/null", [("lookup", "feature/x")]),
             ("git branch -a", []),
             ("git stash list", []),
+            # A command name as an argument or a search term changes nothing.
+            ("grep -rn my-change openspec", [("lookup", "my-change")]),
+            ("cd openspec && ls changes/my-change", [("lookup", "my-change")]),
+            ("git log --grep merge feature/x", [("lookup", "feature/x")]),
+            ("git log --oneline -- openspec/changes/my-change | grep -c commit", [("lookup", "my-change")]),
+            ("git branch -av | grep feature/x", [("lookup", "feature/x")]),
+            ("git branch --format=%(refname:short) | grep feature/x", [("lookup", "feature/x")]),
+            ("git branch --sort=-committerdate | grep feature/x", [("lookup", "feature/x")]),
+            ("git branch --format='%(refname)'", []),
         ):
             with self.subTest(command=command):
                 session, _ = self._tool_session("Bash", {"command": command})
@@ -305,7 +338,7 @@ class TranscriptsTest(unittest.TestCase):
         grep, _ = self._tool_session("Grep", {"pattern": "feature/x", "path": MAIN, "output_mode": "content"})
         self.assertEqual(self._evidence(grep), [("lookup", "feature/x")])
 
-        for command in ("git commit -m 'feature/x done'", "echo feature/x > notes.md"):
+        for command in ("git commit -m 'feature/x done'", "echo feature/x > notes.md", "git branch -d -r origin/feature/x"):
             with self.subTest(command=command):
                 session, _ = self._tool_session("Bash", {"command": command})
                 self.assertEqual(self._evidence(session), [("work", "feature/x")])
@@ -315,6 +348,21 @@ class TranscriptsTest(unittest.TestCase):
             {"file_path": MAIN + "/openspec/changes/my-change/tasks.md", "old_string": "- [ ] a", "new_string": "- [x] a"},
         )
         self.assertEqual(self._evidence(edit), [("work", "openspec/changes/my-change")])
+
+    def test_edit_under_nested_paths_is_work_on_each(self) -> None:
+        self.matcher = transcripts.NameMatcher(NAMES, ["openspec/changes/my-change", "openspec/changes/my-change/tasks.md"])
+
+        edit, records = self._tool_session(
+            "Edit",
+            {"file_path": MAIN + "/openspec/changes/my-change/tasks.md", "old_string": "- [ ] a", "new_string": "- [x] a"},
+        )
+
+        self.assertEqual(
+            self._evidence(edit), [("work", "openspec/changes/my-change"), ("work", "openspec/changes/my-change/tasks.md")]
+        )
+        call = records[1]
+        assert isinstance(call, dict)
+        self.assertEqual({item.ts for item in edit.evidence}, {call["timestamp"]})
 
     def test_relative_edit_path_joins_the_record_cwd(self) -> None:
         session, _ = self._tool_session(
@@ -343,12 +391,44 @@ class TranscriptsTest(unittest.TestCase):
 
     def test_is_state_changing(self) -> None:
         for command, expected in (
+            # git verbs count as git's subcommand, past its global options.
             ("git commit -m 'done'", True),
             ("git -C /p push origin feature/x", True),
-            ("gh pr merge 12", True),
+            ("git --no-pager -c core.pager=cat merge feature/x", True),
+            ("git cherry-pick abc1234", True),
+            ("git status --short", False),
+            ("git log --grep merge feature/x", False),
+            ("git log --oneline -- openspec/changes/my-change | grep -c commit", False),
+            ("echo git push", False),
+            # The spec's list is closed: no gh or glab forms.
+            ("gh pr merge 12", False),
+            # File commands count in command position only.
             ("rm -rf openspec/changes/x", True),
             ("tee notes.md", True),
+            ("echo x | tee -a notes.md", True),
             ("openspec list", True),
+            ("cd /p && openspec archive my-change", True),
+            ("for f in a b; do rm \"$f\"; done", True),
+            ("if true; then mkdir x; fi", True),
+            # Every reserved word that precedes a command keeps command position.
+            ("cmp -s a b || { cp a b && echo copied; }", True),
+            ("if git push origin feature/x; then echo ok; fi", True),
+            ("while read -r f; do echo \"$f\"; done < list.txt", False),
+            ("! rm -f x", True),
+            ("(cd sub && mv a b)", True),
+            ("x=$(git commit -m m)", True),
+            ("LC_ALL=C sudo cp a b", True),
+            ("find . -name x | xargs -0 rm", True),
+            ("env -i A=1 mkdir x", True),
+            # timeout is a prefix too, past its options and its duration.
+            ("timeout 120 git push -u origin feature/x", True),
+            ("timeout -s KILL 30s rm x", True),
+            ("timeout 120 git log feature/x", False),
+            ("grep -rn my-change openspec", False),
+            ("cd openspec && ls changes/my-change", False),
+            ("grep -rn 'git push' .", False),
+            ("echo rm cp mv", False),
+            # Redirections that write a file, anywhere in the command.
             ("git log feature/x > out.txt", True),
             ("echo a>>b", True),
             ("cat <<'EOF' > notes.md\nit's feature/x\nEOF", True),
@@ -356,38 +436,79 @@ class TranscriptsTest(unittest.TestCase):
             ("git log feature/x 2> /dev/null", False),
             ("git log feature/x >/dev/null 2>&1", False),
             ("git log feature/x 3>&1", False),
-            ("grep -rn 'git push' .", False),
             ("echo 'a > b'", False),
-            ("git status --short", False),
+            # git branch mutates on a mutating option or a bare positional.
             ("git -C /p branch -D feature/x", True),
             ("git branch feature/y", True),
+            ("git branch feature/new", True),
             ("git branch -dr origin/feature/x", True),
+            ("git branch -d -r origin/feature/x", True),
+            ("git branch -M main", True),
+            ("git branch -u origin/feature/x", True),
+            ("git branch --set-upstream-to=origin/feature/x", True),
+            ("git branch --no-track topic origin/topic", True),
             ("git branch", False),
             ("git branch --show-current", False),
             ("git branch -vv", False),
+            ("git branch -av | grep feature/x", False),
+            # A list-mode cluster turns a positional into a pattern.
+            ("git branch -r 'origin/feature/*'", False),
+            ("git branch -av 'feature/*'", False),
             ("git branch --list 'feature/*'", False),
+            ("git branch --format='%(refname)'", False),
+            ("git branch --format=%(refname:short) | grep feature/x", False),
+            ("git branch --sort -committerdate", False),
+            ("git branch --sort=-committerdate | grep feature/x", False),
+            ("git branch --contains abc1234", False),
             ("git branch -r --contains=abc1234", False),
+            ("git branch --merged origin/dev", False),
             ("git branch -a | grep -c x", False),
             # A newline ends a command: the -a of the second line is not the first one's.
             ("git branch -D feature/x\ngit branch -a", True),
             ("git stash", True),
             ("git stash pop", True),
             ("git stash show -p", False),
+            ("git stash list", False),
             ("git worktree list --porcelain", False),
             ("git worktree remove .worktrees/x", True),
             ("sed -i 's/a/b/' f", True),
             ("sed -i.bak 's/a/b/' f", True),
             ("sed -n 1p f | grep -i x", False),
             ("sed -n 1p f\ngrep -i x f", False),
+            ("echo sed -i", False),
         ):
             with self.subTest(command=command):
                 self.assertIs(transcripts.is_state_changing(command), expected)
 
+        # The git branch option lists one at a time: a mutating option beside
+        # a list-mode one still mutates, as -d -r does, and a list-mode option
+        # turns a positional into a pattern.
+        for option in (
+            *("-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "-t"),
+            *("--delete", "--move", "--copy", "--force", "--set-upstream-to=origin/x", "--unset-upstream"),
+            *("--edit-description", "--track", "--no-track"),
+        ):
+            with self.subTest(mutating=option):
+                self.assertIs(transcripts.is_state_changing("git branch " + option + " -r x"), True)
+        for option in (
+            *("-a", "-r", "-l", "-v", "--list", "--all", "--remotes", "--verbose", "--format='%(refname)'"),
+            *("--sort=refname", "--points-at=HEAD", "--contains", "--no-contains=abc", "--merged", "--no-merged"),
+            "--show-current",
+        ):
+            with self.subTest(listing=option):
+                self.assertIs(transcripts.is_state_changing("git branch " + option + " 'feature/*'"), False)
+
     def test_whole_name_matching(self) -> None:
-        matcher = transcripts.NameMatcher(["dev", "dev-2", "fix/a.b", "feature/x", "my-change"], [])
+        matcher = transcripts.NameMatcher(["dev", "dev-2", "dev/feature", "fix/a.b", "feature/x", "my-change"], [])
 
         for text, expected in (
             ("on dev-2 now", ["dev-2"]),
+            # A branch under dev/ keeps its remote and ref forms; only the
+            # segment dev of a literal /dev/ is refused.
+            ("git merge origin/dev/feature", ["dev/feature"]),
+            ("git log origin/dev/feature", ["dev/feature"]),
+            ("refs/heads/dev/feature", ["dev/feature"]),
+            ("x/dev/y", []),
             ("fix/aXb", []),
             ("see fix/a.b.", ["fix/a.b"]),
             ("git log origin/feature/x", ["feature/x"]),
@@ -446,6 +567,9 @@ class TranscriptsTest(unittest.TestCase):
         # A local command after the question is no answer.
         local = user("<local-command-stdout></local-command-stdout>")
         self.assertIs(self._session([user("go"), assistant("Shall I merge?"), local]).ended_on_question, True)
+        # Nor is an interruption marker.
+        interrupted = user(["[Request interrupted by user]"])
+        self.assertIs(self._session([user("go"), assistant("Shall I merge?"), interrupted]).ended_on_question, True)
         # The question is the last text of the last message, split over records.
         split = [
             user("go"),
