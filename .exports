@@ -102,6 +102,12 @@ if [ -d "$HOME/.dotnet" ]; then
     __append_path "$HOME/.dotnet/tools"
 fi
 
+# Cloudflare CLI (`cf`, npm global): no anonymous usage telemetry. Accounts
+# are selected through the private ~/bin/cfx wrapper from
+# CLOUDFLARE_TOKEN_<ACCOUNT> in the private .exports; the bare
+# CLOUDFLARE_API_TOKEN is never exported here.
+export CF_SEND_TELEMETRY=false
+
 unset -f __prepend_path __append_path
 export PATH
 
