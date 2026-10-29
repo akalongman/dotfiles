@@ -244,6 +244,31 @@ class TranscriptsTest(unittest.TestCase):
         self.assertEqual(run.errors, [os.path.join(self.folder, "session-1.jsonl") + ":3: not JSON"])
         self.assertIs(run.complete, False)
 
+    def test_unterminated_last_line_is_a_note_not_an_error(self) -> None:
+        path = self._write([user("go"), assistant("Working on feature/x")])
+        # A live session caught mid-write: its final record has no newline yet.
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write('{"type": "assistant", "uuid": "half-written", "parentUuid": ')
+        run = model.Run()
+
+        session = transcripts.parse_transcript(path, self.matcher, [MAIN], MAIN, {}, run)
+
+        assert session is not None
+        self.assertEqual(self._evidence(session), [("mention", "feature/x")])
+        self.assertEqual(run.errors, [])
+        self.assertEqual(run.notes, [path + ": unterminated last line skipped (write in progress)"])
+        self.assertIs(run.complete, True)
+
+    def test_unparsable_last_line_ending_in_a_newline_stays_an_error(self) -> None:
+        run = model.Run()
+
+        session = self._session([user("go"), assistant("ok"), '{"type": "assistant", "uuid": '], run=run)
+
+        self.assertEqual(session.last_assistant, "ok")
+        self.assertEqual(run.errors, [os.path.join(self.folder, "session-1.jsonl") + ":3: not JSON"])
+        self.assertEqual(run.notes, [])
+        self.assertIs(run.complete, False)
+
     def test_json_line_that_is_not_an_object_is_recorded(self) -> None:
         run = model.Run()
 
@@ -611,6 +636,7 @@ class TranscriptsTest(unittest.TestCase):
         self.assertEqual(session.cwds, {MAIN: "main", worktree: "feature/x"})
         self.assertEqual(session.cwd_counts, {MAIN: 2, worktree: 2})
         self.assertEqual(session.branch_counts, {MAIN: {"main": 2}, worktree: {"feature/x": 2}})
+        self.assertEqual(session.branch_first_ts, {MAIN: {"main": tf.timestamp(0)}, worktree: {"feature/x": tf.timestamp(2)}})
         self.assertEqual((session.user_turns, session.last_request, session.last_assistant), (2, "Now the worktree", "Done there"))
         self.assertEqual((session.entrypoint, session.account_uuid, session.slot, session.live), ("cli", None, "unknown", None))
         self.assertIs(session.ended_on_question, False)
@@ -637,6 +663,34 @@ class TranscriptsTest(unittest.TestCase):
         # A record without a branch still counts as a record at its cwd.
         self.assertEqual(session.cwd_counts, {MAIN: 1, worktree: 5})
         self.assertEqual(session.cwds, {MAIN: "main", worktree: "main"})
+
+    def test_branch_first_ts_keeps_each_pairs_earliest_instant(self) -> None:
+        worktree = MAIN + "/.worktrees/a"
+        records: list[dict[str, Any] | str] = [
+            # Written first, stamped later: the earliest instant wins, not the first line.
+            user("Start", timestamp="2026-10-01T10:00:09Z"),
+            assistant("Earlier", timestamp="2026-10-01T10:00:05.500Z"),
+            user("In the worktree", cwd=worktree, gitBranch="feature/x", timestamp="not a time"),
+            assistant("On feature/x", cwd=worktree, gitBranch="feature/x", timestamp="2026-10-01T10:00:30Z"),
+            # 10:00:10 UTC, earlier than 10:00:30Z although it sorts later as a string.
+            assistant("Still there", cwd=worktree, gitBranch="feature/x", timestamp="2026-10-01T12:00:10+02:00"),
+            # Neither an empty nor a naive stamp is an instant, so the pair is absent.
+            assistant("Unstamped", cwd=worktree, gitBranch="feature/y", timestamp=""),
+            assistant("Naive", cwd=worktree, gitBranch="feature/y", timestamp="2026-10-01T10:00:00"),
+            # A detached record is kept as recorded; the inventory leaves it out.
+            assistant("Detached", cwd=worktree, gitBranch="HEAD", timestamp="2026-10-01T10:01:00Z"),
+        ]
+
+        session = self._session(records)
+
+        self.assertEqual(
+            session.branch_first_ts,
+            {
+                MAIN: {"main": "2026-10-01T10:00:05.500Z"},
+                worktree: {"feature/x": "2026-10-01T12:00:10+02:00", "HEAD": "2026-10-01T10:01:00Z"},
+            },
+        )
+        self.assertEqual(session.branch_counts[worktree], {"feature/x": 3, "feature/y": 2, "HEAD": 1})
 
     def test_timestamps_compare_as_instants(self) -> None:
         # As strings "...05.500Z" sorts before "...05Z"; as instants it is later.
@@ -711,3 +765,12 @@ class TranscriptsTest(unittest.TestCase):
         # Words of the header that are not the header count for nothing.
         loose = self._session([user("Unfinished work report: later"), assistant("ok")])
         self.assertIs(loose.ran_skill, False)
+        # A line that begins with the header, after leading whitespace, counts.
+        indented = self._session([user("go"), assistant("Report:\n    " + report)])
+        self.assertIs(indented.ran_skill, True)
+        # The header quoted mid-line in prose (a session about the skill) does not.
+        prose = "Its first line reads \"" + render.REPORT_HEADER + "<path>\", then the groups."
+        asked = self._session([user(prose), assistant("ok")])
+        self.assertIs(asked.ran_skill, False)
+        answered = self._session([user("go"), assistant("Yes. " + prose)])
+        self.assertIs(answered.ran_skill, False)

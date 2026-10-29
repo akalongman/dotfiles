@@ -352,6 +352,48 @@ class LiveTest(unittest.TestCase):
         )
         self.assertFalse(self.state.complete)
 
+    def test_another_users_claude_process_is_skipped_silently(self) -> None:
+        proc_fixture.make_proc(self.proc, 801, "claude", MAIN, None, START)
+        proc_fixture.make_proc(self.proc, 802, "claude", WORKTREE, "/h/.claude2", START)
+        environ = os.path.join(self.proc, "801", "environ")
+        # As for another user's process, environ cannot be read.
+        os.chmod(environ, 0)
+        if os.access(environ, os.R_OK):
+            self.skipTest("this user can read a file of mode 0")
+        other = os.getuid() + 1
+
+        found = live.from_processes(self.proc, self.state, uid=other)
+
+        self.assertEqual(found, [])
+        self.assertEqual(self.state.errors, [])
+        self.assertTrue(self.state.complete)
+
+        # The same processes as this user's own: the denied read stays an error.
+        found = live.from_processes(self.proc, self.state, uid=os.getuid())
+
+        self.assertEqual(found, [_process(802, WORKTREE, "2")])
+        self.assertEqual(self.state.errors, ["read " + environ + ": Permission denied"])
+        self.assertFalse(self.state.complete)
+
+    def test_claude_process_whose_owner_cannot_be_read_is_an_error(self) -> None:
+        proc_fixture.make_proc(self.proc, 811, "claude", MAIN, None, START)
+        proc_fixture.make_proc(self.proc, 812, "claude", MAIN, None, START)
+        folder = os.path.join(self.proc, "811")
+        real_stat = os.stat
+
+        def stat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+            # The process exits after its comm is read and before its owner is.
+            if path == folder:
+                raise FileNotFoundError(2, "No such file or directory", path)
+            return real_stat(path, *args, **kwargs)
+
+        with mock.patch.object(live.os, "stat", stat):
+            found = live.from_processes(self.proc, self.state)
+
+        self.assertEqual(found, [_process(812, MAIN)])
+        self.assertEqual(self.state.errors, ["read " + folder + ": No such file or directory"])
+        self.assertFalse(self.state.complete)
+
     # The union.
 
     def test_dedupe_backfills_session_id(self) -> None:

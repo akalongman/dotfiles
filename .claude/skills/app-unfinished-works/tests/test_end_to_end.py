@@ -1,5 +1,6 @@
-"""End-to-end tests of cli.main over a fixture repository, and the inventory's
-own rules (removed worktrees, the parked-note count).
+"""End-to-end tests of cli.main over a fixture repository, the fixture's own
+isolation, and the inventory's own rules (removed worktrees, the parked-note
+count).
 
 Every case builds its repositories with tests/repo_fixture.py, its
 transcripts with tests/transcript_fixture.py under a temporary home, and a
@@ -12,6 +13,7 @@ network.
 """
 
 import contextlib
+import importlib
 import io
 import json
 import os
@@ -312,6 +314,29 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(len(self._by_name(data["tips"], "feature/x")), 1)
         self.assertEqual(self._by_name(data["tips"], "other/y"), [])
         self.assertEqual([item["title"] for item in data["openspec_pending"]], ["bar"])
+
+    def test_fixture_import_drops_an_inherited_commit_identity(self) -> None:
+        # What a hook exports for its own commit; nothing here is the machine's.
+        decoy = {
+            "GIT_AUTHOR_NAME": "Hook Author",
+            "GIT_AUTHOR_EMAIL": "hook-author@example.test",
+            "GIT_AUTHOR_DATE": "2001-02-03T04:05:06+00:00",
+            "GIT_COMMITTER_NAME": "Hook Committer",
+            "GIT_COMMITTER_EMAIL": "hook-committer@example.test",
+            "GIT_COMMITTER_DATE": "2001-02-03T04:05:06+00:00",
+        }
+
+        with mock.patch.dict(os.environ, decoy):
+            importlib.reload(repo_fixture)
+            left = sorted(name for name in decoy if name in os.environ)
+            work = repo_fixture.make_repo(os.path.join(self.tmp, "identity"), with_origin=False)["work"]
+
+        self.assertEqual(left, [])
+        fields = repo_fixture.git(work, "log", "-1", "--date=format:%Y", "--format=%an|%ae|%ad|%cn|%ce|%cd").strip().split("|")
+        author, author_year, committer, committer_year = fields[0:2], fields[2], fields[3:5], fields[5]
+        identity = [repo_fixture.NAME, repo_fixture.EMAIL]
+        self.assertEqual((author, committer), (identity, identity))
+        self.assertNotIn("2001", (author_year, committer_year))
 
     def test_divergence_is_shown_and_a_failing_count_recorded(self) -> None:
         base = os.path.join(self.tmp, "diverged")
@@ -717,6 +742,7 @@ class ItemBuildersTest(unittest.TestCase):
 class RemovedWorktreesTest(unittest.TestCase):
     MAIN = "/r/main"
     REMOTES = model.Remotes(["origin"], "origin")
+    BASE = model.Base("origin/main", "remote-head")
 
     def _session(
         self,
@@ -725,8 +751,13 @@ class RemovedWorktreesTest(unittest.TestCase):
         session_id: str = "s",
         first_ts: str = "2026-10-01T10:00:00.000Z",
         last_ts: str = "2026-10-01T11:00:00.000Z",
+        branch_first_ts: dict[str, dict[str, str]] | None = None,
     ) -> model.Session:
-        """A session at each cwd of branch_counts; an empty count is a cwd seen without a branch."""
+        """A session at each cwd of branch_counts; an empty count is a cwd seen without a branch.
+
+        branch_first_ts gives a pair's earliest record stamp; a pair it leaves
+        out has none that parses.
+        """
         return model.Session(
             id=session_id,
             path="/t/" + session_id + ".jsonl",
@@ -746,6 +777,7 @@ class RemovedWorktreesTest(unittest.TestCase):
             evidence=[],
             cwd_counts={cwd: max(1, sum(counts.values())) for cwd, counts in branch_counts.items()},
             branch_counts={cwd: dict(counts) for cwd, counts in branch_counts.items() if counts},
+            branch_first_ts=branch_first_ts or {},
         )
 
     def _place(self, name: str) -> str:
@@ -778,7 +810,7 @@ class RemovedWorktreesTest(unittest.TestCase):
             )
         ]
 
-        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN)
+        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN, self.BASE)
 
         self.assertEqual([(item.title, item.names, item.certainty) for item in items], [("feature/old", ["feature/old"], "likely")])
         self.assertEqual(
@@ -822,7 +854,7 @@ class RemovedWorktreesTest(unittest.TestCase):
             ),
         ]
 
-        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN)
+        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN, self.BASE)
 
         self.assertEqual([(item.title, item.names) for item in items], [("feature/two", ["feature/two"])])
         self.assertEqual(items[0].attrs, {"worktree": self._place("a")})
@@ -841,12 +873,113 @@ class RemovedWorktreesTest(unittest.TestCase):
             self._session({self._place("e"): {"feature/s": 2, "feature/r": 2}}),
         ]
 
-        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN)
+        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN, self.BASE)
 
         self.assertEqual(
             sorted((item.attrs["worktree"], item.title) for item in items),
             [(self._place("d"), "feature/p"), (self._place("e"), "feature/s")],
         )
+
+    def test_a_tie_goes_to_the_branch_recorded_earliest(self) -> None:
+        checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
+        branches = ["a1", "a2", "b1", "b2", "c1", "c2", "d1", "d2", "e1", "e2", "f1", "f2", "g1", "g2"]
+        tips = [model.Tip(format(n, "040x"), ["feature/" + name], "not", 1, "", "a@b", None) for n, name in enumerate(branches, start=1)]
+        a, b, c, d, e, f, g = (self._place(name) for name in "abcdefg")
+        sessions = [
+            self._session(
+                {
+                    # a2, first seen at the place's second cwd, was recorded first.
+                    a: {"feature/a1": 1},
+                    a + "/src": {"feature/a2": 1},
+                    b: {"feature/b1": 1},
+                    c: {"feature/c1": 1, "feature/c2": 1},
+                    # A branch with no stamp loses to one that has one.
+                    d: {"feature/d1": 1, "feature/d2": 1},
+                    # Equal instants written differently are a full tie: the first seen.
+                    e: {"feature/e1": 1, "feature/e2": 1},
+                    # No stamp at all is a full tie too.
+                    f: {"feature/f1": 1, "feature/f2": 1},
+                    # The count still decides first.
+                    g: {"feature/g1": 1, "feature/g2": 2},
+                },
+                session_id="first",
+                branch_first_ts={
+                    a: {"feature/a1": "2026-10-01T10:20:00.000Z"},
+                    a + "/src": {"feature/a2": "2026-10-01T10:10:00.000Z"},
+                    b: {"feature/b1": "2026-10-01T10:40:00.000Z"},
+                    c: {"feature/c1": "2026-10-01T10:30:00.000Z", "feature/c2": "2026-10-01T10:50:00.000Z"},
+                    d: {"feature/d2": "2026-10-01T10:55:00.000Z"},
+                    e: {"feature/e1": "2026-10-01T12:00:00+02:00", "feature/e2": "2026-10-01T10:00:00.000Z"},
+                    g: {"feature/g1": "2026-10-01T10:01:00.000Z", "feature/g2": "2026-10-01T10:30:00.000Z"},
+                },
+            ),
+            # Started after the first session, yet recorded b2 before it recorded b1.
+            self._session(
+                {b: {"feature/b2": 1}, c: {"feature/c2": 1, "feature/c1": 1}},
+                session_id="second",
+                first_ts="2026-10-01T10:05:00.000Z",
+                branch_first_ts={
+                    b: {"feature/b2": "2026-10-01T10:06:00.000Z"},
+                    # c2's earliest record is this session's, so it beats c1 across both.
+                    c: {"feature/c2": "2026-10-01T10:07:00.000Z", "feature/c1": "2026-10-01T10:45:00.000Z"},
+                },
+            ),
+        ]
+
+        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN, self.BASE)
+
+        self.assertEqual(
+            sorted((item.attrs["worktree"], item.title) for item in items),
+            [
+                (a, "feature/a2"),
+                (b, "feature/b2"),
+                (c, "feature/c2"),
+                (d, "feature/d2"),
+                (e, "feature/e1"),
+                (f, "feature/f1"),
+                (g, "feature/g2"),
+            ],
+        )
+
+    def test_a_detached_head_record_is_no_branch(self) -> None:
+        checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
+        tips = [model.Tip("3" * 40, ["feature/old"], "not", 1, "", "a@b", None)]
+        sessions = [
+            # HEAD outnumbers the real branch here, and still names nothing.
+            self._session({self._place("old"): {"HEAD": 9, "feature/old": 2}}),
+            # A place that recorded only detached records gives no item.
+            self._session({self._place("review"): {"HEAD": 4}}, session_id="t"),
+        ]
+
+        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN, self.BASE)
+
+        self.assertEqual([(item.attrs["worktree"], item.title) for item in items], [(self._place("old"), "feature/old")])
+
+    def test_an_item_whose_tips_are_all_unknown_never_says_not_integrated(self) -> None:
+        checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
+        unknown = model.Tip("3" * 40, ["feature/old", "origin/feature/old"], "unknown", 0, "", "a@b", None)
+        session = self._session({self._place("old"): {"feature/old": 1}})
+        for base, line in (
+            (model.Base(None, "unknown"), "merged: unknown (no base): feature/old, origin/feature/old"),
+            (
+                self.BASE,
+                "merged: unknown (git could not judge it against origin/main): feature/old, origin/feature/old",
+            ),
+        ):
+            with self.subTest(base=base.ref):
+                items = inventory.removed_worktrees([session], checkouts, [unknown], self.REMOTES, self.MAIN, base)
+
+                self.assertEqual(items[0].certainty, "unknown")
+                self.assertEqual(items[0].lines[1], line)
+                self.assertFalse(any("not integrated" in text for text in items[0].lines))
+        # One tip git could judge makes the item certain, and its line says so.
+        known = model.Tip("4" * 40, ["feature/old"], "not", 1, "", "a@b", None)
+        other = model.Tip("3" * 40, ["origin/feature/old"], "unknown", 0, "", "a@b", None)
+
+        items = inventory.removed_worktrees([session], checkouts, [known, other], self.REMOTES, self.MAIN, self.BASE)
+
+        self.assertEqual(items[0].certainty, "certain")
+        self.assertEqual(items[0].lines[1], "not integrated: feature/old, origin/feature/old")
 
     def test_last_session_line_carries_the_live_tag(self) -> None:
         checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
@@ -857,7 +990,7 @@ class RemovedWorktreesTest(unittest.TestCase):
                 session = self._session({self.MAIN + "/.worktrees/old": {"feature/old": 1}})
                 session.live = tag
 
-                items = inventory.removed_worktrees([session], checkouts, tips, remotes, self.MAIN)
+                items = inventory.removed_worktrees([session], checkouts, tips, remotes, self.MAIN, self.BASE)
 
                 expected = "last session there: s, " + inventory.local_minute(session.last_ts) + suffix
                 self.assertIn(expected, items[0].lines)

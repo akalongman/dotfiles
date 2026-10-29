@@ -5,6 +5,8 @@ group), the unverified question section, the live sessions, the parked-note
 count and a footer naming the remote, the base, the last fetch, the scan's
 scope, the question window, every note and every error. Paths are absolute
 and on their own line; nothing here writes a dash other than the hyphen.
+Every text line passes through _printable, so a control character read from
+a transcript, git or the forge (a terminal escape among them) prints as ?.
 """
 
 import dataclasses
@@ -61,6 +63,8 @@ _BASE_SOURCES = {
     "local-name": "first local main, master, dev",
 }
 _WHITESPACE = re.compile(r"\s+")
+# C0 controls, DEL and C1 controls: a terminal may act on any of them.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>", re.DOTALL)
 _COMMAND_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
 
@@ -87,7 +91,7 @@ def render_text(inv: Inventory, main_path: str) -> str:
     parked = "no queue file" if inv.parked is None else str(inv.parked)
     out += ["Parked notes: " + parked, ""]
     out += _footer(inv.meta)
-    return "\n".join(out) + "\n"
+    return "\n".join(_printable(line) for line in out) + "\n"
 
 
 def render_json(inv: Inventory) -> str:
@@ -247,6 +251,16 @@ def _quoted_tail(text: str) -> str:
 
 def _cut(line: str) -> str:
     return line[:LINE_WIDTH] + "..." if len(line) > LINE_WIDTH else line
+
+
+def _printable(line: str) -> str:
+    """One report line with each C0 control, DEL and C1 control replaced by ?.
+
+    The lines are joined by LF, so a LF inside one line is replaced too.
+    Whitespace runs are collapsed earlier (one_line_request, _quoted_tail,
+    inventory._one_line); the JSON escapes control characters itself.
+    """
+    return _CONTROL.sub("?", line)
 
 
 def _age(seconds: Any) -> str:

@@ -6,7 +6,9 @@ commit never reaches the machine's signing agent or its global identity.
 Importing this module removes the git local environment variables from
 os.environ, so a GIT_DIR exported by yadm enter or a hook can send neither
 the fixture's git calls nor the gitstate calls under test into another
-repository, however the suite is started.
+repository, however the suite is started. It removes the author and
+committer identity and dates too, which a hook exports for its own commit
+and which git prefers to the fixture's configured identity.
 """
 
 import os
@@ -17,6 +19,15 @@ NAME = "Fixture Owner"
 
 # The knob of this suite; a value left set would change what a case sees.
 SUITE_KNOBS = ("UNFINISHED_HOME",)
+# A commit's identity and dates, which override the repository's user.name and user.email.
+COMMIT_IDENTITY = (
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_DATE",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_DATE",
+)
 
 
 def _scrub_git_environment() -> None:
@@ -36,7 +47,7 @@ def _scrub_git_environment() -> None:
         raise RuntimeError(
             "git rev-parse --local-env-vars failed, refusing to run unisolated: " + completed.stderr.strip()
         )
-    for name in (*names, *SUITE_KNOBS):
+    for name in (*names, *COMMIT_IDENTITY, *SUITE_KNOBS):
         os.environ.pop(name, None)
 
 

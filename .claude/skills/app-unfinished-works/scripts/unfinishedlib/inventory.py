@@ -54,6 +54,8 @@ _CERTAINTY = {"not": "certain", "likely": "likely", "merges-only": "likely"}
 _CERTAINTY_ORDER = ("certain", "likely", "unknown")
 # Characters a plain laterbox.file name never holds (the laterbox README).
 _NOT_IN_A_FILE_NAME = frozenset("/\\*?[")
+# The gitBranch Claude Code records in a detached checkout; it names no branch.
+DETACHED_BRANCH = "HEAD"
 
 
 @dataclass
@@ -128,7 +130,7 @@ def gather(args: argparse.Namespace, *, home: str, proc_root: str, runner: Runne
     live_rows = live.live_sessions(roots, proc_root, runner, run)
     sessions, scanned = read_transcripts(roots, main_path, checkouts, matcher, run)
     run.notes.extend(live.mark_live(sessions, live_rows, checkouts, main_path, now))
-    removed = removed_worktrees(sessions, checkouts, tips, found, main_path)
+    removed = removed_worktrees(sessions, checkouts, tips, found, main_path, base)
     associate.build_names(removed, branch_names)
     items_by_kind["removed-worktree"] = removed
     inv = Inventory(
@@ -452,6 +454,7 @@ def removed_worktrees(
     tips: list[Tip],
     remotes: Remotes,
     main_path: str,
+    base: Base,
 ) -> list[Item]:
     """One item per removed worktree whose branch the base has not merged.
 
@@ -459,20 +462,28 @@ def removed_worktrees(
     under it, when no present checkout is that directory. Its branch is the
     gitBranch recorded there most often, the records of every session
     counted together (branch_counts), leaving out every branch a present
-    checkout has checked out; on a tie the branch seen first, sessions taken
-    in order of their first timestamp. A place left with no branch gives
-    nothing. The branch is chosen before the tips are read, so a place
-    whose branch no unmerged tip carries (merged or deleted) gives nothing
-    either, whatever else was recorded there. certainty is the strongest of
-    those tips', date the newest of their last commit dates, title and
-    names the branch. The last session there is the newest one with a cwd at
-    the place, whatever branch it recorded, and carries its live or possibly
+    checkout has checked out and the detached value HEAD. On a tie the
+    branch whose earliest record (branch_first_ts) is the earliest instant,
+    across every cwd at the place and every session, wins; a branch with no
+    stamped record loses to one with one, and a full tie goes to the branch
+    seen first, sessions taken in order of their first timestamp. A place
+    left with no branch gives nothing. The branch is chosen before the tips
+    are read, so a place whose branch no unmerged tip carries (merged or
+    deleted) gives nothing either, whatever else was recorded there.
+    certainty is the strongest of those tips', date the newest of their last
+    commit dates, title and names the branch. The line naming the tips' refs
+    opens with `not integrated` when git judged a tip, and never when every
+    tip is unknown: then it opens with the tip items' own line against base,
+    `merged: unknown (no base)` or `merged: unknown (git could not judge
+    it ...)`. The last session there is the newest one with a cwd at the
+    place, whatever branch it recorded, and carries its live or possibly
     live tag, so run it after live.mark_live.
     """
     present = {os.path.normpath(checkout.path) for checkout in checkouts if checkout.present}
     held = {checkout.branch for checkout in checkouts if checkout.present and checkout.branch}
     worktrees = os.path.join(os.path.normpath(main_path), ".worktrees")
     counts: dict[str, dict[str, int]] = {}
+    earliest: dict[str, dict[str, datetime]] = {}
     visitors: dict[str, list[Session]] = {}
     for session in sorted(sessions, key=lambda session: (_epoch(session.first_ts), session.id)):
         visited: set[str] = set()
@@ -484,16 +495,21 @@ def removed_worktrees(
                 visited.add(place)
                 visitors.setdefault(place, []).append(session)
             tally = counts.setdefault(place, {})
+            firsts = earliest.setdefault(place, {})
+            stamps = session.branch_first_ts.get(cwd, {})
             for branch, count in session.branch_counts.get(cwd, {}).items():
-                if branch not in held:
-                    tally[branch] = tally.get(branch, 0) + count
+                if branch in held or branch == DETACHED_BRANCH:
+                    continue
+                tally[branch] = tally.get(branch, 0) + count
+                at = associate.instant(stamps.get(branch))
+                if at is not None and (branch not in firsts or at < firsts[branch]):
+                    firsts[branch] = at
     items: list[Item] = []
     for place, seen in visitors.items():
         tally = counts[place]
         if not tally:
             continue
-        # max keeps the first of equal counts, the branch seen first.
-        branch = max(tally, key=tally.__getitem__)
+        branch = _most_recorded(tally, earliest[place])
         open_tips = [
             tip
             for tip in tips
@@ -506,17 +522,18 @@ def removed_worktrees(
         last_line = "last session there: " + last.id + ", " + local_minute(last.last_ts)
         if last.live:
             last_line += ", " + last.live
-        refs = list(dict.fromkeys(ref for tip in open_tips for ref in tip.refs))
+        refs = ", ".join(dict.fromkeys(ref for tip in open_tips for ref in tip.refs))
+        if certainty == "unknown":
+            # Every tip is unknown, so all of them share one wording against base.
+            state = _integration_line(open_tips[0], base) + ": " + refs
+        else:
+            state = "not integrated: " + refs
         items.append(
             Item(
                 kind="removed-worktree",
                 title=branch,
                 certainty=certainty,
-                lines=[
-                    place + "  (no longer a checkout)",
-                    "not integrated: " + ", ".join(refs),
-                    last_line,
-                ],
+                lines=[place + "  (no longer a checkout)", state, last_line],
                 paths=[],
                 names=[branch],
                 date=_extreme([tip.last_date for tip in open_tips], latest=True),
@@ -582,6 +599,15 @@ def _integration_line(tip: Tip, base: Base) -> str:
 def _last_commit_line(tip: Tip) -> str:
     when = local_minute(tip.last_date) if tip.last_date else "unknown date"
     return "last commit " + when + " by " + (tip.author_email or "unknown author")
+
+
+def _most_recorded(tally: dict[str, int], earliest: dict[str, datetime]) -> str:
+    """The branch with the top count; on a tie the earliest stamped, then the first in tally order."""
+    top = max(tally.values())
+    tied = [branch for branch, count in tally.items() if count == top]
+    stamped = [branch for branch in tied if branch in earliest]
+    # min keeps the first of equal instants, the branch seen first.
+    return min(stamped, key=earliest.__getitem__) if stamped else tied[0]
 
 
 def _removed_place(cwd: str, worktrees: str, present: set[str]) -> str | None:

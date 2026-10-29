@@ -171,8 +171,13 @@ class Session:
     when none was), and cwd_counts counts the chain's records per cwd.
     branch_counts counts the chain's records per cwd and gitBranch, each
     cwd's branches in the order first seen; a record without a branch adds
-    nothing, so a cwd seen only without one is absent. first_ts and last_ts
-    are the earliest and latest timestamps, compared as instants.
+    nothing, so a cwd seen only without one is absent. Both keep every
+    gitBranch as recorded, the detached value HEAD included.
+    branch_first_ts holds, per cwd and gitBranch, the timestamp (as the
+    transcript gives it) of that pair's earliest chain record whose
+    timestamp parses, compared as instants; a pair with no such record is
+    absent. first_ts and last_ts are the earliest and latest timestamps,
+    compared as instants.
     last_request is the last genuine user request and last_assistant the
     last assistant text, both "" when there is none. account_uuid comes from
     the bridge-session record and slot is the slot it maps to, else
@@ -198,6 +203,7 @@ class Session:
     evidence: list[Evidence]
     cwd_counts: dict[str, int] = field(default_factory=dict)
     branch_counts: dict[str, dict[str, int]] = field(default_factory=dict)
+    branch_first_ts: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass

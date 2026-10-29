@@ -43,10 +43,14 @@ QUESTION_TOOL = "AskUserQuestion"
 
 # How a session shows that it ran this skill: the script in a shell command,
 # the slash command in a request, or the report's header (render prints it
-# before the main checkout's path) in a request or an assistant text.
+# before the main checkout's path) at the start of a line of a request or an
+# assistant text, as a presented report shows it.
 SKILL_SCRIPT = "app-unfinished-works/scripts/unfinished.py"
 SKILL_COMMAND = "/app-unfinished-works"
 REPORT_HEADER = "Unfinished work report for "
+
+# The footer note for a final line still being written, after the path.
+UNTERMINATED_NOTE = "unterminated last line skipped (write in progress)"
 
 # A command that writes files, counted as the command word of a simple
 # command (sed only with an in-place option).
@@ -294,7 +298,10 @@ def parse_transcript(
     one of them or under <main_path>/.worktrees/, when the first user record
     in the file has entrypoint sdk-py (a headless run), or when the file
     cannot be read (recorded). A line that is not a JSON object is recorded
-    as <path>:<lineno> and skipped; the rest of the file is still read.
+    as <path>:<lineno> and skipped; the rest of the file is still read. The
+    one exception is a final line that does not parse and has no newline
+    after it: a live session is still writing it, so it is skipped with a
+    footer note (<path>: UNTERMINATED_NOTE) and the run stays complete.
 
     The chain is walked by parentUuid from the last record with a uuid,
     across a compaction boundary through its logicalParentUuid; a parent
@@ -320,7 +327,11 @@ def parse_transcript(
                 try:
                     record = json.loads(line)
                 except ValueError:
-                    _record_error(run, path + ":" + str(lineno) + ": not JSON")
+                    # Only the file's final line can lack its newline.
+                    if line.endswith("\n"):
+                        _record_error(run, path + ":" + str(lineno) + ": not JSON")
+                    else:
+                        run.notes.append(path + ": " + UNTERMINATED_NOTE)
                     continue
                 if not isinstance(record, dict):
                     _record_error(run, path + ":" + str(lineno) + ": not a JSON object")
@@ -514,6 +525,8 @@ def _session(
     cwds: dict[str, str | None] = {}
     cwd_counts: dict[str, int] = {}
     branch_counts: dict[str, dict[str, int]] = {}
+    # Per cwd and branch: the earliest instant and its stamp as written.
+    branch_first: dict[str, dict[str, tuple[datetime, str]]] = {}
     evidence: list[Evidence] = []
     first: tuple[datetime, str] | None = None
     last: tuple[datetime, str] | None = None
@@ -524,6 +537,7 @@ def _session(
     seen_user = False
     ran_skill = False
     for node in chain:
+        instant = _instant(node.ts)
         if node.cwd is not None:
             cwd_counts[node.cwd] = cwd_counts.get(node.cwd, 0) + 1
             if node.branch is not None or node.cwd not in cwds:
@@ -531,7 +545,11 @@ def _session(
             if node.branch is not None:
                 branches = branch_counts.setdefault(node.cwd, {})
                 branches[node.branch] = branches.get(node.branch, 0) + 1
-        instant = _instant(node.ts)
+                if instant is not None:
+                    firsts = branch_first.setdefault(node.cwd, {})
+                    known = firsts.get(node.branch)
+                    if known is None or instant < known[0]:
+                        firsts[node.branch] = (instant, node.ts)
         if instant is not None:
             if first is None or instant < first[0]:
                 first = (instant, node.ts)
@@ -544,12 +562,12 @@ def _session(
             if node.user_class == "request":
                 user_turns += 1
                 last_request = node.request
-                ran_skill = ran_skill or SKILL_COMMAND in node.request or REPORT_HEADER in node.request
+                ran_skill = ran_skill or SKILL_COMMAND in node.request or _holds_report(node.request)
                 evidence.extend(Evidence("request", name, node.ts) for name in matcher.find(node.request))
         elif node.kind == "assistant":
             for text in node.texts:
                 last_assistant = text
-                ran_skill = ran_skill or REPORT_HEADER in text
+                ran_skill = ran_skill or _holds_report(text)
                 evidence.extend(Evidence("mention", name, node.ts) for name in matcher.find(text))
             for use_id, name, tool_input in node.tool_uses:
                 command = tool_input.get("command")
@@ -575,7 +593,18 @@ def _session(
         evidence=evidence,
         cwd_counts=cwd_counts,
         branch_counts=branch_counts,
+        branch_first_ts={
+            cwd: {branch: stamp for branch, (_, stamp) in firsts.items()} for cwd, firsts in branch_first.items()
+        },
     )
+
+
+def _holds_report(text: str) -> bool:
+    """Whether a line of text begins with REPORT_HEADER, after optional leading whitespace.
+
+    The header quoted mid-line, in prose about the skill, does not count.
+    """
+    return REPORT_HEADER in text and any(line.lstrip().startswith(REPORT_HEADER) for line in text.splitlines())
 
 
 def _tool_evidence(

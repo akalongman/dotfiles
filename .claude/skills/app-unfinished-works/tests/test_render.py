@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from scripts.unfinishedlib import associate, inventory, render
-from scripts.unfinishedlib.model import Association, Checkout, Item, LiveSession, Session
+from scripts.unfinishedlib.model import Association, Checkout, Item, LiveSession, MergeRequest, Session
 
 MAIN = "/r/main"
 WORKTREE = MAIN + "/.worktrees/a"
@@ -248,6 +248,35 @@ class RenderTextTest(unittest.TestCase):
         self.assertIn("transcripts scanned: 0 files", tail)
         self.assertIn("errors (1):\n    git status: boom\n", tail)
         self.assertIn("incomplete", tail)
+
+    def test_control_characters_print_as_question_marks(self) -> None:
+        escape = "\x1b[31m"
+        session = _session("s-esc", last_request="do " + escape + "it", last_assistant="Shall I " + escape + "merge?")
+        tip = _item(
+            "tip",
+            "feature/x",
+            "2026-10-02T10:00:00+04:00",
+            sessions=[_association("s-esc", last_request="do " + escape + "it")],
+        )
+        request = MergeRequest(7, escape + "Red\x07 title\x9b", "open", "42", "feature/y", "", "main", "u", "https://f/7")
+        requests = inventory.merge_request_items([request], [])
+        # A LF inside one element is not a line break of the report.
+        dirty = _item("dirty", WORKTREE, None, paths=["two\nlines.txt"], attrs={"checkout": WORKTREE})
+        inv = _inventory(
+            {"tip": [tip], "dirty": [dirty], "merge-request": requests}, questions=[session], sessions=[session]
+        )
+
+        out = render.render_text(inv, MAIN)
+
+        controls = [char for char in out if (ord(char) < 0x20 and char != "\n") or 0x7F <= ord(char) <= 0x9F]
+        self.assertEqual(controls, [])
+        self.assertIn("  \"do ?[31mit\"\n", out)
+        self.assertIn("\n    asked: \"Shall I ?[31mmerge?\"\n", out)
+        self.assertIn("\nmerge-request (certain): !7 ?[31mRed? title?\n", out)
+        self.assertIn("\n  " + WORKTREE + "/two?lines.txt\n", out)
+        # The JSON escapes them itself and keeps the text as read.
+        data = json.loads(render.render_json(inv))
+        self.assertEqual(data["merge_requests"][0]["title"], "!7 " + escape + "Red\x07 title\x9b")
 
     def test_render_text_has_no_dashes_or_emoji(self) -> None:
         kinds = _every_kind()

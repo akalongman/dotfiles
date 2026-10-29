@@ -143,19 +143,25 @@ def from_registry(slot_roots: list[str], proc_root: str, run: Run) -> list[LiveS
     return found
 
 
-def from_processes(proc_root: str, run: Run) -> list[LiveSession]:
-    """Every process named claude under proc_root, in ascending pid order.
+def from_processes(proc_root: str, run: Run, *, uid: int | None = None) -> list[LiveSession]:
+    """Every process named claude under proc_root that uid owns, in ascending pid order.
 
     comm is read first, and an entry whose comm is not exactly claude, or
     cannot be read, is skipped silently: most of /proc belongs to other
     programs and users, whose files may be unreadable, and an entry can exit
-    before it is read. For a claude process stat, the cwd link and environ
-    are read; a failure on any of them (the process exited mid-read) is one
-    error naming that file, and the process gives no row. One trailing
-    " (deleted)", the kernel's marker for a removed directory, is stripped
-    from the cwd, so a process left in a removed worktree still names it.
-    The slot comes from CLAUDE_CONFIG_DIR in environ.
+    before it is read. A claude process whose <proc_root>/<pid> directory
+    another user owns is not one of this user's sessions and is skipped
+    silently too, before any of its files is read (its cwd link and environ
+    are closed to this user); uid is the user, os.getuid() when None. Of
+    this user's claude process, stat, the cwd link and environ are read; a
+    failure on any of them, or on the owner's stat (the process exited
+    mid-read), is one error naming that path, and the process gives no row.
+    One trailing " (deleted)", the kernel's marker for a removed directory,
+    is stripped from the cwd, so a process left in a removed worktree still
+    names it. The slot comes from CLAUDE_CONFIG_DIR in environ.
     """
+    if uid is None:
+        uid = os.getuid()
     try:
         names = os.listdir(proc_root)
     except OSError as exc:
@@ -172,8 +178,11 @@ def from_processes(proc_root: str, run: Run) -> list[LiveSession]:
         if comm.removesuffix("\n") != PROCESS_NAME:
             continue
         # path names the file being read, for the error when one fails.
-        path = os.path.join(folder, "stat")
+        path = folder
         try:
+            if os.stat(path).st_uid != uid:
+                continue
+            path = os.path.join(folder, "stat")
             with open(path, "rb") as handle:
                 handle.read()
             path = os.path.join(folder, "cwd")

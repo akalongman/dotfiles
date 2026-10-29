@@ -9,10 +9,14 @@
 set -uo pipefail
 
 # Nothing the caller set reaches the cases: a GIT_DIR exported by yadm enter
-# or a hook would send the fixture commits into that repository, and a knob
-# of this suite left set would change what a case sees.
+# or a hook would send the fixture commits into that repository, a hook's
+# author and committer identity and dates would override the fixture's own,
+# and a knob of this suite left set would change what a case sees.
 mapfile -t git_local_vars < <(git rev-parse --local-env-vars)
-unset -v "${git_local_vars[@]}" UNFINISHED_HOME
+unset -v "${git_local_vars[@]}" \
+    GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE \
+    GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE \
+    UNFINISHED_HOME
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
