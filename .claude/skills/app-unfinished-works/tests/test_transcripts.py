@@ -133,6 +133,23 @@ class TranscriptsTest(unittest.TestCase):
         shared = transcripts.NameMatcher([], ["src", "src/"])
         self.assertEqual(shared.find_paths(MAIN + "/src/app.py", [MAIN]), ["src"])
 
+    def test_find_paths_with_checkout_names_the_root_it_stripped(self) -> None:
+        matcher = transcripts.NameMatcher([], ["src/app.py"])
+        worktree = MAIN + "/.worktrees/a"
+        roots = [MAIN + "/", worktree]
+
+        self.assertEqual(matcher.find_paths_with_checkout(MAIN + "/src/app.py", roots), (MAIN, ["src/app.py"]))
+        self.assertEqual(matcher.find_paths_with_checkout(worktree + "/src/app.py", roots), (worktree, ["src/app.py"]))
+        # A gone worktree under the main checkout is its own checkout.
+        self.assertEqual(
+            matcher.find_paths_with_checkout(MAIN + "/.worktrees/gone/src/app.py", roots),
+            (MAIN + "/.worktrees/gone", ["src/app.py"]),
+        )
+        self.assertEqual(matcher.find_paths_with_checkout("/tmp/wt/src/app.py", [MAIN, "/tmp/wt"]), ("/tmp/wt", ["src/app.py"]))
+        # Inside a root but on no entry, and outside every root.
+        self.assertEqual(matcher.find_paths_with_checkout(MAIN + "/docs/x.md", roots), (MAIN, []))
+        self.assertEqual(matcher.find_paths_with_checkout("/elsewhere/src/app.py", roots), (None, []))
+
     # Membership and the headless filter.
 
     def test_membership_by_cwd_not_folder_name(self) -> None:
@@ -371,6 +388,46 @@ class TranscriptsTest(unittest.TestCase):
         )
 
         self.assertEqual(self._evidence(session), [("work", "openspec/changes/my-change")])
+        self.assertEqual(session.evidence[0].checkout, MAIN)
+
+    def test_edit_evidence_names_its_checkout(self) -> None:
+        self.matcher = transcripts.NameMatcher(NAMES, ["CLAUDE.md"])
+        worktree = MAIN + "/.worktrees/a"
+        edits = [
+            ("e1", MAIN + "/CLAUDE.md"),
+            ("e2", worktree + "/CLAUDE.md"),
+            ("e3", MAIN + "/.worktrees/gone/CLAUDE.md"),
+            ("e4", "CLAUDE.md"),
+        ]
+        records: list[dict[str, Any] | str] = [user("Tidy CLAUDE.md for feature/x", cwd=worktree)]
+        for use_id, target in edits:
+            records.append(
+                assistant(
+                    "Editing for feature/x",
+                    tool_use={"id": use_id, "name": "Edit", "input": {"file_path": target, "old_string": "a", "new_string": "b"}},
+                    cwd=worktree,
+                )
+            )
+            records.append(tool_result(use_id, cwd=worktree))
+        switch = {"id": "b1", "name": "Bash", "input": {"command": "git switch feature/x"}}
+        records += [assistant(tool_use=switch, cwd=worktree), tool_result("b1", cwd=worktree)]
+
+        session = self._session(records, checkouts=[MAIN, worktree])
+
+        work = [(item.token, item.checkout) for item in session.evidence if item.cls == "work"]
+        self.assertEqual(
+            work,
+            [
+                ("CLAUDE.md", MAIN),
+                ("CLAUDE.md", worktree),
+                ("CLAUDE.md", MAIN + "/.worktrees/gone"),
+                # A relative path joins the record's cwd, here the worktree.
+                ("CLAUDE.md", worktree),
+                # A shell command matches a name, never a path, so it has no checkout.
+                ("feature/x", None),
+            ],
+        )
+        self.assertEqual({item.checkout for item in session.evidence if item.cls in ("request", "mention")}, {None})
 
     def test_tool_result_content_is_not_searched(self) -> None:
         records: list[dict[str, Any] | str] = [

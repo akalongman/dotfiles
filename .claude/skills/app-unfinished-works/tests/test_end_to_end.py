@@ -471,6 +471,42 @@ class EndToEndTest(unittest.TestCase):
         )
         self.assertIn("not integrated: feature/old", data["removed_worktrees"][0]["lines"])
 
+    def test_dirty_item_names_only_sessions_that_edited_in_its_checkout(self) -> None:
+        self._proc_root = self._proc()
+        base = os.path.join(self.tmp, "two-dirty")
+        os.makedirs(base)
+        work = repo_fixture.make_repo(base)["work"]
+        repo_fixture.commit(work, "CLAUDE.md", "rules\n", "Add the rules")
+        repo_fixture.git(work, "push", "-q", "origin", "main")
+        other = os.path.join(base, "wt-a")
+        repo_fixture.git(work, "worktree", "add", "-q", "-b", "feature/a", other)
+        home = self._home()
+        sessions = {work: "99999999-9999-4999-8999-999999999999", other: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+        for checkout, session_id in sessions.items():
+            target = os.path.join(checkout, "CLAUDE.md")
+            with open(target, "a", encoding="utf-8") as handle:
+                handle.write("more\n")
+            edit = {"name": "Edit", "input": {"file_path": target, "old_string": "a", "new_string": "b"}, "id": "toolu_edit"}
+            tf.write_transcript(
+                self._folder(home, checkout),
+                session_id,
+                [
+                    tf.user("tidy the rules", cwd=checkout),
+                    tf.assistant("Editing.", tool_use=edit, cwd=checkout),
+                    tf.tool_result("toolu_edit", cwd=checkout),
+                    tf.assistant("Done.", cwd=checkout),
+                ],
+            )
+
+        code, data = self._main(home, "--root", work)
+
+        self.assertEqual(code, 0, data["meta"]["errors"])
+        found = {
+            item["attrs"]["checkout"]: (item["paths"], [association["session_id"] for association in item["sessions"]])
+            for item in data["dirty"]
+        }
+        self.assertEqual(found, {work: (["CLAUDE.md"], [sessions[work]]), other: (["CLAUDE.md"], [sessions[other]])})
+
     def test_local_base_keeps_the_unpublished_row_of_its_own_branch(self) -> None:
         base = os.path.join(self.tmp, "local-base")
         os.makedirs(base)

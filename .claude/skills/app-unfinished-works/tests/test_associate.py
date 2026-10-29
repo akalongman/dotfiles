@@ -28,8 +28,16 @@ def _ts(minute: int) -> str:
     return "2026-10-01T10:" + format(minute, "02d") + ":00.000Z"
 
 
-def _item(kind: str, title: str, *, names: list[str] | None = None, paths: list[str] | None = None, date: str | None = None) -> Item:
-    return Item(kind, title, "certain", [], list(paths or []), list(names or []), date, None, [])
+def _item(
+    kind: str,
+    title: str,
+    *,
+    names: list[str] | None = None,
+    paths: list[str] | None = None,
+    date: str | None = None,
+    attrs: dict[str, str] | None = None,
+) -> Item:
+    return Item(kind, title, "certain", [], list(paths or []), list(names or []), date, None, [], dict(attrs or {}))
 
 
 def _session(
@@ -177,25 +185,58 @@ class AssociateTest(unittest.TestCase):
         # 12:15 at +04:00 is 08:15 UTC: 08:30Z is after it although "08:30" < "12:15" as text.
         stash = _item("stash", "stash@{0}: wip", paths=["notes.txt"], date="2026-10-29T12:15:00+04:00")
         sessions = [
-            _session("after", [Evidence("work", "notes.txt", "2026-10-29T08:30:00.000Z")]),
-            _session("before", [Evidence("work", "notes.txt", "2026-10-29T08:00:00.000Z")]),
+            _session("after", [Evidence("work", "notes.txt", "2026-10-29T08:30:00.000Z", MAIN)]),
+            _session("before", [Evidence("work", "notes.txt", "2026-10-29T08:00:00.000Z", MAIN)]),
         ]
 
-        associate.associate([stash], sessions)
+        associate.associate([stash], sessions, checkouts=CHECKOUTS, main_path=MAIN)
 
         self.assertEqual([a.session_id for a in stash.sessions], ["before"])
 
     def test_stash_with_an_unreadable_date_admits_no_evidence(self) -> None:
         stash = _item("stash", "stash@{0}: wip", paths=["notes.txt"], date="")
-        sessions = [_session("before", [Evidence("work", "notes.txt", "2026-10-29T08:00:00.000Z")])]
+        sessions = [_session("before", [Evidence("work", "notes.txt", "2026-10-29T08:00:00.000Z", MAIN)])]
 
-        associate.associate([stash], sessions)
+        associate.associate([stash], sessions, checkouts=CHECKOUTS, main_path=MAIN)
 
         self.assertEqual(stash.sessions, [])
 
+    def test_stash_counts_edits_from_the_main_checkout_only(self) -> None:
+        stash = _item("stash", "stash@{0}: wip", paths=["notes.txt"], date="2026-10-29T12:15:00+04:00")
+        before = "2026-10-29T08:00:00.000Z"
+        sessions = [
+            _session("in-main", [Evidence("work", "notes.txt", before, MAIN)]),
+            _session("in-worktree", [Evidence("work", "notes.txt", before, WORKTREE)]),
+            _session("no-checkout", [Evidence("work", "notes.txt", before)]),
+        ]
+
+        associate.associate([stash], sessions, checkouts=CHECKOUTS, main_path=MAIN + "/")
+
+        self.assertEqual([a.session_id for a in stash.sessions], ["in-main"])
+
+    def test_dirty_counts_edits_from_its_own_checkout_only(self) -> None:
+        main_dirty = _item("dirty", MAIN, paths=["CLAUDE.md"], attrs={"checkout": MAIN})
+        worktree_dirty = _item("dirty", WORKTREE, paths=["CLAUDE.md"], attrs={"checkout": WORKTREE + "/"})
+        unbound = _item("dirty", "/r/elsewhere", paths=["CLAUDE.md"])
+        # Path evidence of any other kind counts from every checkout.
+        change = _item("openspec-pending", "c", names=["c"], paths=["CLAUDE.md"])
+        sessions = [
+            _session("in-main", [Evidence("work", "CLAUDE.md", _ts(1), MAIN + "/")]),
+            _session("in-worktree", [Evidence("work", "CLAUDE.md", _ts(2), WORKTREE)]),
+            _session("no-checkout", [Evidence("mention", "CLAUDE.md", _ts(3))]),
+        ]
+
+        associate.associate([main_dirty, worktree_dirty, unbound, change], sessions, checkouts=CHECKOUTS, main_path=MAIN)
+
+        self.assertEqual([a.session_id for a in main_dirty.sessions], ["in-main"])
+        self.assertEqual([a.session_id for a in worktree_dirty.sessions], ["in-worktree"])
+        # A dirty item that names no checkout admits no evidence.
+        self.assertEqual(unbound.sessions, [])
+        self.assertEqual([a.session_id for a in change.sessions], ["in-worktree", "in-main", "no-checkout"])
+
     def test_live_is_copied_from_the_session(self) -> None:
-        item = _item("dirty", MAIN, paths=["src/a.py"])
-        sessions = [_session("busy", [Evidence("work", "src/a.py", _ts(1))], live="possibly live")]
+        item = _item("dirty", MAIN, paths=["src/a.py"], attrs={"checkout": MAIN})
+        sessions = [_session("busy", [Evidence("work", "src/a.py", _ts(1), MAIN)], live="possibly live")]
 
         associate.associate([item], sessions)
 

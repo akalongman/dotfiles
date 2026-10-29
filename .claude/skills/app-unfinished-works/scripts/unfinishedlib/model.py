@@ -150,12 +150,16 @@ class Evidence:
 
     cls is work, request, mention or lookup, ranked in that order; token is
     the name or item path that matched; ts is the matching record's
-    timestamp as the transcript gives it (UTC with a Z).
+    timestamp as the transcript gives it (UTC with a Z). checkout is set on
+    path evidence alone (an edit or write): the normalised checkout root the
+    path was taken relative to, a gone <main>/.worktrees/<name> being its
+    own; None for evidence that matched a name.
     """
 
     cls: str
     token: str
     ts: str
+    checkout: str | None = None
 
 
 @dataclass

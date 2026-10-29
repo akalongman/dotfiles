@@ -7,6 +7,7 @@ event's time, newest first. Timestamps are compared as timezone-aware
 instants, never as text: transcripts stamp UTC with a Z, git the local offset.
 """
 
+import os
 from collections import Counter
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -27,6 +28,8 @@ _REPORT_CLASSES = frozenset({"mention", "lookup"})
 
 # (class rank, 0 for a dated event else 1, minus the event's epoch seconds).
 _Key = tuple[int, int, float]
+# One countable event: its rank key, its instant, its normalised checkout, the evidence.
+_Event = tuple[_Key, datetime | None, str | None, Evidence]
 
 
 def instant(stamp: str | None) -> datetime | None:
@@ -78,20 +81,26 @@ def associate(
 
     A session's evidence counts for an item when its token is one of the
     item's names or paths; a session that ran this skill contributes no
-    mention and no lookup. For a stash, only evidence before the stash's
-    date counts, and none when that date does not parse. Each session gives
-    one association, from its best evidence (class rank, then the newest
-    event); sessions are ranked the same way, ties by session id. live is
-    the session's, checkout that of its most frequent cwd (session_checkout).
+    mention and no lookup. A dirty item counts only evidence whose checkout
+    is its own (attrs["checkout"]), and a stash only evidence whose checkout
+    is main_path, under which its paths are rendered; checkouts compare
+    normalised, so evidence without one (a name match) never counts for
+    either, and neither admits any when its checkout is unknown. For a
+    stash, only evidence before the stash's date counts, and none when that
+    date does not parse. Each session gives one association, from its best
+    evidence (class rank, then the newest event); sessions are ranked the
+    same way, ties by session id. live is the session's, checkout that of
+    its most frequent cwd (session_checkout).
     """
     indexed = [(session, _evidence_by_token(session)) for session in sessions]
     for item in items:
         tokens = list(dict.fromkeys([*item.names, *item.paths]))
         cutoff = instant(item.date) if item.kind == "stash" else None
+        own = _own_checkout(item, main_path)
         ranked: list[tuple[_Key, str, Session, Evidence]] = []
         if tokens and (item.kind != "stash" or cutoff is not None):
             for session, by_token in indexed:
-                best = _best(by_token, tokens, cutoff)
+                best = _best(by_token, tokens, cutoff, own)
                 if best is not None:
                     ranked.append((best[0], session.id, session, best[1]))
         ranked.sort(key=lambda entry: (entry[0], entry[1]))
@@ -179,29 +188,48 @@ def _key(cls: str, at: datetime | None) -> _Key:
     return CLASS_RANK[cls], 0, -at.timestamp()
 
 
-def _evidence_by_token(session: Session) -> dict[str, list[tuple[_Key, datetime | None, Evidence]]]:
-    """The session's countable evidence per token, each with its rank key and instant."""
-    found: dict[str, list[tuple[_Key, datetime | None, Evidence]]] = {}
+def _own_checkout(item: Item, main_path: str) -> str | None:
+    """The checkout an item's evidence must come from: None for any, "" for none at all.
+
+    A dirty item's own checkout and, for a stash, the main checkout, both
+    normalised; every other kind takes evidence from any checkout.
+    """
+    if item.kind == "dirty":
+        root = item.attrs.get("checkout", "")
+    elif item.kind == "stash":
+        root = main_path
+    else:
+        return None
+    return os.path.normpath(root) if root else ""
+
+
+def _evidence_by_token(session: Session) -> dict[str, list[_Event]]:
+    """The session's countable evidence per token, each with its rank key, instant and normalised checkout."""
+    found: dict[str, list[_Event]] = {}
     for evidence in session.evidence:
         if evidence.cls not in CLASS_RANK:
             continue
         if session.ran_skill and evidence.cls in _REPORT_CLASSES:
             continue
         at = instant(evidence.ts)
-        found.setdefault(evidence.token, []).append((_key(evidence.cls, at), at, evidence))
+        checkout = os.path.normpath(evidence.checkout) if evidence.checkout else None
+        found.setdefault(evidence.token, []).append((_key(evidence.cls, at), at, checkout, evidence))
     return found
 
 
 def _best(
-    by_token: dict[str, list[tuple[_Key, datetime | None, Evidence]]],
+    by_token: dict[str, list[_Event]],
     tokens: list[str],
     cutoff: datetime | None,
+    own: str | None = None,
 ) -> tuple[_Key, Evidence] | None:
-    """The best evidence among tokens; with a cutoff, only events strictly before it."""
+    """The best evidence among tokens; with a cutoff, only events strictly before it; with own, only from that checkout."""
     best: tuple[_Key, Evidence] | None = None
     for token in tokens:
-        for key, at, evidence in by_token.get(token, ()):
+        for key, at, checkout, evidence in by_token.get(token, ()):
             if cutoff is not None and (at is None or at >= cutoff):
+                continue
+            if own is not None and checkout != own:
                 continue
             if best is None or key < best[0]:
                 best = (key, evidence)

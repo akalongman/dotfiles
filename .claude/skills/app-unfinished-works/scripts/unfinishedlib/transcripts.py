@@ -249,6 +249,17 @@ class NameMatcher:
         when rel == p or rel starts with p + "/", so nested entries (a change
         directory and a dirty file inside it) all match.
         """
+        return self.find_paths_with_checkout(file_path, checkouts)[1]
+
+    def find_paths_with_checkout(self, file_path: str, checkouts: list[str]) -> tuple[str | None, list[str]]:
+        """find_paths's entries with the checkout they are relative to: (checkout, entries).
+
+        The checkout is the normalised root find_paths strips, extended by
+        .worktrees/<name> when that prefix is stripped too, so a file in a
+        gone worktree belongs to that worktree, not to the main checkout.
+        (None, []) when no root contains the path; the checkout is set even
+        when no entry matches.
+        """
         path = os.path.normpath(file_path)
         root: str | None = None
         for candidate in checkouts:
@@ -256,12 +267,14 @@ class NameMatcher:
             if _under(path, candidate) and (root is None or len(candidate) > len(root)):
                 root = candidate
         if root is None:
-            return []
+            return None, []
         relative = "" if path == root else path[len(root.rstrip("/")) + 1 :]
         parts = relative.split("/", 2)
         if len(parts) == 3 and parts[0] == ".worktrees" and parts[1]:
+            root = os.path.join(root, parts[0], parts[1])
             relative = parts[2]
-        return [candidate for candidate in self.paths if relative == candidate or relative.startswith(candidate + "/")]
+        entries = [candidate for candidate in self.paths if relative == candidate or relative.startswith(candidate + "/")]
+        return root, entries
 
 
 def parse_transcript(
@@ -568,16 +581,17 @@ def _tool_evidence(
 
     An edit or write gives one work per paths entry its file lies under, so
     an edit inside a change directory that is also a dirty path counts for
-    both items.
+    both items; each carries the checkout the path is relative to. A shell
+    command matches names, never paths, so its evidence has no checkout.
     """
     if name in EDIT_TOOLS:
         target = tool_input.get("file_path") or tool_input.get("notebook_path")
         if isinstance(target, str) and target:
             if not os.path.isabs(target) and node.cwd:
                 target = os.path.join(node.cwd, target)
-            hits = matcher.find_paths(target, checkouts)
+            checkout, hits = matcher.find_paths_with_checkout(target, checkouts)
             if hits:
-                return [Evidence("work", hit, node.ts) for hit in hits]
+                return [Evidence("work", hit, node.ts, checkout) for hit in hits]
     searched = tool_input
     if name == "Bash" and isinstance(tool_input.get("command"), str):
         stripped = strip_fd_redirects(tool_input["command"])

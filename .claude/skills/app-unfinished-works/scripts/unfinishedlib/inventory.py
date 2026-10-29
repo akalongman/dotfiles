@@ -421,7 +421,13 @@ def dirty_item(checkout: Checkout, entries: list[tuple[str, str]]) -> Item | Non
 
 
 def stash_items(entries: list[tuple[str, str, str, list[str]]]) -> list[Item]:
-    """One item per stash entry; paths are its paths, relative to the main checkout."""
+    """One item per stash entry; paths are its paths, relative to the main checkout.
+
+    Git records no checkout for a stash, so a stash is rendered under the
+    main checkout and associates only edits made there: a stash pushed from
+    a linked worktree names no session that edited its paths in that
+    worktree.
+    """
     items: list[Item] = []
     for ref, date_iso, message, paths in entries:
         items.append(
