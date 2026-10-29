@@ -147,6 +147,7 @@ class TranscriptsTest(unittest.TestCase):
         self.assertIn(gone, session.cwds)
         self.assertEqual(session.cwds, {gone: "main"})
         self.assertEqual(session.cwd_counts, {gone: 2})
+        self.assertEqual(session.branch_counts, {gone: {"main": 2}})
         # Under <main>/.worktrees/ is enough even when no checkout holds the cwd.
         self.assertIsNotNone(self._parse(records, checkouts=[]))
 
@@ -552,10 +553,33 @@ class TranscriptsTest(unittest.TestCase):
         self.assertEqual((session.first_ts, session.last_ts), (tf.timestamp(0), last["timestamp"]))
         self.assertEqual(session.cwds, {MAIN: "main", worktree: "feature/x"})
         self.assertEqual(session.cwd_counts, {MAIN: 2, worktree: 2})
+        self.assertEqual(session.branch_counts, {MAIN: {"main": 2}, worktree: {"feature/x": 2}})
         self.assertEqual((session.user_turns, session.last_request, session.last_assistant), (2, "Now the worktree", "Done there"))
         self.assertEqual((session.entrypoint, session.account_uuid, session.slot, session.live), ("cli", None, "unknown", None))
         self.assertIs(session.ended_on_question, False)
         self.assertIs(session.ran_skill, False)
+
+    def test_branch_counts_count_each_branch_per_cwd(self) -> None:
+        worktree = MAIN + "/.worktrees/a"
+        branchless = user("No branch here", cwd=worktree)
+        del branchless["gitBranch"]
+        records: list[dict[str, Any] | str] = [
+            user("Start"),
+            user("In the worktree", cwd=worktree, gitBranch="feature/x"),
+            assistant("On feature/x", cwd=worktree, gitBranch="feature/x"),
+            assistant("Back on main there", cwd=worktree, gitBranch="main"),
+            assistant("An empty branch", cwd=worktree, gitBranch=""),
+            branchless,
+        ]
+
+        session = self._session(records)
+
+        self.assertEqual(session.branch_counts, {MAIN: {"main": 1}, worktree: {"feature/x": 2, "main": 1}})
+        # Branches keep the order they were first seen in, which breaks a tie.
+        self.assertEqual(list(session.branch_counts[worktree]), ["feature/x", "main"])
+        # A record without a branch still counts as a record at its cwd.
+        self.assertEqual(session.cwd_counts, {MAIN: 1, worktree: 5})
+        self.assertEqual(session.cwds, {MAIN: "main", worktree: "main"})
 
     def test_timestamps_compare_as_instants(self) -> None:
         # As strings "...05.500Z" sorts before "...05Z"; as instants it is later.

@@ -497,6 +497,7 @@ def _session(
 ) -> Session:
     cwds: dict[str, str | None] = {}
     cwd_counts: dict[str, int] = {}
+    branch_counts: dict[str, dict[str, int]] = {}
     evidence: list[Evidence] = []
     first: tuple[datetime, str] | None = None
     last: tuple[datetime, str] | None = None
@@ -511,6 +512,9 @@ def _session(
             cwd_counts[node.cwd] = cwd_counts.get(node.cwd, 0) + 1
             if node.branch is not None or node.cwd not in cwds:
                 cwds[node.cwd] = node.branch
+            if node.branch is not None:
+                branches = branch_counts.setdefault(node.cwd, {})
+                branches[node.branch] = branches.get(node.branch, 0) + 1
         instant = _instant(node.ts)
         if instant is not None:
             if first is None or instant < first[0]:
@@ -553,6 +557,7 @@ def _session(
         ran_skill=ran_skill,
         evidence=evidence,
         cwd_counts=cwd_counts,
+        branch_counts=branch_counts,
     )
 
 

@@ -447,32 +447,47 @@ def removed_worktrees(
     remotes: Remotes,
     main_path: str,
 ) -> list[Item]:
-    """One item per removed worktree and branch whose tip the base has not merged.
+    """One item per removed worktree whose branch the base has not merged.
 
-    Each cwd of a session under <main>/.worktrees/<name>, normalised to
-    <main>/.worktrees/<name>, that is not a present checkout and has a branch
-    recorded is a trace. It becomes an item when some tip whose
-    remote-stripped refs hold that branch is not merged; certainty is the
-    strongest of those tips', date the newest of their last commit dates,
-    names [branch]; the last session there carries its live or possibly live
-    tag, so run it after live.mark_live. A merged or deleted branch gives nothing.
+    A place is <main>/.worktrees/<name>, the normalised form of a session cwd
+    under it, when no present checkout is that directory. Its branch is the
+    gitBranch recorded there most often, the records of every session
+    counted together (branch_counts), leaving out every branch a present
+    checkout has checked out; on a tie the branch seen first, sessions taken
+    in order of their first timestamp. A place left with no branch gives
+    nothing. The branch is chosen before the tips are read, so a place
+    whose branch no unmerged tip carries (merged or deleted) gives nothing
+    either, whatever else was recorded there. certainty is the strongest of
+    those tips', date the newest of their last commit dates, title and
+    names the branch. The last session there is the newest one with a cwd at
+    the place, whatever branch it recorded, and carries its live or possibly
+    live tag, so run it after live.mark_live.
     """
     present = {os.path.normpath(checkout.path) for checkout in checkouts if checkout.present}
+    held = {checkout.branch for checkout in checkouts if checkout.present and checkout.branch}
     worktrees = os.path.join(os.path.normpath(main_path), ".worktrees")
-    traces: dict[tuple[str, str], list[Session]] = {}
-    for session in sessions:
-        for cwd, branch in session.cwds.items():
-            path = os.path.normpath(cwd)
-            if not branch or not path.startswith(worktrees + "/"):
+    counts: dict[str, dict[str, int]] = {}
+    visitors: dict[str, list[Session]] = {}
+    for session in sorted(sessions, key=lambda session: (_epoch(session.first_ts), session.id)):
+        visited: set[str] = set()
+        for cwd in session.cwds:
+            place = _removed_place(cwd, worktrees, present)
+            if place is None:
                 continue
-            place = os.path.join(worktrees, path[len(worktrees) + 1 :].split("/", 1)[0])
-            if place in present:
-                continue
-            seen = traces.setdefault((place, branch), [])
-            if session not in seen:
-                seen.append(session)
+            if place not in visited:
+                visited.add(place)
+                visitors.setdefault(place, []).append(session)
+            tally = counts.setdefault(place, {})
+            for branch, count in session.branch_counts.get(cwd, {}).items():
+                if branch not in held:
+                    tally[branch] = tally.get(branch, 0) + count
     items: list[Item] = []
-    for (place, branch), seen in traces.items():
+    for place, seen in visitors.items():
+        tally = counts[place]
+        if not tally:
+            continue
+        # max keeps the first of equal counts, the branch seen first.
+        branch = max(tally, key=tally.__getitem__)
         open_tips = [
             tip
             for tip in tips
@@ -561,6 +576,15 @@ def _integration_line(tip: Tip, base: Base) -> str:
 def _last_commit_line(tip: Tip) -> str:
     when = local_minute(tip.last_date) if tip.last_date else "unknown date"
     return "last commit " + when + " by " + (tip.author_email or "unknown author")
+
+
+def _removed_place(cwd: str, worktrees: str, present: set[str]) -> str | None:
+    """<worktrees>/<name> for a cwd under worktrees, None when present holds it or the cwd lies elsewhere."""
+    path = os.path.normpath(cwd)
+    if not path.startswith(worktrees + "/"):
+        return None
+    place = os.path.join(worktrees, path[len(worktrees) + 1 :].split("/", 1)[0])
+    return None if place in present else place
 
 
 def _queue_file(home: str, run: Run) -> str:

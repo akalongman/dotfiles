@@ -432,6 +432,45 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(len(named), 1, removed[0]["lines"])
         self.assertTrue(named[0].endswith(", live"), named[0])
 
+    def test_removed_worktree_skips_the_branch_a_present_checkout_holds(self) -> None:
+        self._proc_root = self._proc()
+        base = os.path.join(self.tmp, "held")
+        os.makedirs(base)
+        work = repo_fixture.make_repo(base)["work"]
+        repo_fixture.git(work, "switch", "-q", "-c", "feature/old")
+        repo_fixture.commit(work, "old.txt", "old\n", "Add old")
+        repo_fixture.git(work, "switch", "-q", "main")
+        # Local main one commit ahead of origin/main, so its tip is not integrated either.
+        repo_fixture.commit(work, "main.txt", "main\n", "Add main")
+        home = self._home()
+        old = os.path.join(work, ".worktrees", "old")
+        plain = os.path.join(work, ".worktrees", "plain")
+        # The session at old ends on main, the branch the main checkout holds.
+        tf.write_transcript(
+            self._folder(home, old),
+            "77777777-7777-4777-8777-777777777777",
+            [
+                tf.user("carry on", cwd=old, gitBranch="feature/old"),
+                tf.assistant("Carrying on.", cwd=old, gitBranch="feature/old"),
+                tf.user("now look at main", cwd=old, gitBranch="main"),
+                tf.assistant("Looking.", cwd=old, gitBranch="main"),
+                tf.assistant("Still looking.", cwd=old, gitBranch="main"),
+            ],
+        )
+        tf.write_transcript(
+            self._folder(home, plain),
+            "88888888-8888-4888-8888-888888888888",
+            [tf.user("look around", cwd=plain, gitBranch="main"), tf.assistant("Looking.", cwd=plain, gitBranch="main")],
+        )
+
+        code, data = self._main(home, "--root", work)
+
+        self.assertEqual(code, 0, data["meta"]["errors"])
+        self.assertEqual(
+            [(item["title"], item["attrs"]["worktree"]) for item in data["removed_worktrees"]], [("feature/old", old)]
+        )
+        self.assertIn("not integrated: feature/old", data["removed_worktrees"][0]["lines"])
+
     def test_local_base_keeps_the_unpublished_row_of_its_own_branch(self) -> None:
         base = os.path.join(self.tmp, "local-base")
         os.makedirs(base)
@@ -641,15 +680,24 @@ class ItemBuildersTest(unittest.TestCase):
 
 class RemovedWorktreesTest(unittest.TestCase):
     MAIN = "/r/main"
+    REMOTES = model.Remotes(["origin"], "origin")
 
-    def _session(self, cwds: dict[str, str | None]) -> model.Session:
+    def _session(
+        self,
+        branch_counts: dict[str, dict[str, int]],
+        *,
+        session_id: str = "s",
+        first_ts: str = "2026-10-01T10:00:00.000Z",
+        last_ts: str = "2026-10-01T11:00:00.000Z",
+    ) -> model.Session:
+        """A session at each cwd of branch_counts; an empty count is a cwd seen without a branch."""
         return model.Session(
-            id="s",
-            path="/t/s.jsonl",
+            id=session_id,
+            path="/t/" + session_id + ".jsonl",
             mtime=0.0,
-            cwds=cwds,
-            first_ts="2026-10-01T10:00:00.000Z",
-            last_ts="2026-10-01T11:00:00.000Z",
+            cwds={cwd: (list(counts)[-1] if counts else None) for cwd, counts in branch_counts.items()},
+            first_ts=first_ts,
+            last_ts=last_ts,
             user_turns=1,
             last_request="",
             last_assistant="",
@@ -660,37 +708,109 @@ class RemovedWorktreesTest(unittest.TestCase):
             live=None,
             ran_skill=False,
             evidence=[],
-            cwd_counts={cwd: 1 for cwd in cwds},
+            cwd_counts={cwd: max(1, sum(counts.values())) for cwd, counts in branch_counts.items()},
+            branch_counts={cwd: dict(counts) for cwd, counts in branch_counts.items() if counts},
         )
 
-    def test_one_item_per_worktree_and_branch_and_none_for_present_or_unknown(self) -> None:
+    def _place(self, name: str) -> str:
+        return self.MAIN + "/.worktrees/" + name
+
+    def test_one_item_per_place_from_its_most_recorded_branch(self) -> None:
         checkouts = [
             model.Checkout(self.MAIN, "main", "1" * 40, True, True),
-            model.Checkout(self.MAIN + "/.worktrees/here", "feature/here", "2" * 40, False, True),
+            model.Checkout(self._place("here"), "feature/here", "2" * 40, False, True),
         ]
         tips = [
             model.Tip("3" * 40, ["feature/old", "origin/feature/old"], "likely", 2, "", "a@b", None),
             model.Tip("4" * 40, ["feature/here"], "not", 1, "", "a@b", None),
+            # main is not integrated either, so only the checkout rule keeps it out.
+            model.Tip("5" * 40, ["main"], "not", 1, "", "a@b", self.MAIN),
         ]
         sessions = [
             self._session(
                 {
-                    self.MAIN + "/.worktrees/old/src": "feature/old",
-                    self.MAIN + "/.worktrees/old": "feature/old",
-                    self.MAIN + "/.worktrees/here/src": "feature/here",
-                    self.MAIN + "/.worktrees/nobranch": None,
-                    self.MAIN + "/.worktrees/deleted": "feature/deleted",
-                    self.MAIN + "/src": "feature/old",
+                    # main is recorded most at old, but the main checkout holds it.
+                    self._place("old") + "/src": {"main": 5, "feature/old": 1},
+                    self._place("old"): {"feature/old": 2},
+                    # A place that saw only the checked-out branch gives no item.
+                    self._place("onlymain"): {"main": 3},
+                    self._place("here") + "/src": {"feature/here": 4},
+                    self._place("nobranch"): {},
+                    self._place("deleted"): {"feature/deleted": 1},
+                    self.MAIN + "/src": {"feature/old": 9},
                 }
             )
         ]
-        remotes = model.Remotes(["origin"], "origin")
 
-        items = inventory.removed_worktrees(sessions, checkouts, tips, remotes, self.MAIN)
+        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN)
 
         self.assertEqual([(item.title, item.names, item.certainty) for item in items], [("feature/old", ["feature/old"], "likely")])
+        self.assertEqual(
+            items[0].lines,
+            [
+                self._place("old") + "  (no longer a checkout)",
+                "not integrated: feature/old, origin/feature/old",
+                "last session there: s, " + inventory.local_minute("2026-10-01T11:00:00.000Z"),
+            ],
+        )
         self.assertIsNone(items[0].date)
-        self.assertEqual(items[0].attrs, {"worktree": self.MAIN + "/.worktrees/old"})
+        self.assertEqual(items[0].sha, "3" * 40)
+        self.assertEqual(items[0].attrs, {"worktree": self._place("old")})
+
+    def test_counts_add_up_across_sessions_and_the_chosen_branch_alone_decides(self) -> None:
+        checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
+        tips = [
+            model.Tip("3" * 40, ["feature/one"], "not", 1, "", "a@b", None),
+            model.Tip("4" * 40, ["feature/two", "origin/feature/two"], "not", 1, "2026-10-02T10:00:00+04:00", "a@b", None),
+            model.Tip("5" * 40, ["feature/open"], "not", 1, "", "a@b", None),
+            model.Tip("6" * 40, ["feature/merged"], "merged", 0, "", "a@b", None),
+        ]
+        sessions = [
+            self._session(
+                {
+                    self._place("a"): {"feature/one": 2},
+                    # The branch with the most records is deleted, so the place gives no item.
+                    self._place("b"): {"feature/gone": 4, "feature/open": 1},
+                    # And so is one whose branch the base has merged.
+                    self._place("c"): {"feature/merged": 3, "feature/open": 1},
+                },
+                session_id="newest",
+                last_ts="2026-10-01T15:00:00.000Z",
+            ),
+            self._session({self._place("a") + "/src": {"feature/two": 1}}, session_id="second"),
+            # A session at the place without a branch there still counts as being there.
+            self._session(
+                {self._place("a"): {"feature/two": 2}, self._place("a") + "/docs": {}},
+                session_id="third",
+                last_ts="2026-10-01T12:00:00.000Z",
+            ),
+        ]
+
+        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN)
+
+        self.assertEqual([(item.title, item.names) for item in items], [("feature/two", ["feature/two"])])
+        self.assertEqual(items[0].attrs, {"worktree": self._place("a")})
+        self.assertEqual(items[0].lines[1], "not integrated: feature/two, origin/feature/two")
+        self.assertEqual(items[0].lines[2], "last session there: newest, " + inventory.local_minute("2026-10-01T15:00:00.000Z"))
+        self.assertEqual((items[0].sha, items[0].date), ("4" * 40, "2026-10-02T10:00:00+04:00"))
+
+    def test_a_tie_goes_to_the_branch_seen_first(self) -> None:
+        checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
+        tips = [model.Tip(str(n) * 40, ["feature/" + name], "not", 1, "", "a@b", None) for n, name in enumerate("pqrs", start=2)]
+        sessions = [
+            # Listed first but started later, so feature/q is seen after feature/p.
+            self._session({self._place("d"): {"feature/q": 1}}, session_id="later", first_ts="2026-10-01T10:30:00.000Z"),
+            self._session({self._place("d"): {"feature/p": 1}}, session_id="earlier", first_ts="2026-10-01T10:10:00.000Z"),
+            # Within one session, the order its records gave.
+            self._session({self._place("e"): {"feature/s": 2, "feature/r": 2}}),
+        ]
+
+        items = inventory.removed_worktrees(sessions, checkouts, tips, self.REMOTES, self.MAIN)
+
+        self.assertEqual(
+            sorted((item.attrs["worktree"], item.title) for item in items),
+            [(self._place("d"), "feature/p"), (self._place("e"), "feature/s")],
+        )
 
     def test_last_session_line_carries_the_live_tag(self) -> None:
         checkouts = [model.Checkout(self.MAIN, "main", "1" * 40, True, True)]
@@ -698,7 +818,7 @@ class RemovedWorktreesTest(unittest.TestCase):
         remotes = model.Remotes(["origin"], "origin")
         for tag, suffix in ((None, ""), ("live", ", live"), ("possibly live", ", possibly live")):
             with self.subTest(live=tag):
-                session = self._session({self.MAIN + "/.worktrees/old": "feature/old"})
+                session = self._session({self.MAIN + "/.worktrees/old": {"feature/old": 1}})
                 session.live = tag
 
                 items = inventory.removed_worktrees([session], checkouts, tips, remotes, self.MAIN)

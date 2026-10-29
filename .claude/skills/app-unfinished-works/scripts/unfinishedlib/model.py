@@ -165,7 +165,9 @@ class Session:
     id is the transcript's file stem, path its file, mtime its modification
     time. cwds maps each cwd seen to the gitBranch last seen with it (None
     when none was), and cwd_counts counts the chain's records per cwd.
-    first_ts and last_ts are the earliest and latest timestamps, compared as
+    branch_counts counts the chain's records per cwd and gitBranch, each
+    cwd's branches in the order first seen; a record without a branch adds
+    nothing, so a cwd seen only without one is absent. first_ts and last_ts are the earliest and latest timestamps, compared as
     instants. last_request is the last genuine user request and
     last_assistant the last assistant text, both "" when there is none.
     account_uuid comes from the bridge-session record and slot is the slot
@@ -190,6 +192,7 @@ class Session:
     ran_skill: bool
     evidence: list[Evidence]
     cwd_counts: dict[str, int] = field(default_factory=dict)
+    branch_counts: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 @dataclass
