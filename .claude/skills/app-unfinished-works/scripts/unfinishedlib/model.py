@@ -211,3 +211,25 @@ class LiveSession:
     name: str
     state: str
     source: str
+
+
+@dataclass
+class MergeRequest:
+    """One open or draft merge request (a GitLab MR or a GitHub pull request).
+
+    number is the forge's per-project number (GitLab iid); state is open or
+    draft. source_project is the source project's id on GitLab (as a
+    string) and its owner/name on GitHub, "" when the forge no longer names
+    it (a deleted fork). head_sha is the source branch's head commit, ""
+    when the forge has not computed it yet.
+    """
+
+    number: int
+    title: str
+    state: str
+    source_project: str
+    source_branch: str
+    head_sha: str
+    target_branch: str
+    author: str
+    url: str

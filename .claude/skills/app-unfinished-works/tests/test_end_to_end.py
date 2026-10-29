@@ -5,8 +5,10 @@ Every case builds its repositories with tests/repo_fixture.py, its
 transcripts with tests/transcript_fixture.py under a temporary home, and a
 temporary /proc tree with tests/proc_fixture.py, and passes them in; a
 runner answers claude-sessions with exit 127 and hands every other command
-to the default runner. No case reads this machine's slots, transcripts,
-registry or /proc.
+to the default runner, except that the forge case answers its glab call
+itself and refuses any other glab or gh call. No case reads this machine's
+slots, transcripts, registry or /proc, runs a forge CLI or reaches the
+network.
 """
 
 import contextlib
@@ -228,6 +230,68 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(len(self._by_name(data["tips"], "feature/x")[0]["sessions"]), 1)
         self.assertEqual(len(data["stashes"]), 1)
         self.assertEqual(data["meta"]["transcripts"]["count"], 3)
+
+    def test_mr_attaches_to_tip_by_sha_else_standalone(self) -> None:
+        repo, home = self._scenario()
+        work = repo["work"]
+        # Pointed at gitlab.com after the fixture is built: the remote-tracking refs stay, nothing fetches.
+        repo_fixture.git(work, "remote", "set-url", "origin", "git@gitlab.com:g/sub/r.git")
+        tip_sha = repo_fixture.git(work, "rev-parse", "feature/x").strip()
+        rows = [
+            {
+                "iid": 8,
+                "title": "Fork  change",
+                "draft": True,
+                "source_project_id": 99,
+                "source_branch": "fork/y",
+                "sha": "f" * 40,
+                "target_branch": "main",
+                "author": {"username": "someone"},
+                "web_url": "https://gitlab.com/g/sub/r/-/merge_requests/8",
+            },
+            {
+                "iid": 7,
+                "title": "Add x",
+                "draft": False,
+                "source_project_id": 42,
+                "source_branch": "feature/x",
+                "sha": tip_sha,
+                "target_branch": "main",
+                "author": {"username": "owner"},
+                "web_url": "https://gitlab.com/g/sub/r/-/merge_requests/7",
+            },
+        ]
+        page = ["glab", "api", "--hostname", "gitlab.com", "projects/g%2Fsub%2Fr/merge_requests?state=opened&per_page=100&page=1"]
+        forge_calls: list[list[str]] = []
+        plain = self._runner()
+
+        def answering(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
+            if argv[:1] in (["glab"], ["gh"]):
+                # Never handed to the default runner: an unanswered forge call is refused.
+                forge_calls.append(list(argv))
+                return (0, json.dumps(rows), "") if argv == page else (127, "", argv[0] + ": refused by the test runner")
+            return plain(argv, cwd)
+
+        code, data = self._main(home, "--root", work, "--forge", runner=answering)
+
+        self.assertEqual(code, 0, data["meta"]["errors"])
+        self.assertEqual(forge_calls, [page])
+        tips = self._by_name(data["tips"], "feature/x")
+        self.assertEqual(len(tips), 1)
+        self.assertEqual(tips[0]["sha"], tip_sha)
+        self.assertIn("MR !7 open Add x -> main", tips[0]["lines"])
+        self.assertEqual(len(data["merge_requests"]), 1)
+        request = data["merge_requests"][0]
+        self.assertEqual(
+            (request["kind"], request["title"], request["certainty"], request["names"], request["date"], request["sha"]),
+            ("merge-request", "!8 Fork change", "certain", ["fork/y"], None, "f" * 40),
+        )
+        self.assertEqual(
+            request["lines"],
+            ["draft, 99:fork/y -> main", "head " + "f" * 40, "https://gitlab.com/g/sub/r/-/merge_requests/8"],
+        )
+        self.assertEqual(request["attrs"], {"number": "8", "source_project": "99", "author": "someone"})
+        self.assertFalse(any("MR !8" in line for tip in data["tips"] for line in tip["lines"]))
 
     def test_inherited_git_dir_is_ignored(self) -> None:
         repo, home = self._scenario()
@@ -523,6 +587,44 @@ class ItemBuildersTest(unittest.TestCase):
                 (["ahead"], None, "3" * 40),
             ],
         )
+
+    def test_merge_request_items_attach_by_sha_in_ascending_number(self) -> None:
+        tips = inventory.tip_items(
+            [
+                model.Tip("1" * 40, ["feature/a"], "not", 1, "2026-10-01T10:00:00+04:00", "a@b", None),
+                model.Tip("2" * 40, ["feature/b"], "not", 1, "2026-10-02T10:00:00+04:00", "a@b", None),
+            ],
+            self.REMOTES,
+            self.BASE,
+            [],
+        )
+        before = list(tips[1].lines)
+
+        def request(number: int, sha: str, title: str, state: str = "open") -> model.MergeRequest:
+            return model.MergeRequest(number, title, state, "42", "feature/" + str(number), sha, "main", "u", "https://f/" + str(number))
+
+        # The forges list newest first.
+        requests = [
+            request(12, "9" * 40, "Later\nstandalone"),
+            request(11, "1" * 40, "Second   on a"),
+            request(10, "8" * 40, "Earlier standalone", "draft"),
+            request(9, "1" * 40, "First on a", "draft"),
+        ]
+
+        standalone = inventory.merge_request_items(requests, tips)
+
+        self.assertEqual(tips[0].lines[-2:], ["MR !9 draft First on a -> main", "MR !11 open Second on a -> main"])
+        self.assertEqual(tips[1].lines, before)
+        self.assertEqual([item.title for item in standalone], ["!10 Earlier standalone", "!12 Later standalone"])
+        self.assertEqual(
+            [(item.kind, item.certainty, item.names, item.paths, item.date, item.sha, item.sessions) for item in standalone],
+            [
+                ("merge-request", "certain", ["feature/10"], [], None, "8" * 40, []),
+                ("merge-request", "certain", ["feature/12"], [], None, "9" * 40, []),
+            ],
+        )
+        self.assertEqual(standalone[0].lines, ["draft, 42:feature/10 -> main", "head " + "8" * 40, "https://f/10"])
+        self.assertEqual(standalone[0].attrs, {"number": "10", "source_project": "42", "author": "u"})
 
     def test_dirty_item_counts_and_keeps_every_path(self) -> None:
         checkout = model.Checkout("/r/main", "main", "1" * 40, True, True)

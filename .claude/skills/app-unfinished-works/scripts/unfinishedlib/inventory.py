@@ -4,9 +4,11 @@ gather runs the stages in the spec's order: the repository (common dir,
 remotes, an optional fetch, checkouts, the base), the git-state and OpenSpec
 items, the names the transcripts are searched for, the live sessions, the
 transcripts, the liveness marks, the removed worktrees, the associations,
-the --mine filter, the question sessions and the parked-note count. The
-item builders are pure functions over the readers' values. Apart from
---fetch, nothing here writes, and every file is opened for reading.
+the --mine filter, the question sessions and the parked-note count; with
+--forge, the canonical remote's open merge requests join the items before
+the names are built. The item builders are pure functions over the readers'
+values. Apart from --fetch, nothing here writes, and every file is opened
+for reading.
 """
 
 import argparse
@@ -17,12 +19,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from scripts.unfinishedlib import associate, gitstate, live, openspec, transcripts
+from scripts.unfinishedlib import associate, forge, gitstate, live, openspec, transcripts
 from scripts.unfinishedlib.model import (
     Base,
     Checkout,
     Item,
     LiveSession,
+    MergeRequest,
     Remotes,
     Run,
     Runner,
@@ -42,6 +45,7 @@ KINDS = (
     "openspec-stale",
 )
 OUT_OF_REACH_NOTE = "worktrees created outside .worktrees/ and since removed are out of reach"
+FORGE_NO_REMOTE_NOTE = "forge: no remote, skipped"
 # The laterbox queue file at the main checkout's root, unless laterbox.file names another.
 DEFAULT_QUEUE_FILE = "LATER.local.md"
 QUEUE_LINE = "- [ ]"
@@ -110,6 +114,12 @@ def gather(args: argparse.Namespace, *, home: str, proc_root: str, runner: Runne
     items_by_kind["stash"] = stash_items(gitstate.stashes(repo, run, runner))
     items_by_kind["openspec-stale"] = stale
     branch_names = list(dict.fromkeys(gitstate.strip_remote(ref, found) for tip in tips for ref in tip.refs))
+    forge_project: tuple[str, str] | None = None
+    if args.forge:
+        forge_project, requests = read_merge_requests(repo, found, run, runner)
+        items_by_kind["merge-request"] = merge_request_items(requests, items_by_kind["tip"])
+        # Every source branch counts when a last segment is judged unique.
+        branch_names = list(dict.fromkeys([*branch_names, *(request.source_branch for request in requests)]))
     every = [item for kind in KINDS for item in items_by_kind[kind]]
     names, paths = associate.build_names(every, branch_names)
     matcher = transcripts.NameMatcher(names, paths)
@@ -133,6 +143,11 @@ def gather(args: argparse.Namespace, *, home: str, proc_root: str, runner: Runne
     associate.associate(inv.items(), sessions, checkouts=checkouts, main_path=main_path)
     if args.mine:
         associate.mine_filter(inv, _user_email(repo, runner), _local_branches(repo, run, runner))
+        if forge_project is not None:
+            forge_kind, project = forge_project
+            items_by_kind["merge-request"] = forge.mine_filter(
+                items_by_kind["merge-request"], forge_kind, project, run, runner=runner
+            )
     for kind in KINDS:
         items_by_kind[kind] = sort_items(items_by_kind[kind])
     inv.parked = parked_count(home, main_path, run)
@@ -259,6 +274,80 @@ def tip_items(tips: list[Tip], remotes: Remotes, base: Base, divergences: list[t
             )
         )
     return items
+
+
+def read_merge_requests(
+    repo: str, remotes: Remotes, run: Run, runner: Runner
+) -> tuple[tuple[str, str] | None, list[MergeRequest]]:
+    """The canonical remote's open merge requests: ((forge kind, project path), requests).
+
+    The URL comes from `git remote get-url <canonical>`; forge.detect picks
+    the CLI and forge.project_path the project. Without a canonical remote,
+    or for a URL that is neither GitLab nor GitHub or names no project, a
+    note says the forge was skipped (the URL without its userinfo) and the
+    first member is None; a failing URL read or list is an error.
+    """
+    if remotes.canonical is None:
+        run.notes.append(FORGE_NO_REMOTE_NOTE)
+        return None, []
+    # run_git records a failure; git prints a URL whenever it exits 0.
+    url = gitstate.run_git(repo, "remote", "get-url", remotes.canonical, run=run, runner=runner).strip()
+    if not url:
+        return None, []
+    kind = forge.detect(url)
+    if kind is None:
+        run.notes.append("forge: remote " + forge.safe_url(url) + " is neither GitLab nor GitHub, skipped")
+        return None, []
+    project = forge.project_path(url)
+    if project is None:
+        run.notes.append("forge: remote " + forge.safe_url(url) + " names no project, skipped")
+        return None, []
+    requests, error = forge.list_open(kind, project, runner)
+    if error is not None:
+        _record(run, error)
+    return (kind, project), requests
+
+
+def merge_request_items(requests: list[MergeRequest], tips: list[Item]) -> list[Item]:
+    """Attach each merge request to the tip item at its head SHA; return the rest as items.
+
+    Requests are taken in ascending number: the forges list newest first,
+    and sort_items keeps the order of undated items, so the oldest prints
+    first. An attached one adds `MR !<n> <state> <title> -> <target>` to the
+    tip's lines. Every other one is a merge-request item: title `!<n>
+    <title>`, lines `<state>, <source project>:<source branch> -> <target>`,
+    `head <sha>` and the URL, names [source branch], no date, attrs number,
+    source_project and author. Titles print on one line.
+    """
+    by_sha = {item.sha: item for item in tips if item.sha}
+    standalone: list[Item] = []
+    for request in sorted(requests, key=lambda request: request.number):
+        number = str(request.number)
+        title = _one_line(request.title)
+        tip = by_sha.get(request.head_sha) if request.head_sha else None
+        if tip is not None:
+            tip.lines.append("MR !" + number + " " + request.state + " " + title + " -> " + request.target_branch)
+            continue
+        standalone.append(
+            Item(
+                kind="merge-request",
+                title="!" + number + " " + title,
+                certainty="certain",
+                lines=[
+                    request.state + ", " + request.source_project + ":" + request.source_branch
+                    + " -> " + request.target_branch,
+                    "head " + (request.head_sha or "unknown"),
+                    request.url,
+                ],
+                paths=[],
+                names=[request.source_branch],
+                date=None,
+                sha=request.head_sha or None,
+                sessions=[],
+                attrs={"number": number, "source_project": request.source_project, "author": request.author},
+            )
+        )
+    return standalone
 
 
 def unpublished_items(rows: list[tuple[str, str, int]], tips: list[Tip]) -> list[Item]:
@@ -544,6 +633,11 @@ def _extreme(stamps: list[str], *, latest: bool) -> str | None:
 def _epoch(stamp: str) -> float:
     at = associate.instant(stamp)
     return at.timestamp() if at is not None else float("-inf")
+
+
+def _one_line(text: str) -> str:
+    """Whitespace runs collapsed to one space, the ends stripped."""
+    return " ".join(text.split())
 
 
 def _count(number: int, word: str) -> str:
