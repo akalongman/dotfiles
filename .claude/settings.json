@@ -77,7 +77,8 @@
     "additionalDirectories": [
       "~/.claude",
       "~/.claude2",
-      "~/.claude3"
+      "~/.claude3",
+      "~/.claude4"
     ]
   },
   "model": "opus",

@@ -113,14 +113,16 @@ CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; MAGENTA='\
 # the default slot, whose state file is the legacy ~/.claude.json (a config
 # dir relocates it to $CLAUDE_CONFIG_DIR/.claude.json). Color marks the slot
 # by the config dir's name: ~/.claude green, ~/.claude2 magenta, ~/.claude3
-# blue, anything else yellow so an unexpected dir stands out. The badge shows
-# the full address: accounts can share a local part across domains.
+# blue, ~/.claude4 cyan, anything else yellow so an unexpected dir stands
+# out. The badge shows the full address: accounts can share a local part
+# across domains.
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
     ACCT_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
     case "$(basename "$CLAUDE_CONFIG_DIR")" in
         .claude)  ACCT_COLOR="$GREEN" ;;
         .claude2) ACCT_COLOR="$MAGENTA" ;;
         .claude3) ACCT_COLOR="$BLUE" ;;
+        .claude4) ACCT_COLOR="$CYAN" ;;
         *)        ACCT_COLOR="$YELLOW" ;;
     esac
 else
