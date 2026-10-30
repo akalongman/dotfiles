@@ -115,28 +115,46 @@ CYAN='\033[36m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; MAGENTA='\
 # by the config dir's name: ~/.claude green, ~/.claude2 magenta, ~/.claude3
 # blue, ~/.claude4 cyan, anything else yellow so an unexpected dir stands
 # out. The badge shows the full address: accounts can share a local part
-# across domains.
+# across domains. The slot tag after the badge, "[👤 <address>][4]", names the
+# slot by number, derived the way claude-slot-status derives it: ~/.claudeN is
+# N, ~/.claude or no config dir is 1, and any other dir prints its own name
+# there, since it has no number, or "?" when that name holds a character
+# outside the set below. The tag keeps the slot colour even while a
+# logged-out badge is red, so the pane that needs /login is still named.
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
     ACCT_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
-    case "$(basename "$CLAUDE_CONFIG_DIR")" in
+    SLOT_BASE="$(basename "$CLAUDE_CONFIG_DIR")"
+    case "$SLOT_BASE" in
         .claude)  ACCT_COLOR="$GREEN" ;;
         .claude2) ACCT_COLOR="$MAGENTA" ;;
         .claude3) ACCT_COLOR="$BLUE" ;;
         .claude4) ACCT_COLOR="$CYAN" ;;
         *)        ACCT_COLOR="$YELLOW" ;;
     esac
+    case "$SLOT_BASE" in
+        .claude)       SLOT_TAG=1 ;;
+        .claude[0-9]*) SLOT_TAG="${SLOT_BASE#.claude}" ;;
+        *)             SLOT_TAG="$SLOT_BASE" ;;
+    esac
 else
     ACCT_FILE="$HOME/.claude.json"
     ACCT_COLOR="$GREEN"
+    SLOT_TAG=1
 fi
+# The tag reaches the terminal through echo -e, so a name that could carry an
+# escape sequence or a newline is replaced rather than printed. ASCII ranges,
+# as for the work row above.
+[[ $SLOT_TAG == *[!A-Za-z0-9._~\ -]* ]] && SLOT_TAG='?'
 ACCT_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$ACCT_FILE" 2>/dev/null)
 if [ -n "$ACCT_EMAIL" ]; then
-    ACCT_TEXT="[👤 ${ACCT_EMAIL}]"
-    ACCT_SEG="${ACCT_COLOR}${ACCT_TEXT}${RESET} "
+    ACCT_BADGE="[👤 ${ACCT_EMAIL}]"
+    BADGE_COLOR="$ACCT_COLOR"
 else
-    ACCT_TEXT="[👤 not logged in]"
-    ACCT_SEG="${RED}${ACCT_TEXT}${RESET} "
+    ACCT_BADGE="[👤 not logged in]"
+    BADGE_COLOR="$RED"
 fi
+ACCT_TEXT="${ACCT_BADGE}[${SLOT_TAG}]"
+ACCT_SEG="${BADGE_COLOR}${ACCT_BADGE}${RESET}${ACCT_COLOR}[${SLOT_TAG}]${RESET} "
 
 # Pick bar color based on context usage
 if [ "$PCT" -ge 90 ]; then BAR_COLOR="$RED"
