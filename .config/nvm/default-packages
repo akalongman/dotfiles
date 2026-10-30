@@ -2,6 +2,8 @@
 @modelcontextprotocol/inspector
 @stripe/cli
 agent-browser
+# Node 25 and later ship without corepack; the machine playbook (tag node) runs corepack enable
+corepack
 # Cloudflare CLI (`cf`, also `cloudflare`); per-account token wrapper is the private ~/bin/cfx
 cf
 # Document generation (docx, pptx); require()-able from any directory via NODE_PATH, set in .bashrc
