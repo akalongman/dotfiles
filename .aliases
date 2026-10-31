@@ -50,7 +50,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     alias zed='open -a /Applications/Zed.app "`pwd`"'
 else
     alias o="xdg-open ."
-    alias copykey='{ command cat ~/.ssh/id_ed25519.pub 2>/dev/null || command cat ~/.ssh/id_rsa.pub; } | xclip -selection clipboard'
+    alias copykey='{ command cat ~/.ssh/id_ed25519.pub 2>/dev/null || command cat ~/.ssh/id_rsa.pub; } | wl-copy'
     alias localip="ip -br -4 addr show scope global"
     alias flushdns="resolvectl flush-caches"
 fi
