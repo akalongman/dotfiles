@@ -97,7 +97,11 @@
     "app-compact-constitution": "user-invocable-only",
     "app-review-project": "user-invocable-only",
     "app-audit-server": "user-invocable-only",
-    "app-workstation-project": "user-invocable-only"
+    "app-workstation-project": "user-invocable-only",
+    "app-ftp": "user-invocable-only",
+    "security-audit": "user-invocable-only",
+    "app-verify-api-docs": "user-invocable-only",
+    "humanizer": "user-invocable-only"
   },
   "hooks": {
     "Notification": [

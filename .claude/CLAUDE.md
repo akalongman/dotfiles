@@ -57,7 +57,8 @@
 |---|---|---|
 | This machine: `.test` sites, data stores, runtimes, shell gotchas | `rules/environment.md`, `rules/environment.local.md` | always |
 | Git branches, commits, GitHub and GitLab | `rules/git.md` | always |
-| SQL: ad hoc queries on live databases, locks and query plans | `rules/sql.md` | always |
+| SQL: ad hoc queries on live databases | `rules/sql.md` | always |
+| SQL: row locks, gap locks, deadlocks, verifying a race | `rules/sql-locking.md` | code, migration and `openspec/` files; read before any design that relies on a lock |
 | PHP and Laravel | `rules/php.md` | PHP files |
 | JavaScript | `rules/javascript.md` | JS files |
 | Rust | `rules/rust.md` | Rust files |

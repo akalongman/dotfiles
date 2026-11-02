@@ -188,23 +188,7 @@ return static::applyRelationTree(static::$structure, $tree);
 
 ## Comments
 
-Be very critical about adding comments as they often become outdated and can mislead over time. Code should be self-documenting through descriptive variable and function names.
-
-Adding comments should never be the first tactic to make code readable.
-
-*Instead of this:*
-```php
-// Get the failed checks for this site
-$checks = $site->checks()->where('status', 'failed')->get();
-```
-
-*Do this:*
-```php
-$failedChecks = $site->checks()->where('status', 'failed')->get();
-```
-
-**Guidelines:**
-- Never add comments to tests that restate what the test does - the test name should carry that. A non-obvious *why* the name cannot express (for example, why a specific fixture value is pinned) is still allowed, exactly as in the rule above
+- Never add comments to tests that restate what the test does - the test name should carry that. A non-obvious *why* the name cannot express (for example, why a specific fixture value is pinned) is still allowed.
 
 ## Whitespace
 
@@ -261,8 +245,6 @@ $failedChecks = $site->checks()->where('status', 'failed')->get();
 
 ## Testing
 
-- Use descriptive test method names
-- Follow the arrange-act-assert pattern
 - Before citing a test as the proof that a protection holds (in a review reply, a
   rebuttal, a commit message, or a spec), mutation-check it: remove or invert the
   protection, run the test, confirm it fails, then restore. A test that still passes
@@ -293,9 +275,6 @@ $failedChecks = $site->checks()->where('status', 'failed')->get();
 - Mailables: purpose + `Mail` suffix (`AccountActivatedMail`)
 - Resources/Transformers: plural + `Resource`/`Transformer` (`UsersResource`)
 - Enums: descriptive name, no prefix (`OrderStatus`, `BookingType`)
-
-### Migrations
-- Check other migrations before adding new one
 
 ### Composer Dependencies
 
