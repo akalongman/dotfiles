@@ -64,3 +64,22 @@ reproduction against unchanged code first, never a behaviour-preserving
 extraction that changes the tested constructor between red and green
 (2026-09-12, a probe-level test that chose its own target could never
 fail).
+
+A mutation check (break the code on purpose, watch the test turn red) proves
+something only when the mutation applied. Before reading the mutated run's
+result, confirm the target changed (a non-empty `git diff` of it, or a checksum
+that differs from the original), and stop when it did not: a mutated run
+against an unchanged file is the original run again, and its result says
+nothing about the test (2026-10-20, a mutation script crashed on the last
+job, left the YAML untouched, and the "mutated" run passed).
+
+## Fakes for credentialed tools
+
+A suite that shadows a credentialed CLI (`op`, `aws`, `gh`, `glab`) with a
+fake on PATH must stop when the fake is missing: guard the copy or the PATH
+setup with an explicit exit, because a silent failure leaves the real binary
+first on PATH and the suite runs against the real account. Whenever the
+setup of such a suite changes (a fixture path, the PATH line, the copy), run
+it with the real binary blocked by a failing stub placed behind the fakes on
+PATH, and confirm the stub was never hit (2026-10-26, a renamed fixture path
+let `op` export the real vaults for eight minutes).

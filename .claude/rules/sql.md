@@ -44,6 +44,12 @@ queries, logins among them, waited behind its table locks.
 - **Do not print rows you do not need.** Select the columns the question needs
   and filter to the subject; a `SELECT *` dump of an unknown table pulls
   unrelated personal data into the session.
+- **When a multi-statement batch fails, rerun each statement alone before
+  attributing the error.** A compile-time error, such as a collation conflict,
+  fails the whole batch before its first statement runs, and the message's
+  "statement column N" names a column of the failing statement, not its
+  position in the batch (2026-10-23, a probe's own metadata concatenation was
+  blamed on the query beside it).
 
 ## Concurrency and row locking
 
@@ -66,6 +72,12 @@ Consequences to check for, each of which is a real defect and not a theoretical 
   serialise is "repeated operations on this record", lock that record's own row.
 - **Lock waits and deadlocks surface as exceptions** (`1205`, `1213`). Decide what
   the user sees. An uncaught one is a 500, not a refusal message.
+- **A foreign key locks its parent row.** Before claiming what can wait on a row
+  lock, list the foreign keys out of every table the transaction inserts into or
+  updates a key of: each such write takes `FOR KEY SHARE` on the referenced parent
+  row (InnoDB a shared lock), so a "create-only" transaction can lock existing
+  rows (2026-10-19, a `submissions` insert closed a cycle with the publish
+  transaction).
 
 Verify at realistic scale, not at whatever the dev database happens to hold. A
 handful of rows makes the planner full-scan and lock everything, which looks like

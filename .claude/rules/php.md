@@ -279,9 +279,6 @@ $failedChecks = $site->checks()->where('status', 'failed')->get();
 - When mutation-checking, snapshot the file before mutating and restore from that
   copy (comparing its checksum), never with `git checkout`: the file under a check
   usually holds uncommitted work, and checkout restores HEAD, silently discarding it.
-  A scripted mutation must also assert that it applied, because a mutation that
-  silently did not apply runs the tests against the wrong code and its result means
-  nothing.
 
 ## Quick Reference
 
