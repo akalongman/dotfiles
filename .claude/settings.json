@@ -97,7 +97,14 @@
       "Bash(longibot gmail *drafts*)",
       "Bash(longibot gmail *orwarding*)",
       "Bash(longibot gmail *filters*)",
-      "Bash(longibot gmail *Vacation*)"
+      "Bash(longibot gmail *Vacation*)",
+      "Bash(longibot drive *permissions*)",
+      "Bash(longibot calendar *insert*)",
+      "Bash(longibot calendar *patch*)",
+      "Bash(longibot calendar *update*)",
+      "Bash(longibot calendar *delete*)",
+      "Bash(longibot calendar *move*)",
+      "Bash(longibot calendar *quickAdd*)"
     ],
     "defaultMode": "auto",
     "additionalDirectories": [
