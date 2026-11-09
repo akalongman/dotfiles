@@ -48,7 +48,15 @@
       "Bash(cf docs search *)",
       "Bash(cf schema *)",
       "Read(~/.claude*/**)",
-      "Edit(~/.claude*/**)"
+      "Edit(~/.claude*/**)",
+      "Bash(longibot check:*)",
+      "Bash(longibot auth status:*)",
+      "Bash(longibot --help:*)",
+      "Bash(longibot terraform plan:*)",
+      "Bash(longibot terraform init:*)",
+      "Bash(longibot terraform validate:*)",
+      "Bash(longibot terraform fmt:*)",
+      "Bash(longibot terraform output:*)"
     ],
     "ask": [
       "Bash(sdp login:*)",
@@ -71,7 +79,22 @@
       "Bash(cf * purge *)",
       "Bash(cf * update *)",
       "Bash(cf * edit *)",
-      "Bash(secrets:*)"
+      "Bash(secrets:*)",
+      "Bash(longibot gmail +send:*)",
+      "Bash(longibot gmail +reply:*)",
+      "Bash(longibot gmail +reply-all:*)",
+      "Bash(longibot gmail +forward:*)",
+      "Bash(longibot gmail users messages send:*)",
+      "Bash(longibot gmail users drafts:*)",
+      "Bash(longibot auth logout:*)",
+      "Bash(longibot terraform apply:*)",
+      "Bash(longibot terraform destroy:*)",
+      "Bash(longibot terraform import:*)",
+      "Bash(longibot terraform state:*)",
+      "Bash(longibot gmail *send*)",
+      "Bash(longibot gmail *+reply*)",
+      "Bash(longibot gmail *+forward*)",
+      "Bash(longibot gmail *drafts*)"
     ],
     "defaultMode": "auto",
     "additionalDirectories": [
@@ -79,6 +102,10 @@
       "~/.claude2",
       "~/.claude3",
       "~/.claude4"
+    ],
+    "deny": [
+      "Bash(longibot auth login:*)",
+      "Bash(longibot login:*)"
     ]
   },
   "model": "opus",
