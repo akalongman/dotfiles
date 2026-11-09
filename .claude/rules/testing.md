@@ -73,6 +73,13 @@ against an unchanged file is the original run again, and its result says
 nothing about the test (2026-10-20, a mutation script crashed on the last
 job, left the YAML untouched, and the "mutated" run passed).
 
+In Python, run each mutant, and the run after the original is restored, with
+a fresh `PYTHONPYCACHEPREFIX` (or `-B`). The interpreter reuses a cached `.pyc`
+whose recorded source modification time (in whole seconds) and size match, so
+a file of the same size written within the same second, mutant or restored
+original, runs the previous bytecode (2026-11-09, a gate run after a mutation
+check failed three tests on the mutant's cached bytecode).
+
 ## Fakes for credentialed tools
 
 A suite that shadows a credentialed CLI (`op`, `aws`, `gh`, `glab`) with a
