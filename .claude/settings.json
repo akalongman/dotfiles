@@ -94,7 +94,9 @@
       "Bash(longibot gmail *send*)",
       "Bash(longibot gmail *+reply*)",
       "Bash(longibot gmail *+forward*)",
-      "Bash(longibot gmail *drafts*)"
+      "Bash(longibot gmail *drafts*)",
+      "Bash(longibot gmail *orwarding*)",
+      "Bash(longibot gmail *filters*)"
     ],
     "defaultMode": "auto",
     "additionalDirectories": [
