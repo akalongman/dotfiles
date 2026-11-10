@@ -90,3 +90,10 @@ setup of such a suite changes (a fixture path, the PATH line, the copy), run
 it with the real binary blocked by a failing stub placed behind the fakes on
 PATH, and confirm the stub was never hit (2026-10-26, a renamed fixture path
 let `op` export the real vaults for eight minutes).
+
+## Data commits
+
+A commit that changes a committed data file a test reads (an import's input,
+a seed sheet, a fixture) runs those tests before it is made; a data-only
+commit is not exempt from the gate (2026-11-09, two data loads broke 9 tests
+that read the committed file).
