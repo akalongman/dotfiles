@@ -86,6 +86,16 @@ branch, branch first" behavior.
 ## GitHub and GitLab
 
 - When creating a repository, protect its default branch before the first push.
+- Keep implementation plans out of a public repository: before it goes
+  public, or before a public one's first plan is committed, list the plans
+  directory (`docs/superpowers/plans/`) in `.gitignore` and untrack any
+  committed plan with `git rm -r --cached`, committing from the index; a
+  path-limited commit naming the plans keeps them tracked, since they are
+  still on disk, and reports only the `.gitignore` change. Plans stay
+  local working documents, and a doc that cites one names the commit that
+  holds it. Untracking leaves earlier plans in the history, which is
+  public with the repository (2026-11-11, a plugin repository went public
+  with two plans in its history).
 - For anything on GitHub, use the `gh` tool.
 - Edit a PR title or body with `gh api -X PATCH repos/<owner>/<repo>/pulls/<n>`,
   not `gh pr edit` (it fails on repos with classic project cards), and read the
