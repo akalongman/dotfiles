@@ -130,6 +130,7 @@ When setting up OpenSpec in a new or existing project:
 
 - Prefer placing new requirements under an existing capability from the map. Justify in the proposal when creating a new capability.
 - Requirement descriptions stay at 500 characters or fewer; `openspec validate --specs --strict` fails a longer one, and so does the project's `specs:lint` gate where it runs that validation.
+- A change's own `openspec validate <change> --strict` length-checks only its ADDED requirements. A MODIFIED block replaces its canonical requirement whole and is never measured, so editing a requirement already over 500 characters forces no split; splitting one needs a newly written scenario for every new requirement, because a MODIFIED block must keep every scenario title it has. Read the validator before telling the user a change will fail it (2026-11-11, a split was chosen on the opposite claim).
 - When a change touches an external integration, pair the wrapper task with a matching `.http` request file under `docs/http/` if the project uses that pattern.
 - When spec implemented, suggest a commit message.
 
