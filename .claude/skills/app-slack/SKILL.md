@@ -178,6 +178,7 @@ The one thing that does **not** embed in a message: inline images (`![alt](url)`
 
 - **Reply in threads** when responding to a specific message to keep the main channel clean.
 - **Set `reply_broadcast: true` on every thread reply** (also post to channel), unless the user asks for a thread-only reply. The user wants thread replies visible in the channel; a thread-only reply goes unseen by everyone not following the thread (2026-10-16, the requests to the lead in `#proj-entra-auth`).
+- **Re-read the thread right before posting into it.** Read the replies posted since your last read, and answer or reconcile them in the same message, so a follow-up never passes over a reply it should acknowledge (2026-11-11, a promised follow-up went out without acknowledging the reply posted half an hour before it).
 - **Post in the channel** (not a thread) when starting a new topic, making an announcement, or asking a question to the whole group.
 - **Don't start a new thread** to continue an existing conversation; find and reply to the original message.
 
