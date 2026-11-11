@@ -9,7 +9,8 @@
 #
 # Usage: sub-skill-check [SKILL_DIR]
 #        sub-skill-check --dir
-#   SKILL_DIR  the sub-skill's base directory as the invocation printed it;
+#   SKILL_DIR  the sub-skill's base directory as its invocation printed it,
+#              named subagent-driven-development;
 #              default: the user-scope install path of
 #              superpowers@superpowers-marketplace in
 #              ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json
@@ -21,8 +22,9 @@
 # without the plugin root's .claude-plugin/plugin.json. SUB_SKILL_VERIFIED,
 # "<version> <hash>", replaces the pin (for the test).
 # Exit 0 on either. Exit 2 with "Sub-skill: unknown (<reason>)" when the
-# directory is missing or unreadable or no install path is found; --dir
-# prints its reason on stderr. Exit 2 on usage.
+# directory is missing, unreadable or not named subagent-driven-development,
+# or no install path is found; --dir prints its reason on stderr. Exit 2
+# on usage.
 set -euo pipefail
 unset CDPATH
 
@@ -90,6 +92,8 @@ esac
 real=$(cd -P -- "$dir" && pwd)
 parent=$(dirname -- "$real")
 name=$(basename -- "$real")
+[ "$name" = subagent-driven-development ] ||
+  unknown "$dir is not a subagent-driven-development directory"
 
 hash=$(cd -- "$parent" && loop_files "$name" | LC_ALL=C sort -z | loop_stream | sha256sum) ||
   unknown "cannot read the loop's files under $real"
