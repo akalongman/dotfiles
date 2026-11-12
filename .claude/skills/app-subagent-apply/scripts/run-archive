@@ -3,8 +3,13 @@
 # workspace, the worktree and the transcript sweep:
 #   <config dir>/docs/tmp/apply-runs/<project slug>/<YYYY-MM-DD-HHMM>-<name>/
 # The project slug is the one the harness uses for transcripts (the working
-# directory with every "/" replaced by "-"), so the run's transcript and its
-# archive sit under the same name.
+# directory with every character other than an ASCII letter or digit
+# replaced by "-"), so the run's transcript and its archive sit under the
+# same name. Where the two names differ (the harness shortens a name over
+# 200 characters with a hash, and gives a non-ASCII character one "-" per
+# UTF-16 unit where this script gives one per byte), the run facts find
+# the transcript by its session id under the config directory's projects/
+# and every ~/.claude*/projects, and name it not found when none holds it.
 #
 # Since 2026-10-27 it also parks each ledger line "Handed to <destination>:
 # <item>" that has no "Parked: line <N>:" line yet in the project's queue
@@ -53,7 +58,7 @@ set -euo pipefail
 ws="${1:-}"; [ -d "$ws" ] || { echo "usage: run-archive WORKSPACE_DIR [NAME]" >&2; exit 2; }
 name="${2:-$(basename "$ws")}"
 config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-slug="$(pwd | tr '/' '-')"
+slug="$(pwd | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
 stamp="$(date +%Y-%m-%d-%H%M)"
 dest="$config/docs/tmp/apply-runs/$slug/$stamp-$name"
 mkdir -p "$dest"
@@ -68,7 +73,8 @@ h() { sha256sum "$1" 2>/dev/null | cut -c1-12; }
 session="${CLAUDE_CODE_SESSION_ID:-unknown}"
 transcript="$config/projects/$slug/$session.jsonl"
 if [ ! -f "$transcript" ]; then
-  found="$(find "$HOME"/.claude*/projects -maxdepth 2 -name "$session.jsonl" 2>/dev/null | head -1)"
+  # find exits 1 on a path that does not exist, as on a fresh machine.
+  found="$(find "$config/projects" "$HOME"/.claude*/projects -maxdepth 2 -name "$session.jsonl" 2>/dev/null | head -1 || true)"
   transcript="${found:-$transcript (not found)}"
 fi
 {
