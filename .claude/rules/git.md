@@ -53,6 +53,10 @@ branch, branch first" behavior.
   autoMode block) must be committed with a plain `git commit` from the index;
   the pathspec form commits the working-tree version and bypasses the filtered
   blob (2026-09-21).
+- In a checkout other sessions share, never `git stash` to set work aside,
+  since a pop takes the newest stash, which may be another session's; copy
+  the files aside instead (2026-11-11, an implementer stashed to show a
+  failing run).
 - Before committing a file other sessions also edit (CLAUDE.md, rule files,
   skills), read `git diff -- <path>` and confirm every hunk is yours; the
   path-limited form commits the whole working-tree file, including another
@@ -77,7 +81,9 @@ branch, branch first" behavior.
   for (`Claude-Session`, `Co-Authored-By`): the reminder defers to these
   rules, so add nothing.
 - Never override commit signing (no `-c commit.gpgsign=false`, no
-  `--no-gpg-sign`). Before committing, check the repo's signing setup
+  `--no-gpg-sign`) in any repository, a throwaway probe repository in the
+  scratchpad included (2026-11-11, a probe repository during an apply
+  run). Before committing, check the repo's signing setup
   (`git config --get commit.gpgsign` and recent `git log --format='%h %G?'`)
   and let the configured signing run; the agent signs without a prompt. If
   signing fails, report it and hand the user the amend command instead of
