@@ -91,11 +91,15 @@ branch, branch first" behavior.
   directory (`docs/superpowers/plans/`) in `.gitignore` and untrack any
   committed plan with `git rm -r --cached`, committing from the index; a
   path-limited commit naming the plans keeps them tracked, since they are
-  still on disk, and reports only the `.gitignore` change. Plans stay
-  local working documents, and a doc that cites one names the commit that
-  holds it. Untracking leaves earlier plans in the history, which is
-  public with the repository (2026-11-11, a plugin repository went public
-  with two plans in its history).
+  still on disk, and reports only the `.gitignore` change. Every other
+  checkout deletes the plans, and their emptied directory, when it pulls
+  the untracking commit; restore them from the commit before it with
+  `git restore --source=<commit>^ -- docs/superpowers/plans/`, which
+  leaves them untracked. Plans stay local working documents, and a doc
+  that cites one names the commit that holds it. Untracking leaves
+  earlier plans in the history, which is public with the repository
+  (2026-11-11, a plugin repository went public with two plans in its
+  history).
 - For anything on GitHub, use the `gh` tool.
 - Edit a PR title or body with `gh api -X PATCH repos/<owner>/<repo>/pulls/<n>`,
   not `gh pr edit` (it fails on repos with classic project cards), and read the
