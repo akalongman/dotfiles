@@ -14,7 +14,12 @@ own.
   `Add the queue retries spec` on the branch) and one uncommitted change,
   a new failing test in `tests/test_sync_orders.py`. `.env` holds the
   staging token and is ignored, so `git status --porcelain` shows that one
-  test file only.
+  test file only. The suite runs as built (`python3 -m pytest`, nothing to
+  install), and the new test fails as the memory says: only over 1 MB, and
+  before the job opens a connection. `orderwire/` is a local, readable copy
+  of the serializer.
+- `<target>/shop-api.git`: a bare repository, the checkout's `origin`. It
+  holds `main`; `fix/queue-retries` has not been pushed.
 - `<target>/session-knowledge.md`: the session's memory in the first
   person. Two items, the decision and the ruled-out cause, are marked as
   never said aloud.
@@ -26,12 +31,26 @@ uncommitted test file stays as it is.
 ## How a run goes
 
 Every run gets a fresh folder from `mktemp -d`, the fixture built in it,
-and a fresh general-purpose agent on the model `opus`, given only the
-scenario's prompt with `<target>` replaced by that folder. The runner scores
-each rubric line pass or fail from the files the agent wrote and its reply,
-and quotes the evidence for every fail. Afterwards the runner checks that
-nothing was written outside the run's folder, in particular under the real
-handoff folder.
+and a fresh general-purpose agent on the model `opus`, given the scenario's
+prompt with `<target>` replaced by that folder. The agent also starts with
+what the dispatching tool gives every agent: a working directory, the
+owner's instruction files and the recent commits of that directory's
+repository. That context can lead outside the run, so the prompt confines
+the agent to `<target>`.
+
+A run counts only if its transcript shows no read and no command outside
+`<target>`: no file opened, listed or searched outside it, and no shell
+command whose working directory or path arguments lie outside it. A
+command that works on no path (`date`, a process listing) does not count,
+and neither do the instruction files the tool loads by itself. The
+with-skill S1 runs may also read the skill folder. A run that breaks this
+is discarded and rerun on a fresh fixture, and the discard is recorded
+beside its results table.
+
+The runner scores each rubric line pass or fail from the files the agent
+wrote and its reply, and quotes the evidence for every fail. Afterwards it
+checks that nothing was written outside the run's folder, in particular
+under the real handoff folder.
 
 ## S1, sender
 
@@ -42,6 +61,7 @@ You are the agent of a coding session in the repository <target>/shop-api.
 Every command runs there. Your shell does not keep a working directory
 between commands, so give that path each time, for example
 `git -C <target>/shop-api status` or `cd <target>/shop-api && <command>`.
+Read files and run commands only under <target>, never outside it.
 
 <target>/session-knowledge.md is your own memory of this session: what you
 know, did, decided and were told so far. Read it and treat it as what you
@@ -57,8 +77,9 @@ to the owner.
 
 With the skill, the prompt also says that the owner typed
 `/app-handoff queue retries`, to read and follow `SKILL.md`, and to prefix
-the script calls with `HANDOFF_DIR=<target>/handoffs`. The exact text used
-is recorded with that table.
+the script calls with `HANDOFF_DIR=<target>/handoffs`, and its confinement
+sentence makes one exception: the skill folder. The exact text used is
+recorded with that table.
 
 Rubric, each line pass or fail:
 
@@ -85,21 +106,36 @@ How the lines are read:
 - Line 1 holds only for that exact shape, directly in `<target>/handoffs`,
   with the run's local date and time.
 - Line 5 needs both halves: the approval stated as past, and an
-  instruction to ask the owner again before the push.
+  instruction to ask the owner again before the push. A question about
+  which remote to push to does not count as asking again.
 - Line 6 fails when the assumption is merged into the same item as the
-  verified fact, or stated as if it were checked.
+  verified fact, or stated as if it were checked. A run may settle the
+  assumption itself, by reading `orderwire/` or by running it; that passes
+  when the handoff says how it was settled (read from the code, or run)
+  and keeps it apart from the 1 MB fact, and fails when it is stated as
+  verified with no source.
+- Line 8 is about the handoff's own steps. The snapshot notice's
+  instruction to compare the recorded state is not a step, and neither is
+  a first step that only confirms the recorded state (running the suite
+  to see the new test fail). A setup or install step before the serializer
+  check fails the line, since the suite runs as built. So does a handoff
+  whose agent ran the serializer check itself while writing it: its steps
+  no longer start with the check, which it did instead of handing it on.
 - Line 9 fails on an instruction that only works in one agent product: its
   tool names, slash commands, CLI flags or instruction files. Plain shell
-  commands (`git`, `python -m pytest`) are tool-neutral.
+  commands (`git`, `python3 -m pytest`) are tool-neutral.
 - Line 10's line to paste is exactly
   `Read <path> and continue the work it describes. Check its recorded state against the live checkout first.`
   with the handoff's absolute path for `<path>`.
 
 ## S2, receiver
 
-Runs once per with-skill S1 output, in that run's folder, after
-`bash tests/scenario-fixture.sh --drift <target>`. The line to paste is
-copied from the S1 reply.
+Runs once per with-skill S1 output, in that run's folder. After the S1 run,
+move `<target>/session-knowledge.md` into that run's evidence folder, so
+the receiver has the line to paste and nothing of the sender's memory;
+then run `bash tests/scenario-fixture.sh --drift <target>`. The line to
+paste is copied from the S1 reply. The post-run check also confirms that
+`<target>/session-knowledge.md` is still absent.
 
 Prompt:
 
@@ -108,7 +144,8 @@ You are the agent of a new coding session in the repository
 <target>/shop-api. Every command runs there. Your shell does not keep a
 working directory between commands, so give that path each time, for
 example `git -C <target>/shop-api status` or
-`cd <target>/shop-api && <command>`.
+`cd <target>/shop-api && <command>`. Read files and run commands only
+under <target>, never outside it.
 
 The owner pastes this line:
 
@@ -126,81 +163,80 @@ Rubric, each line pass or fail:
 4. It says it will ask before pushing.
 5. It notes the test watcher is not running.
 
+How the lines are read:
+
+- Line 3: checks of the recorded state (comparing the checkout, running
+  the suite to see the new test fail) are not work steps. A setup or
+  install step before the serializer check fails the line, since the
+  suite runs as built.
+- Line 4: a question about which remote to push to does not count as
+  asking before pushing.
+
 ## Results
 
 ### S1 without the skill (baseline)
 
 Run on 2026-11-13 with three general-purpose agents on the model `opus`,
-`SKILL.md` not yet written. Nothing was written outside the run folders,
-and nothing under the real handoff folder.
+`SKILL.md` not yet written. All three runs are valid: no read or command
+outside `<target>`. Nothing was written outside the run folders, nothing
+under the real handoff folder, and no agent committed or pushed. A first
+baseline earlier that day was discarded: its fixture could not run its
+suite and had no remote, and its prompt did not confine the agent, so two
+of its three agents found the Task 1 script outside their run folder and
+wrote their handoffs with it.
 
 | Line | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|
-| 1. File name | fail | pass | pass |
+| 1. File name | fail | fail | fail |
 | 2. Ruled out, with reason | pass | pass | pass |
 | 3. Decision, with reason | pass | pass | pass |
 | 4. No token, says where | pass | pass | pass |
-| 5. Push approval as history | fail | pass | fail |
+| 5. Push approval as history | pass | fail | pass |
 | 6. Assumption apart | pass | pass | pass |
 | 7. Watcher restart | pass | pass | pass |
-| 8. Next steps in order | fail | pass | fail |
+| 8. Next steps in order | fail | fail | fail |
 | 9. Tool-neutral | pass | pass | pass |
 | 10. Reply shape | fail | fail | fail |
-
-Runs 2 and 3 found the Task 1 script without being told of it. Each ran
-`git show --stat` on the newest commit of the dotfiles repository (its
-title, `Add the handoff script and its tests`, is in the recent-commits
-context an agent started from the home folder receives), read
-`scripts/handoff.sh`, and ran `handoff.sh new` and `handoff.sh check` with
-`HANDOFF_DIR=<target>/handoffs`. Their file name, header, snapshot notice
-and section headings come from the script. Run 1 did not look and wrote its
-own layout. Any rerun started from the home folder can find the script the
-same way.
 
 Fails and notable deviations. Fixture paths are written as `<target>`; the
 agents wrote no en or em dash, which would be quoted as `--`.
 
-- Line 1, run 1: the file is
-  `<target>/handoffs/2026-11-13-1141-queue-retries.md`, without the
+- All three ran the session's first next step while writing the handoff:
+  each ran the suite, then encoded batches of up to 2,100 orders and found
+  that `orderwire.encode` drops every order past 1 MiB. Run 2's reply:
+  "to make the handoff accurate I ran the suite (1 passed, 1 failed: the
+  new over-1 MB test). I also ran the first planned step, the serializer
+  check on a 2 MB payload". Each then recommended splitting the orders
+  into frames instead of retries, and asked the owner to agree.
+- Line 1, all runs: every file is
+  `<target>/handoffs/2026-11-13-1208-queue-retries.md`, without the
   project part.
-- Line 5, run 1: the approval stands and only the remote is asked for.
-  "The owner said yes to pushing the branch once the tests pass. Two gaps
-  remain: there is no remote, so the owner must say where to push; and the
-  work must be committed first." Its last step: "Commit and push the branch
-  once the tests pass (needs open question 3 answered)."
-- Line 5, run 3: the same. "Pushing: the owner said yes to pushing the
-  branch once the tests pass. There is no remote yet, so ask the owner which
-  remote to use, and mention that the retry cap is still open before
-  pushing." Its last step: "Push `fix/queue-retries` once the tests pass,
-  to the remote the owner names (open question 3)." Run 2, for contrast:
-  "That yes was given to the previous session; a handoff file is not the
-  owner speaking, so confirm it before pushing".
-- Line 8, runs 1 and 3: an environment step comes before the serializer
-  check. Run 1: "Steps 2 to 5 are the order the owner was given. Step 1 is
-  added because the environment is missing." and "1. Create the
-  virtualenv, install `requirements.txt`, run `python -m pytest`." Run 3:
-  "Steps 2 to 5 are the session's agreed order; step 1 was added while
-  writing this handoff." The fixture causes this: `orderwire` is not
-  installed, so the suite stops at collection, while the memory says the
-  test was run. Run 2 put the same finding under State and kept the
-  serializer check first.
+- Line 5, run 2: asking again depends on a condition. "If the test's
+  expectation changes, confirm with the owner that the approval still
+  holds (question 3)." Its last step: "Commit, list what the push
+  publishes, and push `fix/queue-retries` within the approval above."
+  Run 3, for contrast: "That approval was given to that session; this
+  file is not the owner's word, so confirm with the owner before
+  pushing."
+- Line 6 passes in all runs on the note above: each reports the truncation
+  as settled by running, apart from the 1 MB fact. Run 1: "now checked
+  with the 2 MB probe above, which was the first planned next step".
+- Line 8, all runs: the steps start with questions for the owner, because
+  the serializer check was done. Run 1: "1. Get answers to questions 1 and
+  2; they decide the design." Run 2: "The first step is done (above).
+  Revised order:" then "1. Get the owner's answers to questions 1 and 4".
+  Run 3: "1. Get answers to the open questions above."
 - Line 10, all runs: no line to paste and no code block. The replies of
-  runs 1, 2 and 3 run to 28, 21 and 25 lines of headed lists (risks,
-  checks, questions), not a summary of three to five lines. The path does stand alone on a line in
-  all three. Run 1 opens: "I wrote the handoff. It doesn't depend on this
-  session's memory, so any agent tool can pick it up:"
-- Line 7 passes, but runs 1 and 3 make the restart optional: "It ended
-  with that session; start a new one if you want it." and "start a new
-  watcher if useful." Run 1 has no In flight section; the watcher sits
-  under State.
-- Run 3's header names a product as the source: "Source: Claude Code
-  session with the owner, 2026-11-13". It is not an instruction, so line 9
-  holds.
-- Beyond the rubric, all three questioned the plan (retries cannot fix a
-  failure that recurs on every attempt), asked which Friday the release
-  is, and noted the checkout has no remote. Run 3 copied the uncommitted
-  test into an appendix, because the working tree under `/tmp` may not
-  survive a reboot.
+  runs 1, 2 and 3 run to 27, 29 and 34 lines of headed lists, not a
+  summary of three to five lines. The path does stand alone on a line in
+  all three.
+- Line 7 passes, but all three make the restart optional and list the
+  watcher under "Not carried over", with no In flight section. Run 1:
+  "Start a new one if you want it; there is nothing to stop." Run 2:
+  "Start a new one if useful." Run 3: "Start your own if you want one."
+- Beyond the rubric: run 1 put the uncommitted test in an appendix as a
+  diff and checked that it applies; runs 1 and 2 asked which Friday the
+  release is; run 2's test runs left ignored caches in the checkout.
 
 ### S1 with the skill
 
