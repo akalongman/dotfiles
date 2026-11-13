@@ -108,6 +108,12 @@ fi
 # CLOUDFLARE_API_TOKEN is never exported here.
 export CF_SEND_TELEMETRY=false
 
+# Chrome DevTools for agents (`chrome-devtools`, npm global): no usage
+# statistics to Google. The lookup of traced URLs in the CrUX API has no
+# variable; it is switched off per daemon with
+# `chrome-devtools start --no-performance-crux`.
+export CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1
+
 unset -f __prepend_path __append_path
 export PATH
 

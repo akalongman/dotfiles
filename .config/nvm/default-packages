@@ -2,6 +2,10 @@
 @modelcontextprotocol/inspector
 @stripe/cli
 agent-browser
+# Chrome DevTools for agents: the `chrome-devtools` CLI (traces, throttling, heap snapshots); usage statistics are switched off in ~/.exports
+chrome-devtools-mcp
+# Lighthouse CLI: the performance score, which chrome-devtools' lighthouse_audit leaves out
+lighthouse
 # Node 25 and later ship without corepack; the machine playbook (tag node) runs corepack enable
 corepack
 # Cloudflare CLI (`cf`, also `cloudflare`); per-account token wrapper is the private ~/bin/cfx
