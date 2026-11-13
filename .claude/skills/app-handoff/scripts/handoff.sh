@@ -63,6 +63,24 @@ slug() { # text max fallback
     printf '%s\n' "${s:-$3}"
 }
 
+# Succeeds when the working directory is in a git work tree that does not
+# ignore it. A folder its work tree ignores counts as outside a repository:
+# with dotfiles kept in $HOME and everything else ignored, every plain
+# folder under the home folder is inside that work tree, and ignored by it.
+# The top of a work tree is never ignored. Below it the folder is checked
+# from the top as ./<path> with no trailing slash: with the slash a "dir/*"
+# pattern would match the folder itself, and the ./ keeps a leading colon
+# from reading as pathspec magic.
+in_repository() {
+    local prefix top
+    [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || return 1
+    prefix="$(git rev-parse --show-prefix)"
+    [ -n "$prefix" ] || return 0
+    top="$(git rev-parse --show-toplevel)"
+    if git -C "$top" check-ignore -q -- "./${prefix%/}"; then return 1; fi
+    return 0
+}
+
 cmd_new() { # [--source <text>] [<topic words>...]
     local source='' topic title clock now offset dir cwd
     local repo='not a git repository' branch='n/a' commit='n/a' uncommitted='n/a'
@@ -92,7 +110,7 @@ cmd_new() { # [--source <text>] [<topic words>...]
     # call leaves no half-written handoff behind.
     cwd="$(pwd -P)"
     project="$cwd"
-    if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
+    if in_repository; then
         repo="$(git rev-parse --show-toplevel)"
         # A linked worktree is named after the project that holds the
         # common .git directory, not after the worktree's own folder.

@@ -338,6 +338,39 @@ case_usage_errors() { # tree
     [ ! -e "$T/app" ] || fail "a usage error created $T/app"
 }
 
+case_new_in_ignored_folder() { # tree
+    local T="$1" R out line
+    # A deny-by-default repository, as dotfiles kept in $HOME are: notes/ is
+    # ignored, tools/ is kept while everything in it is ignored.
+    R="$T/proj"
+    repo_with_commit "$R"
+    printf '%s\n' '*' '!/.gitignore' '!/tools/' '/tools/*' >"$R/.gitignore"
+    git -C "$R" add -- .gitignore
+    git -C "$R" commit -q -m Ignore
+    mkdir -- "$R/notes" "$R/tools"
+    out="$(new_in "$R/notes" "$T")" || fail "new exited $?"
+    expect_eq "stdout in notes" "$out" "$T/app/handoffs/$NOW-notes-handoff.md"
+    for line in "# Handoff: untitled" "- Directory: $R/notes" \
+        "- Repository: not a git repository" "- Branch: n/a" "- Commit: n/a" \
+        "- Uncommitted: n/a"; do
+        expect_line "$out" "$line"
+    done
+    # The top of a work tree is never ignored, though "*" matches everything;
+    # with nothing tracked yet, git itself reports "." there as ignored.
+    out="$(new_in "$R" "$T" top)" || fail "new exited $?"
+    expect_eq "stdout at the top" "$out" "$T/app/handoffs/$NOW-proj-top.md"
+    expect_line "$out" "- Repository: $R"
+    git init -q -b main "$T/fresh"
+    printf '*\n' >"$T/fresh/.gitignore"
+    out="$(new_in "$T/fresh" "$T" top)" || fail "new exited $?"
+    expect_eq "stdout at an untracked top" "$out" "$T/app/handoffs/$NOW-fresh-top.md"
+    expect_line "$out" "- Repository: $T/fresh"
+    # tools/ is kept, though "/tools/*" matches "tools/" with its slash.
+    out="$(new_in "$R/tools" "$T" tools)" || fail "new exited $?"
+    expect_eq "stdout in tools" "$out" "$T/app/handoffs/$NOW-proj-tools.md"
+    expect_line "$out" "- Repository: $R"
+}
+
 # --- Runner ---
 
 failures=0
@@ -367,7 +400,8 @@ run() { # name
 for name in new_in_repo new_outside_repo new_same_minute_clash \
     new_topic_sanitized new_in_linked_worktree new_no_commits_and_detached \
     new_many_uncommitted new_source check_fresh_skeleton_fails \
-    check_filled_passes check_missing_parts usage_errors; do
+    check_filled_passes check_missing_parts usage_errors \
+    new_in_ignored_folder; do
     run "$name"
 done
 
