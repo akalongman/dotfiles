@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for scripts/handoff.sh and for the command SKILL.md runs it with.
+# Tests for scripts/handoff.sh and for the commands SKILL.md runs it with.
 #
 # Every case runs the script as a subprocess in its own tree under a
 # temporary directory, with HANDOFF_DIR set to the tree's not yet existing
@@ -125,6 +125,25 @@ skill_new_in() { # dir t topic
     ln -sfn -- "$HERE/.." "$t/home/.claude/skills/app-handoff"
     (cd "$dir" && HOME="$t/home" HANDOFF_DIR="$t/app/handoffs" HANDOFF_NOW="$NOW" \
         CLAUDE_SESSION_ID=abc bash -c "$cmd")
+}
+
+# Runs the step 4 command of SKILL.md on <file> for tree <t>, with <path>
+# written in as skill_new_in writes the topic, and stores what it gives as
+# check_into does.
+skill_check_into() { # t file
+    local t="$1" cmd path rc
+    # shellcheck disable=SC2016 # the backticks delimit inline code in SKILL.md
+    cmd="$(sed -n 's/^.*`\(bash ~\/\.claude\/skills\/app-handoff\/scripts\/handoff\.sh check [^`]*\)`.*$/\1/p' \
+        -- "$HERE/../SKILL.md")"
+    [[ -n $cmd && $cmd != *$'\n'* ]] ||
+        fail "expected one handoff.sh check command in SKILL.md, got [$cmd]"
+    [[ $cmd == *'<path>'* ]] || fail "no <path> in the SKILL.md command [$cmd]"
+    path="${2//\'/\'\\\'\'}"
+    cmd="${cmd//'<path>'/"$path"}"
+    mkdir -p -- "$t/home/.claude/skills"
+    ln -sfn -- "$HERE/.." "$t/home/.claude/skills/app-handoff"
+    HOME="$t/home" bash -c "$cmd" >"$t/out" 2>"$t/err" && rc=0 || rc=$?
+    printf '%s\n' "$rc" >"$t/rc"
 }
 
 # The whole of case 1's handoff: the skeleton the script must write.
@@ -495,6 +514,59 @@ case_skill_command_topic_quoted() { # tree
     expect_line "$out" "# Handoff: untitled"
 }
 
+case_check_unclosed_fence() { # tree
+    local T="$1" f lines n hidden
+    local -a opened=()
+    case1_repo "$T/proj"
+    f="$(new_in "$T/proj" "$T" Queue Worker)" || fail "new exited $?"
+    sed -i "s/$MARKER/None./" -- "$f"
+    hidden="$(printf 'missing section: %s\n' 'Ruled out' 'Facts established' \
+        "Owner's instructions from this session" 'Open questions' 'Next steps' \
+        'In flight' 'Pointers')"
+    n=$(($(grep -n -x -F -e '## Decisions' -- "$f" | cut -d: -f1) + 2))
+    # A fence left open under Decisions: never closed, closed only by a
+    # shorter or an indented run, or opened by a line CommonMark would not
+    # take as a fence. The headings after it stay missing, and one more
+    # line names the fence.
+    # shellcheck disable=SC2016 # the backticks are fence lines, not commands
+    for lines in '```text' '````|```' '```|  ```' '``` a`b'; do
+        IFS='|' read -ra opened <<<"$lines"
+        cp -- "$f" "$T/open.md"
+        insert_after "$T/open.md" '## Decisions' '' "${opened[@]}"
+        check_into "$T" "$T/open.md"
+        expect_eq "exit status with [$lines]" "$(cat -- "$T/rc")" 1
+        expect_eq "stderr with [$lines]" "$(cat -- "$T/err")" \
+            "unclosed code fence: line $n (the rest of the file reads as code)"$'\n'"$hidden"
+    done
+    # A fence left open in the last section hides no heading and is still
+    # the one problem.
+    cp -- "$f" "$T/open.md"
+    n=$(($(wc -l <"$T/open.md") + 2))
+    printf '\n%s\n%s\n' '```text' 'last words' >>"$T/open.md"
+    check_into "$T" "$T/open.md"
+    expect_eq "exit status with a fence open in Pointers" "$(cat -- "$T/rc")" 1
+    expect_eq "stderr with a fence open in Pointers" "$(cat -- "$T/err")" \
+        "unclosed code fence: line $n (the rest of the file reads as code)"
+}
+
+case_skill_command_path_quoted() { # tree
+    local T="$1" H f
+    # A handoff folder whose path holds a space and an apostrophe.
+    H="$T/owner's files/app/handoffs"
+    mkdir -- "$T/shop"
+    f="$(cd "$T/shop" && HANDOFF_DIR="$H" HANDOFF_NOW="$NOW" bash "$SCRIPT" new x)" ||
+        fail "new exited $?"
+    expect_eq "stdout of new" "$f" "$H/$NOW-shop-x.md"
+    skill_check_into "$T" "$f"
+    expect_eq "exit status on the skeleton" "$(cat -- "$T/rc")" 1
+    expect_eq "stderr on the skeleton" "$(cat -- "$T/err")" "10 unfilled section(s)"
+    sed -i "s/$MARKER/None./" -- "$f"
+    skill_check_into "$T" "$f"
+    expect_eq "exit status when filled" "$(cat -- "$T/rc")" 0
+    expect_eq "stdout when filled" "$(cat -- "$T/out")" ok
+    expect_eq "stderr when filled" "$(cat -- "$T/err")" ""
+}
+
 # --- Runner ---
 
 failures=0
@@ -527,7 +599,8 @@ for name in new_in_repo new_outside_repo new_same_minute_clash \
     check_filled_passes check_missing_parts usage_errors \
     new_in_ignored_folder check_empty_section check_fenced_heading \
     check_unreadable_file new_in_refused_repository \
-    skill_command_topic_quoted; do
+    skill_command_topic_quoted check_unclosed_fence \
+    skill_command_path_quoted; do
     run "$name"
 done
 

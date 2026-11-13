@@ -5,13 +5,17 @@
 #       Creates YYYY-MM-DD-HHMM-<project>-<topic>.md in the handoff folder,
 #       never over an existing file, with a header read from the live
 #       checkout and a <!-- FILL --> marker under every section heading, and
-#       prints the file's absolute path. In a repository git refuses to
-#       read, it writes nothing and exits 1 with git's message.
+#       prints the file's absolute path. Where git is missing, or fails
+#       with anything other than "not a git repository" when asked whether
+#       the folder is in a repository (a repository it refuses to read, for
+#       one), it writes nothing and exits 1 with the shell's or git's
+#       message.
 #   handoff.sh check <file>
 #       Prints ok when no marker is left, every section heading is there
-#       outside code fences with a non-blank line under it, and the snapshot
-#       notice is in place; otherwise prints one problem per line on stderr
-#       and exits 1.
+#       outside code fences with a non-blank line under it, every code fence
+#       is closed and the snapshot notice is in place; otherwise prints one
+#       problem per line on stderr and exits 1. A fence still open at the
+#       end of the file is reported with the line it opened on.
 #
 # Usage errors, a missing or unreadable file among them, exit 2.
 # HANDOFF_DIR replaces the folder (default ~/.agents/app/handoffs);
@@ -80,9 +84,9 @@ slug() { # text max fallback
 # from reading as pathspec magic.
 # Only git's "not a git repository" answer, read in the C locale because git
 # translates its messages, is kept off stderr. Any other failure, such as a
-# repository git refuses to read (its ownership or its format), ends the
-# script with git's message, since a header calling that folder no
-# repository would be untrue.
+# repository git refuses to read (its ownership or its format) or no git
+# installed, ends the script with git's or the shell's message, since a
+# header calling that folder no repository could be untrue.
 in_repository() {
     local err prefix top
     if ! err="$(LC_ALL=C git rev-parse --git-dir 2>&1 >/dev/null)"; then
@@ -189,12 +193,13 @@ cmd_check() { # <file>
     [ $# -eq 1 ] || usage_error 'check takes one file'
     [ -f "$1" ] || usage_error "no such file: $1"
     [ -r "$1" ] || usage_error "cannot read: $1"
-    local line fence='' unfilled=0 notice=false current=-1 i
+    local line lineno=0 fence='' fence_at=0 unfilled=0 notice=false current=-1 i
     # Indexed like SECTIONS: the heading was seen, and a non-blank line
     # (the marker counts) stood under it.
     local -a found=() filled=() problems=()
 
     while IFS= read -r line || [ -n "$line" ]; do
+        lineno=$((lineno + 1))
         if [[ $line == *"$MARKER"* ]]; then unfilled=$((unfilled + 1)); fi
         if [[ $line == "$NOTICE_START"* ]]; then notice=true; fi
         if [ -z "$fence" ] && [[ $line =~ $HEADING_RE ]]; then
@@ -212,6 +217,7 @@ cmd_check() { # <file>
         if [[ $line =~ $FENCE_RE ]]; then
             if [ -z "$fence" ]; then
                 fence="${BASH_REMATCH[1]}"
+                fence_at=$lineno
             elif [[ ${BASH_REMATCH[1]} == "$fence"* && ${BASH_REMATCH[2]} != *[![:space:]]* ]]; then
                 fence=''
             fi
@@ -220,6 +226,10 @@ cmd_check() { # <file>
     done <"$1"
 
     if [ "$unfilled" -gt 0 ]; then problems+=("$unfilled unfilled section(s)"); fi
+    # Named before the sections it hides, so the cause is read first.
+    if [ -n "$fence" ]; then
+        problems+=("unclosed code fence: line $fence_at (the rest of the file reads as code)")
+    fi
     for i in "${!SECTIONS[@]}"; do
         if [ -z "${found[i]-}" ]; then
             problems+=("missing section: ${SECTIONS[i]}")
