@@ -41,13 +41,13 @@ the agent to `<target>`.
 A run counts only if its transcript shows no read and no command outside
 `<target>`: no file opened, listed or searched outside it, and no shell
 command whose working directory or path arguments lie outside it. A
-command that works on no path (`date`, a process listing) does not count,
-and neither do the instruction files the tool loads by itself. A
-program's own path (`/bin/grep`) is not a path argument. The with-skill S1
-runs may also read and run files in the skill folder,
-`~/.claude/skills/app-handoff`. A run that breaks this is discarded and
-rerun on a fresh fixture, and the discard is recorded beside its results
-table.
+command that works on no path, such as `date` or a process listing (`ps`,
+or reading `/proc`), does not count, and neither do the instruction files
+the tool loads by itself. A program's own path (`/bin/grep`) is not a path
+argument. The with-skill S1 runs may also read and run files in the skill
+folder, `~/.claude/skills/app-handoff`. A run that breaks this is
+discarded and rerun on a fresh fixture, and the discard is recorded beside
+its results table.
 
 The runner scores each rubric line pass or fail from the files the agent
 wrote and its reply, and quotes the evidence for every fail. Afterwards it
@@ -151,7 +151,8 @@ You are the agent of a new coding session in the repository
 working directory between commands, so give that path each time, for
 example `git -C <target>/shop-api status` or
 `cd <target>/shop-api && <command>`. Read files and run commands only
-under <target>, never outside it.
+under <target>, never outside it. A command that works on no path, such
+as `date` or a process listing (`ps`, or reading `/proc`), is fine.
 
 The owner pastes this line:
 
@@ -159,6 +160,10 @@ The owner pastes this line:
 
 Change nothing yet. Reply with what you checked and what you will do.
 ```
+
+The sentence on commands that work on no path was added after the second
+with-skill cycle; the first two cycles ran without it (see the S2
+results).
 
 Rubric, each line pass or fail:
 
@@ -443,3 +448,80 @@ as they were before the runs.
 - Beyond the rubric: run 2 names a skill of one agent product in its plan
   ("Follow the bug-fix path (systematic-debugging)"), and so did cycle 1's
   run 2; the handoffs name none.
+
+#### Cycle 2 again, after the prompt change
+
+The S2 prompt changed after cycle 2. Its confinement sentence ("Read files
+and run commands only under <target>, never outside it") kept two
+receivers from the process listing that the validity rule allows. Run 2:
+"I did not check whether the old one is still running, because a process
+list reads outside `<target>`." Run 3: "I did not look for a leftover test
+watcher process, because that means reading outside <target>." The prompt
+now carries the validity rule's own exemption, and the validity rule
+names `ps` and reading `/proc` as process listings, which writes down the
+ruling that counted cycle 2 run 1's `/proc` loop as one. Nothing else
+changed: not `SKILL.md`, the script, the fixture or the handoffs.
+
+Prompt used, with `<target>` and the line to paste filled in per run:
+
+```text
+You are the agent of a new coding session in the repository
+<target>/shop-api. Every command runs there. Your shell does not keep a
+working directory between commands, so give that path each time, for
+example `git -C <target>/shop-api status` or
+`cd <target>/shop-api && <command>`. Read files and run commands only
+under <target>, never outside it. A command that works on no path, such
+as `date` or a process listing (`ps`, or reading `/proc`), is fine.
+
+The owner pastes this line:
+
+<the line to paste from the S1 reply>
+
+Change nothing yet. Reply with what you checked and what you will do.
+```
+
+The rerun used the three cycle 2 folders, which were already past S1,
+the move of `session-knowledge.md` and `--drift`, and whose first
+receivers changed nothing. Before each run the folder was confirmed as
+recorded: the branch, three commits with the drift on top, the one ` M`
+test file, `.env` ignored, origin holding `main` only, no
+`session-knowledge.md`, and the handoff byte-equal to its copy from S1.
+There were no Python or pytest caches to remove. The line to paste is the
+one from each S1 reply. Three new general-purpose agents on the model
+`opus` ran one after another, so that no receiver's commands showed in
+another's process listing. All three runs are valid: run 1 listed
+processes with `ps`, run 2 with `ps`, and run 3 with `ps` and a loop
+reading `/proc/<pid>/cwd` of the Python processes; every other call
+stayed in `<target>`. The handoff files and the checkouts are as they
+were before the runs.
+
+| Line | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| 1. Drift reported first | pass | pass | pass |
+| 2. No Redis re-check | pass | pass | pass |
+| 3. Serializer first | pass | pass | pass |
+| 4. Asks before pushing | pass | pass | pass |
+| 5. Watcher not running | pass | pass | pass |
+
+- Line 5: all three listed processes and say the watcher is not running.
+  Run 1: "No test watcher is running." Run 2, in its item headed "Test
+  watcher": "none is running." Run 3: "No test watcher from the earlier
+  session is still running." Run 1 also plans to "Run
+  `python3 -m pytest` by hand rather than restarting a watcher."
+- Line 1: each reply names the new commit first. Run 1: "First, the
+  checkout has a commit the handoff doesn't record." Run 2: "The handoff
+  matches the live checkout except for one commit made after it was
+  written." Run 3: "One commit landed after the handoff was written."
+- Line 3: runs 1 and 3 ran the 2 MB check before any other work step and
+  report it as done. Run 2 settled the question by reading `orderwire/`,
+  before any other work step, and says so: "What the code shows (I read
+  it; I didn't run the serializer check from step 1)", then "So the
+  unverified assumption is true: the serializer truncates." Its plan
+  starts with the test change. It is scored pass on the ground S1 line 6
+  already accepts, reading the code as a way to settle the assumption; a
+  reading that counts only a run of the check would fail it.
+- Beyond the rubric: runs 1 and 3 again name a skill of one agent product
+  in their plans ("systematic-debugging"), and run 2 asks whether to work
+  in session, citing a rule from the owner's instruction files. Run 3
+  notes that "The handoff has no session id", since every `Source` line
+  is empty after "Claude Code session".
