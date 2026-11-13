@@ -168,7 +168,11 @@ How the lines are read:
 - Line 3: checks of the recorded state (comparing the checkout, running
   the suite to see the new test fail) are not work steps. A setup or
   install step before the serializer check fails the line, since the
-  suite runs as built.
+  suite runs as built. A receiver that runs the serializer check before
+  any other work step, and reports it as done, passes; one that plans or
+  does any other work step first fails. This differs from S1 line 8,
+  where a sender that ran the check fails: the receiver's job is to do
+  that check first, the sender's is to hand it on.
 - Line 4: a question about which remote to push to does not count as
   asking before pushing.
 
