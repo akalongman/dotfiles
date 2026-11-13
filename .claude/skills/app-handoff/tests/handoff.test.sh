@@ -606,8 +606,9 @@ case_check_backtick_info_string() { # tree
     case1_repo "$T/proj"
     f="$(new_in "$T/proj" "$T" Queue Worker)" || fail "new exited $?"
     sed -i "s/$MARKER/None./" -- "$f"
-    # A run of backticks with another backtick after it on its line is
-    # inline code, not a fence: it hides nothing and leaves nothing open.
+    # A run of backticks with another backtick after it on its line is not a
+    # fence (CommonMark reads that line as text): it hides nothing and leaves
+    # nothing open.
     # shellcheck disable=SC2016 # the backticks are markdown, not commands
     for line in '``` a`b' '```a```'; do
         cp -- "$f" "$T/info.md"
@@ -629,6 +630,55 @@ case_check_backtick_info_string() { # tree
     check_into "$T" "$T/info.md"
     expect_eq "exit status with [~~~ a\`b]" "$(cat -- "$T/rc")" 1
     expect_eq "stderr with [~~~ a\`b]" "$(cat -- "$T/err")" \
+        "unclosed code fence: line $n (the rest of the file reads as code)"$'\n'"$hidden"
+}
+
+case_check_indented_opening_fence() { # tree
+    local T="$1" f lines n hidden
+    local -a fenced=()
+    case1_repo "$T/proj"
+    f="$(new_in "$T/proj" "$T" Queue Worker)" || fail "new exited $?"
+    sed -i "s/$MARKER/None./" -- "$f"
+    sed -i '/^## Ruled out$/d' -- "$f"
+    # As in case 15, Ruled out is left only as a heading quoted under
+    # Decisions. A run indented one to three spaces (a fence in a numbered
+    # step is indented three) opens a fence when one at the start of the
+    # line would, and the quoted heading is code.
+    # shellcheck disable=SC2016 # the backticks are fence lines, not commands
+    for lines in '   ```bash|## Ruled out|   ```' \
+        ' ~~~ a`b|## Ruled out|  ~~~' '  ````|   ```|## Ruled out|````'; do
+        IFS='|' read -ra fenced <<<"$lines"
+        cp -- "$f" "$T/fenced.md"
+        insert_after "$T/fenced.md" '## Decisions' '' "${fenced[@]}"
+        check_into "$T" "$T/fenced.md"
+        expect_eq "exit status with [$lines]" "$(cat -- "$T/rc")" 1
+        expect_eq "stderr with [$lines]" "$(cat -- "$T/err")" "missing section: Ruled out"
+    done
+    # Four spaces, or a tab, are too much indentation, and a run of backticks
+    # with another backtick after it is text however indented: these open no
+    # fence, so the quoted heading counts.
+    # shellcheck disable=SC2016 # the backticks are fence lines, not commands
+    for lines in '    ```|## Ruled out|    ```' $'\t```|## Ruled out|\t```' \
+        '   ``` a`b|## Ruled out'; do
+        IFS='|' read -ra fenced <<<"$lines"
+        cp -- "$f" "$T/fenced.md"
+        insert_after "$T/fenced.md" '## Decisions' '' "${fenced[@]}"
+        check_into "$T" "$T/fenced.md"
+        expect_eq "exit status with [$lines]" "$(cat -- "$T/rc")" 0
+        expect_eq "stdout with [$lines]" "$(cat -- "$T/out")" ok
+        expect_eq "stderr with [$lines]" "$(cat -- "$T/err")" ""
+    done
+    # An indented run never closed is reported with the line it opened on.
+    hidden="$(printf 'missing section: %s\n' 'Ruled out' 'Facts established' \
+        "Owner's instructions from this session" 'Open questions' 'Next steps' \
+        'In flight' 'Pointers')"
+    n=$(($(grep -n -x -F -e '## Decisions' -- "$f" | cut -d: -f1) + 2))
+    cp -- "$f" "$T/fenced.md"
+    # shellcheck disable=SC2016 # the backticks are a fence line, not a command
+    insert_after "$T/fenced.md" '## Decisions' '' '   ```bash'
+    check_into "$T" "$T/fenced.md"
+    expect_eq "exit status with an indented run left open" "$(cat -- "$T/rc")" 1
+    expect_eq "stderr with an indented run left open" "$(cat -- "$T/err")" \
         "unclosed code fence: line $n (the rest of the file reads as code)"$'\n'"$hidden"
 }
 
@@ -666,7 +716,7 @@ for name in new_in_repo new_outside_repo new_same_minute_clash \
     check_unreadable_file new_in_refused_repository \
     skill_command_topic_quoted check_unclosed_fence \
     skill_command_path_quoted check_indented_closing_fence \
-    check_backtick_info_string; do
+    check_backtick_info_string check_indented_opening_fence; do
     run "$name"
 done
 

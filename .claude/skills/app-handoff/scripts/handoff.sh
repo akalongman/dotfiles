@@ -46,14 +46,14 @@ readonly SECTIONS=(
 # Uncommitted paths listed in the header; the rest are only counted.
 readonly PATHS_SHOWN=50
 # A level 1 or 2 heading ends the section above it; a level 3 heading is
-# part of it. A code fence opens on three or more backticks or tildes at
-# the start of a line, unless a run of backticks has another backtick
-# after it on the line (that is inline code). It closes on a run of its own
-# character at least as long, indented up to three spaces, with nothing but
-# white space after it.
+# part of it. A code fence opens on three or more backticks or tildes
+# indented up to three spaces, unless a run of backticks has another
+# backtick after it on the line (CommonMark reads that line as text). It
+# closes on a run of its own character at least as long, indented up to
+# three spaces, with nothing but white space after it. A tab before a run
+# indents it four columns or more, too far to open or close a fence.
 readonly HEADING_RE='^##?( |$)'
-readonly FENCE_RE='^(`{3,}|~{3,})(.*)$'
-readonly CLOSING_FENCE_RE='^ {0,3}(`{3,}|~{3,})(.*)$'
+readonly FENCE_RE='^ {0,3}(`{3,}|~{3,})(.*)$'
 
 usage_error() { # message
     printf 'handoff.sh: %s\n%s\n' "$1" "$USAGE" >&2
@@ -217,17 +217,17 @@ cmd_check() { # <file>
             done
             continue
         fi
-        # A run of backticks with another backtick after it opens no fence.
-        # A fence closes on a run of its own character at least as long as
-        # the one that opened it, indented up to three spaces, with nothing
-        # but white space after it.
+        # A run indented up to three spaces opens a fence, unless it is
+        # backticks with another backtick after it. A fence closes on a run
+        # of its own character at least as long as the one that opened it,
+        # indented up to three spaces, with nothing but white space after it.
         if [ -z "$fence" ]; then
             if [[ $line =~ $FENCE_RE ]] &&
                 [[ ${BASH_REMATCH[1]} == '~'* || ${BASH_REMATCH[2]} != *'`'* ]]; then
                 fence="${BASH_REMATCH[1]}"
                 fence_at=$lineno
             fi
-        elif [[ $line =~ $CLOSING_FENCE_RE ]] &&
+        elif [[ $line =~ $FENCE_RE ]] &&
             [[ ${BASH_REMATCH[1]} == "$fence"* && ${BASH_REMATCH[2]} != *[![:space:]]* ]]; then
             fence=''
         fi
