@@ -5,15 +5,18 @@
 #       Creates YYYY-MM-DD-HHMM-<project>-<topic>.md in the handoff folder,
 #       never over an existing file, with a header read from the live
 #       checkout and a <!-- FILL --> marker under every section heading, and
-#       prints the file's absolute path.
+#       prints the file's absolute path. In a repository git refuses to
+#       read, it writes nothing and exits 1 with git's message.
 #   handoff.sh check <file>
-#       Prints ok when no marker is left, every section heading is there and
-#       the snapshot notice is in place; otherwise prints one problem per
-#       line on stderr and exits 1.
+#       Prints ok when no marker is left, every section heading is there
+#       outside code fences with a non-blank line under it, and the snapshot
+#       notice is in place; otherwise prints one problem per line on stderr
+#       and exits 1.
 #
-# Usage errors exit 2. HANDOFF_DIR replaces the folder (default
-# ~/.agents/app/handoffs); HANDOFF_NOW (YYYY-MM-DD-HHMM, tests only)
-# replaces the clock for the file name and the Written line.
+# Usage errors, a missing or unreadable file among them, exit 2.
+# HANDOFF_DIR replaces the folder (default ~/.agents/app/handoffs);
+# HANDOFF_NOW (YYYY-MM-DD-HHMM, tests only) replaces the clock for the
+# file name and the Written line.
 
 set -euo pipefail
 
@@ -38,6 +41,10 @@ readonly SECTIONS=(
 )
 # Uncommitted paths listed in the header; the rest are only counted.
 readonly PATHS_SHOWN=50
+# A level 1 or 2 heading ends the section above it; a level 3 heading is
+# part of it. A code fence opens on three or more backticks or tildes.
+readonly HEADING_RE='^##?( |$)'
+readonly FENCE_RE='^(`{3,}|~{3,})(.*)$'
 
 usage_error() { # message
     printf 'handoff.sh: %s\n%s\n' "$1" "$USAGE" >&2
@@ -71,9 +78,18 @@ slug() { # text max fallback
 # from the top as ./<path> with no trailing slash: with the slash a "dir/*"
 # pattern would match the folder itself, and the ./ keeps a leading colon
 # from reading as pathspec magic.
+# Only git's "not a git repository" answer, read in the C locale because git
+# translates its messages, is kept off stderr. Any other failure, such as a
+# repository git refuses to read (its ownership or its format), ends the
+# script with git's message, since a header calling that folder no
+# repository would be untrue.
 in_repository() {
-    local prefix top
-    [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || return 1
+    local err prefix top
+    if ! err="$(LC_ALL=C git rev-parse --git-dir 2>&1 >/dev/null)"; then
+        if [[ $err == *'not a git repository'* ]]; then return 1; fi
+        die "$err"
+    fi
+    [ "$(git rev-parse --is-inside-work-tree)" = true ] || return 1
     prefix="$(git rev-parse --show-prefix)"
     [ -n "$prefix" ] || return 0
     top="$(git rev-parse --show-toplevel)"
@@ -172,20 +188,44 @@ cmd_new() { # [--source <text>] [<topic words>...]
 cmd_check() { # <file>
     [ $# -eq 1 ] || usage_error 'check takes one file'
     [ -f "$1" ] || usage_error "no such file: $1"
-    local line section unfilled=0 notice=false
-    local -A headings=()
-    local -a problems=()
+    [ -r "$1" ] || usage_error "cannot read: $1"
+    local line fence='' unfilled=0 notice=false current=-1 i
+    # Indexed like SECTIONS: the heading was seen, and a non-blank line
+    # (the marker counts) stood under it.
+    local -a found=() filled=() problems=()
 
     while IFS= read -r line || [ -n "$line" ]; do
         if [[ $line == *"$MARKER"* ]]; then unfilled=$((unfilled + 1)); fi
-        # A bare "## " would be an empty key, which bash refuses.
-        if [[ $line == '## '?* ]]; then headings["${line:3}"]=1; fi
         if [[ $line == "$NOTICE_START"* ]]; then notice=true; fi
+        if [ -z "$fence" ] && [[ $line =~ $HEADING_RE ]]; then
+            current=-1
+            for i in "${!SECTIONS[@]}"; do
+                if [ "$line" = "## ${SECTIONS[i]}" ]; then
+                    current=$i
+                    found[i]=1
+                fi
+            done
+            continue
+        fi
+        # A fence closes on a run of its own character at least as long as
+        # the one that opened it, with nothing after it.
+        if [[ $line =~ $FENCE_RE ]]; then
+            if [ -z "$fence" ]; then
+                fence="${BASH_REMATCH[1]}"
+            elif [[ ${BASH_REMATCH[1]} == "$fence"* && ${BASH_REMATCH[2]} != *[![:space:]]* ]]; then
+                fence=''
+            fi
+        fi
+        if [ "$current" -ge 0 ] && [[ $line == *[![:space:]]* ]]; then filled[current]=1; fi
     done <"$1"
 
     if [ "$unfilled" -gt 0 ]; then problems+=("$unfilled unfilled section(s)"); fi
-    for section in "${SECTIONS[@]}"; do
-        if [ -z "${headings[$section]-}" ]; then problems+=("missing section: $section"); fi
+    for i in "${!SECTIONS[@]}"; do
+        if [ -z "${found[i]-}" ]; then
+            problems+=("missing section: ${SECTIONS[i]}")
+        elif [ -z "${filled[i]-}" ]; then
+            problems+=("empty section: ${SECTIONS[i]}")
+        fi
     done
     if ! "$notice"; then problems+=('missing snapshot notice'); fi
 

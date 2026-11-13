@@ -6,9 +6,9 @@
 #       two commits, one modified test file and an ignored .env, whose
 #       origin is the bare <target>/shop-api.git holding main only, and
 #       <target>/session-knowledge.md, the memory of the session that
-#       writes the handoff. The suite runs as built, with python3 -m pytest
-#       and nothing installed, and the modified test fails as the memory
-#       says.
+#       writes the handoff. The suite runs as built with python3 -m pytest,
+#       given python3 with pytest and nothing else installed, and the
+#       modified test fails as the memory says.
 #   scenario-fixture.sh --drift <target>
 #       Adds one commit to <target>/shop-api on fix/queue-retries that
 #       leaves the modified test file alone, so the checkout no longer

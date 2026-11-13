@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for scripts/handoff.sh.
+# Tests for scripts/handoff.sh and for the command SKILL.md runs it with.
 #
 # Every case runs the script as a subprocess in its own tree under a
 # temporary directory, with HANDOFF_DIR set to the tree's not yet existing
@@ -99,7 +99,35 @@ case1_repo() { # dir
     printf 'new\n' >"$1/b.txt"
 }
 
-# The whole of case 1's handoff: the skeleton the brief pins.
+# Inserts <lines> after every line of <file> that equals <after>.
+insert_after() { # file after lines...
+    local file="$1" after="$2"
+    shift 2
+    awk -v after="$after" -v text="$(printf '%s\n' "$@")" \
+        '{ print } $0 == after { print text }' "$file" >"$file.new"
+    mv -- "$file.new" "$file"
+}
+
+# Runs the step 2 command of SKILL.md in <dir> for tree <t>, printing what
+# it prints. <topic> is written in as the skill says, each ' as '\'', the
+# session id is abc, and HOME is a folder whose .claude/skills/app-handoff
+# is the skill under test, so the line runs as written.
+skill_new_in() { # dir t topic
+    local dir="$1" t="$2" cmd topic
+    cmd="$(sed -n 's/^ *\(bash ~\/\.claude\/skills\/app-handoff\/scripts\/handoff\.sh new .*\)$/\1/p' \
+        -- "$HERE/../SKILL.md")"
+    [[ -n $cmd && $cmd != *$'\n'* ]] ||
+        fail "expected one handoff.sh new command in SKILL.md, got [$cmd]"
+    [[ $cmd == *'<topic>'* ]] || fail "no <topic> in the SKILL.md command [$cmd]"
+    topic="${3//\'/\'\\\'\'}"
+    cmd="${cmd//'<topic>'/"$topic"}"
+    mkdir -p -- "$t/home/.claude/skills"
+    ln -sfn -- "$HERE/.." "$t/home/.claude/skills/app-handoff"
+    (cd "$dir" && HOME="$t/home" HANDOFF_DIR="$t/app/handoffs" HANDOFF_NOW="$NOW" \
+        CLAUDE_SESSION_ID=abc bash -c "$cmd")
+}
+
+# The whole of case 1's handoff: the skeleton the script must write.
 case1_expected() { # repo short-hash
     cat <<EOF
 # Handoff: Queue Worker
@@ -371,6 +399,102 @@ case_new_in_ignored_folder() { # tree
     expect_line "$out" "- Repository: $R"
 }
 
+case_check_empty_section() { # tree
+    local T="$1" f
+    case1_repo "$T/proj"
+    f="$(new_in "$T/proj" "$T" Queue Worker)" || fail "new exited $?"
+    sed -i "s/$MARKER/None./" -- "$f"
+    # Markers deleted instead of filled: Decisions keeps a line of spaces
+    # only, and Pointers, the last section, nothing up to the end of the file.
+    cp -- "$f" "$T/empty.md"
+    sed -i -e '/^## Decisions$/,/^## /s/^None\.$/   /' \
+        -e '/^## Pointers$/,${/^None\.$/d}' -- "$T/empty.md"
+    check_into "$T" "$T/empty.md"
+    expect_eq "exit status with empty sections" "$(cat -- "$T/rc")" 1
+    expect_eq "stderr with empty sections" "$(cat -- "$T/err")" \
+        "$(printf '%s\n' 'empty section: Decisions' 'empty section: Pointers')"
+    expect_eq "stdout with empty sections" "$(cat -- "$T/out")" ""
+    # A level 3 heading belongs to its section, as when State goes by file.
+    cp -- "$f" "$T/subheading.md"
+    sed -i '/^## State$/,/^## /s/^None\.$/### a.txt\n\nHalf done./' -- "$T/subheading.md"
+    check_into "$T" "$T/subheading.md"
+    expect_eq "exit status with a level 3 heading" "$(cat -- "$T/rc")" 0
+    expect_eq "stderr with a level 3 heading" "$(cat -- "$T/err")" ""
+}
+
+case_check_fenced_heading() { # tree
+    local T="$1" f lines
+    local -a fenced=()
+    case1_repo "$T/proj"
+    f="$(new_in "$T/proj" "$T" Queue Worker)" || fail "new exited $?"
+    sed -i "s/$MARKER/None./" -- "$f"
+    sed -i '/^## Ruled out$/d' -- "$f"
+    # Ruled out is left only as a heading quoted in a code fence under
+    # Decisions. A fence closes only on a run of its own character at least
+    # as long, alone on its line; the headings after it count again.
+    # shellcheck disable=SC2016 # the backticks are fence lines, not commands
+    for lines in '```markdown|## Ruled out|```' '~~~|## Ruled out|~~~' \
+        '````markdown|```text|## Ruled out|```|````' \
+        '~~~|```|## Ruled out|```|~~~' '```|```python|## Ruled out|```'; do
+        IFS='|' read -ra fenced <<<"$lines"
+        cp -- "$f" "$T/fenced.md"
+        insert_after "$T/fenced.md" '## Decisions' '' "${fenced[@]}"
+        check_into "$T" "$T/fenced.md"
+        expect_eq "exit status with [$lines]" "$(cat -- "$T/rc")" 1
+        expect_eq "stderr with [$lines]" "$(cat -- "$T/err")" "missing section: Ruled out"
+    done
+}
+
+case_check_unreadable_file() { # tree
+    local T="$1" f
+    case1_repo "$T/proj"
+    f="$(new_in "$T/proj" "$T" Queue Worker)" || fail "new exited $?"
+    sed -i "s/$MARKER/None./" -- "$f"
+    chmod 000 -- "$f"
+    [ ! -r "$f" ] || fail "cannot make a file unreadable here (running as root?)"
+    expect_usage_error "$T" check "$f"
+}
+
+case_new_in_refused_repository() { # tree
+    local T="$1" R rc
+    # A repository format newer than git reads: git refuses the repository
+    # with a message other than "not a git repository".
+    R="$T/proj"
+    repo_with_commit "$R"
+    git -C "$R" config core.repositoryformatversion 99
+    (cd "$R" && handoff "$T" new x) >"$T/out" 2>"$T/err" && rc=0 || rc=$?
+    expect_eq "exit status in a refused repository" "$rc" 1
+    expect_eq "stdout in a refused repository" "$(cat -- "$T/out")" ""
+    grep -qF -e 'Expected git repo version' -- "$T/err" ||
+        fail "no git message on stderr in a refused repository: [$(cat -- "$T/err")]"
+    [ ! -e "$T/app" ] || fail "a refused repository created $T/app"
+    # Outside any repository git's own answer stays off stderr.
+    mkdir -- "$T/plain"
+    (cd "$T/plain" && handoff "$T" new x) >"$T/out" 2>"$T/err" && rc=0 || rc=$?
+    expect_eq "exit status outside a repository" "$rc" 0
+    expect_eq "stderr outside a repository" "$(cat -- "$T/err")" ""
+    expect_line "$(cat -- "$T/out")" "- Repository: not a git repository"
+}
+
+case_skill_command_topic_quoted() { # tree
+    local T="$1" D out topic
+    D="$T/shop"
+    mkdir -- "$D"
+    out="$(skill_new_in "$D" "$T" "owner's export")" || fail "the command exited $?"
+    expect_eq "stdout with an apostrophe" "$out" "$T/app/handoffs/$NOW-shop-owner-s-export.md"
+    expect_line "$out" "# Handoff: owner's export"
+    expect_line "$out" "- Source: Claude Code session abc"
+    # shellcheck disable=SC2016 # the topic must reach the shell unexpanded
+    topic='$(touch pwned) `touch pwned2` $HOME & "x"'
+    out="$(skill_new_in "$D" "$T" "$topic")" || fail "the command exited $?"
+    expect_line "$out" "# Handoff: $topic"
+    if [ -e "$D/pwned" ] || [ -e "$D/pwned2" ]; then fail "the topic ran a command"; fi
+    # No topic gives what new gives with no topic argument.
+    out="$(skill_new_in "$D" "$T" '')" || fail "the command exited $?"
+    expect_eq "stdout with no topic" "$out" "$T/app/handoffs/$NOW-shop-handoff.md"
+    expect_line "$out" "# Handoff: untitled"
+}
+
 # --- Runner ---
 
 failures=0
@@ -401,7 +525,9 @@ for name in new_in_repo new_outside_repo new_same_minute_clash \
     new_topic_sanitized new_in_linked_worktree new_no_commits_and_detached \
     new_many_uncommitted new_source check_fresh_skeleton_fails \
     check_filled_passes check_missing_parts usage_errors \
-    new_in_ignored_folder; do
+    new_in_ignored_folder check_empty_section check_fenced_heading \
+    check_unreadable_file new_in_refused_repository \
+    skill_command_topic_quoted; do
     run "$name"
 done
 

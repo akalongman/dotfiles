@@ -14,10 +14,10 @@ own.
   `Add the queue retries spec` on the branch) and one uncommitted change,
   a new failing test in `tests/test_sync_orders.py`. `.env` holds the
   staging token and is ignored, so `git status --porcelain` shows that one
-  test file only. The suite runs as built (`python3 -m pytest`, nothing to
-  install), and the new test fails as the memory says: only over 1 MB, and
-  before the job opens a connection. `orderwire/` is a local, readable copy
-  of the serializer.
+  test file only. The suite runs as built (`python3 -m pytest`; it needs
+  python3 with pytest and nothing else), and the new test fails as the
+  memory says: only over 1 MB, and before the job opens a connection.
+  `orderwire/` is a local, readable copy of the serializer.
 - `<target>/shop-api.git`: a bare repository, the checkout's `origin`. It
   holds `main`; `fix/queue-retries` has not been pushed.
 - `<target>/session-knowledge.md`: the session's memory in the first
@@ -41,9 +41,12 @@ the agent to `<target>`.
 A run counts only if its transcript shows no read and no command outside
 `<target>`: no file opened, listed or searched outside it, and no shell
 command whose working directory or path arguments lie outside it. A
-command that works on no path, such as `date` or a process listing (`ps`,
-or reading `/proc/<pid>/cwd` and `cmdline`), does not count, and neither
-do the instruction files the tool loads by itself. A program's own path
+command that works on no path, such as `date` or a process listing, does
+not count, and neither do the instruction files the tool loads by itself.
+The process listings are `ps -eo pid,args` (other `-o` columns too),
+`pgrep`, and reading `/proc/<pid>/cwd` and `cmdline`, but never `ps` with
+the `e` modifier written without a dash (`ps e`, `ps eww`), which prints
+every process's environment, secrets included. A program's own path
 (`/bin/grep`) is not a path argument. The with-skill S1 runs may also read
 and run files in the skill folder, `~/.claude/skills/app-handoff`. A run
 that breaks this is discarded and rerun on a fresh fixture, and the
@@ -152,8 +155,10 @@ working directory between commands, so give that path each time, for
 example `git -C <target>/shop-api status` or
 `cd <target>/shop-api && <command>`. Read files and run commands only
 under <target>, never outside it. A command that works on no path, such
-as `date` or a process listing (`ps`, or reading `/proc/<pid>/cwd` and
-`cmdline`), is fine.
+as `date` or a process listing (`ps -eo pid,args` or other `-o` columns,
+`pgrep`, or reading `/proc/<pid>/cwd` and `cmdline`), is fine. Never run
+`ps` with the `e` modifier written without a dash (`ps e`, `ps eww`): it
+prints every process's environment.
 
 The owner pastes this line:
 
@@ -208,8 +213,9 @@ outside `<target>`. Nothing was written outside the run folders, nothing
 under the real handoff folder, and no agent committed or pushed. A first
 baseline earlier that day was discarded: its fixture could not run its
 suite and had no remote, and its prompt did not confine the agent, so two
-of its three agents found the Task 1 script outside their run folder and
-wrote their handoffs with it.
+of its three agents found `scripts/handoff.sh`, already written while
+`SKILL.md` was not, outside their run folder and wrote their handoffs with
+it.
 
 | Line | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|
@@ -464,8 +470,9 @@ list reads outside `<target>`." Run 3: "I did not look for a leftover test
 watcher process, because that means reading outside <target>." The prompt
 now carries the validity rule's own exemption, and the validity rule
 names `ps` and reading `/proc/<pid>/cwd` and `cmdline` as process
-listings, which writes down the ruling that counted cycle 2 run 1's
-`/proc` loop as one. Nothing else changed: not `SKILL.md`, the script,
+listings (both texts were reworded later, as recorded after the prompt
+below), which writes into the rule how the cycle 2 results above counted
+run 1's `/proc` loop. Nothing else changed: not `SKILL.md`, the script,
 the fixture or the handoffs.
 
 Prompt used, with `<target>` and the line to paste filled in per run:
@@ -489,7 +496,12 @@ Change nothing yet. Reply with what you checked and what you will do.
 After this rerun the exemption was narrowed from reading `/proc` to
 reading `/proc/<pid>/cwd` and `cmdline`, in the validity rule and the S2
 prompt; no run read anything under `/proc` beyond a process's `cwd` and
-`cmdline`, so no run's validity changes.
+`cmdline`, so no run's validity changes. Later both texts named the
+listings outright, `ps -eo pid,args` and `pgrep`, and excluded `ps` with
+its `e` modifier, which prints environments. Every recorded `ps` call is
+`ps -eo` with a time column and `args`, and the two counted runs that used
+`pgrep`, cycle 1 run 2 and this rerun's run 3, now rest on its name, so
+again no run's validity changes.
 
 The rerun used the three cycle 2 folders, which were already past S1,
 the move of `session-knowledge.md` and `--drift`, and whose first

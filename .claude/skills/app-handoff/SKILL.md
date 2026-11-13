@@ -13,10 +13,10 @@ conversation. Write it while this session still knows all it concluded.
 ## Steps
 
 1. Choose the topic: the argument, else two to four words naming the work.
-2. In the working directory of the work being handed off, run:
-
+2. In the working directory of the work being handed off, run this, with
+   each `'` in the topic written as `'\''`:
    ```bash
-   bash ~/.claude/skills/app-handoff/scripts/handoff.sh new --source "Claude Code session ${CLAUDE_SESSION_ID}" <topic>
+   bash ~/.claude/skills/app-handoff/scripts/handoff.sh new --source "Claude Code session ${CLAUDE_SESSION_ID}" '<topic>'
    ```
 
    It creates the file, fills the header and prints the file's absolute path.
