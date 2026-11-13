@@ -524,12 +524,11 @@ case_check_unclosed_fence() { # tree
         "Owner's instructions from this session" 'Open questions' 'Next steps' \
         'In flight' 'Pointers')"
     n=$(($(grep -n -x -F -e '## Decisions' -- "$f" | cut -d: -f1) + 2))
-    # A fence left open under Decisions: never closed, closed only by a
-    # shorter or an indented run, or opened by a line CommonMark would not
-    # take as a fence. The headings after it stay missing, and one more
-    # line names the fence.
+    # A fence left open under Decisions: never closed, or closed only by a
+    # shorter run. The headings after it stay missing, and one more line
+    # names the fence.
     # shellcheck disable=SC2016 # the backticks are fence lines, not commands
-    for lines in '```text' '````|```' '```|  ```' '``` a`b'; do
+    for lines in '```text' '````|```'; do
         IFS='|' read -ra opened <<<"$lines"
         cp -- "$f" "$T/open.md"
         insert_after "$T/open.md" '## Decisions' '' "${opened[@]}"
@@ -567,6 +566,72 @@ case_skill_command_path_quoted() { # tree
     expect_eq "stderr when filled" "$(cat -- "$T/err")" ""
 }
 
+case_check_indented_closing_fence() { # tree
+    local T="$1" f lines n hidden
+    local -a fenced=()
+    case1_repo "$T/proj"
+    f="$(new_in "$T/proj" "$T" Queue Worker)" || fail "new exited $?"
+    sed -i "s/$MARKER/None./" -- "$f"
+    sed -i '/^## Ruled out$/d' -- "$f"
+    # As in case 15, Ruled out is left only as a heading quoted in a code
+    # fence under Decisions. A run indented one to three spaces closes the
+    # fence when one at the start of the line would: its own character, at
+    # least as long, alone on its line.
+    # shellcheck disable=SC2016 # the backticks are fence lines, not commands
+    for lines in '```markdown|## Ruled out| ```' '~~~|## Ruled out|  ~~~' \
+        '````|  ```|## Ruled out|   `````' '```|  ~~~|  ``` x|## Ruled out|```'; do
+        IFS='|' read -ra fenced <<<"$lines"
+        cp -- "$f" "$T/fenced.md"
+        insert_after "$T/fenced.md" '## Decisions' '' "${fenced[@]}"
+        check_into "$T" "$T/fenced.md"
+        expect_eq "exit status with [$lines]" "$(cat -- "$T/rc")" 1
+        expect_eq "stderr with [$lines]" "$(cat -- "$T/err")" "missing section: Ruled out"
+    done
+    # Four spaces are too many: that run is a line of code, and the fence
+    # stays open to the end of the file.
+    hidden="$(printf 'missing section: %s\n' 'Ruled out' 'Facts established' \
+        "Owner's instructions from this session" 'Open questions' 'Next steps' \
+        'In flight' 'Pointers')"
+    n=$(($(grep -n -x -F -e '## Decisions' -- "$f" | cut -d: -f1) + 2))
+    cp -- "$f" "$T/fenced.md"
+    insert_after "$T/fenced.md" '## Decisions' '' '```' '## Ruled out' '    ```'
+    check_into "$T" "$T/fenced.md"
+    expect_eq "exit status with a run indented four spaces" "$(cat -- "$T/rc")" 1
+    expect_eq "stderr with a run indented four spaces" "$(cat -- "$T/err")" \
+        "unclosed code fence: line $n (the rest of the file reads as code)"$'\n'"$hidden"
+}
+
+case_check_backtick_info_string() { # tree
+    local T="$1" f line n hidden
+    case1_repo "$T/proj"
+    f="$(new_in "$T/proj" "$T" Queue Worker)" || fail "new exited $?"
+    sed -i "s/$MARKER/None./" -- "$f"
+    # A run of backticks with another backtick after it on its line is
+    # inline code, not a fence: it hides nothing and leaves nothing open.
+    # shellcheck disable=SC2016 # the backticks are markdown, not commands
+    for line in '``` a`b' '```a```'; do
+        cp -- "$f" "$T/info.md"
+        insert_after "$T/info.md" '## Decisions' '' "$line"
+        check_into "$T" "$T/info.md"
+        expect_eq "exit status with [$line]" "$(cat -- "$T/rc")" 0
+        expect_eq "stdout with [$line]" "$(cat -- "$T/out")" ok
+        expect_eq "stderr with [$line]" "$(cat -- "$T/err")" ""
+    done
+    # A run of tildes may have a backtick after it: it opens a fence, here
+    # one never closed.
+    hidden="$(printf 'missing section: %s\n' 'Ruled out' 'Facts established' \
+        "Owner's instructions from this session" 'Open questions' 'Next steps' \
+        'In flight' 'Pointers')"
+    n=$(($(grep -n -x -F -e '## Decisions' -- "$f" | cut -d: -f1) + 2))
+    cp -- "$f" "$T/info.md"
+    # shellcheck disable=SC2016 # the backtick is markdown, not a command
+    insert_after "$T/info.md" '## Decisions' '' '~~~ a`b'
+    check_into "$T" "$T/info.md"
+    expect_eq "exit status with [~~~ a\`b]" "$(cat -- "$T/rc")" 1
+    expect_eq "stderr with [~~~ a\`b]" "$(cat -- "$T/err")" \
+        "unclosed code fence: line $n (the rest of the file reads as code)"$'\n'"$hidden"
+}
+
 # --- Runner ---
 
 failures=0
@@ -600,7 +665,8 @@ for name in new_in_repo new_outside_repo new_same_minute_clash \
     new_in_ignored_folder check_empty_section check_fenced_heading \
     check_unreadable_file new_in_refused_repository \
     skill_command_topic_quoted check_unclosed_fence \
-    skill_command_path_quoted; do
+    skill_command_path_quoted check_indented_closing_fence \
+    check_backtick_info_string; do
     run "$name"
 done
 

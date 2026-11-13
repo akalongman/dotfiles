@@ -24,7 +24,7 @@ conversation. Write it while this session still knows all it concluded.
 3. Replace every `<!-- FILL -->` marker with its section's content (table
    below). Leave the header and the snapshot notice as the script wrote them.
 4. Run `bash ~/.claude/skills/app-handoff/scripts/handoff.sh check '<path>'`
-   (each `'` as `'\''`), fix what it reports, and repeat until it prints `ok`.
+   (each `'` in the path as `'\''`) until it prints `ok`, fixing what it reports.
 5. Reply in the shape under "The reply".
 6. Stop: do not start the next steps, compact the session or delete handoffs.
 
