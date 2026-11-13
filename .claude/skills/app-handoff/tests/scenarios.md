@@ -42,12 +42,12 @@ A run counts only if its transcript shows no read and no command outside
 `<target>`: no file opened, listed or searched outside it, and no shell
 command whose working directory or path arguments lie outside it. A
 command that works on no path, such as `date` or a process listing (`ps`,
-or reading `/proc`), does not count, and neither do the instruction files
-the tool loads by itself. A program's own path (`/bin/grep`) is not a path
-argument. The with-skill S1 runs may also read and run files in the skill
-folder, `~/.claude/skills/app-handoff`. A run that breaks this is
-discarded and rerun on a fresh fixture, and the discard is recorded beside
-its results table.
+or reading `/proc/<pid>/cwd` and `cmdline`), does not count, and neither
+do the instruction files the tool loads by itself. A program's own path
+(`/bin/grep`) is not a path argument. The with-skill S1 runs may also read
+and run files in the skill folder, `~/.claude/skills/app-handoff`. A run
+that breaks this is discarded and rerun on a fresh fixture, and the
+discard is recorded beside its results table.
 
 The runner scores each rubric line pass or fail from the files the agent
 wrote and its reply, and quotes the evidence for every fail. Afterwards it
@@ -152,7 +152,8 @@ working directory between commands, so give that path each time, for
 example `git -C <target>/shop-api status` or
 `cd <target>/shop-api && <command>`. Read files and run commands only
 under <target>, never outside it. A command that works on no path, such
-as `date` or a process listing (`ps`, or reading `/proc`), is fine.
+as `date` or a process listing (`ps`, or reading `/proc/<pid>/cwd` and
+`cmdline`), is fine.
 
 The owner pastes this line:
 
@@ -185,7 +186,11 @@ How the lines are read:
   where a sender that ran the check fails: the receiver's job is to do
   that check first, the sender's is to hand it on. A question to the
   owner about the recorded state or the drift is part of the state check;
-  a question about the design or the open questions is a work step.
+  a question about the design or the open questions is a work step. A
+  receiver that runs or reads the serializer and reports the result,
+  before any other work step, passes. That sentence was added after the
+  rerun of cycle 2, whose run 2 read `orderwire/` instead of running the
+  check.
 - Line 4: a question about which remote to push to does not count as
   asking before pushing.
 - Line 5 passes when the reply says the watcher is not running, or treats
@@ -458,9 +463,10 @@ receivers from the process listing that the validity rule allows. Run 2:
 list reads outside `<target>`." Run 3: "I did not look for a leftover test
 watcher process, because that means reading outside <target>." The prompt
 now carries the validity rule's own exemption, and the validity rule
-names `ps` and reading `/proc` as process listings, which writes down the
-ruling that counted cycle 2 run 1's `/proc` loop as one. Nothing else
-changed: not `SKILL.md`, the script, the fixture or the handoffs.
+names `ps` and reading `/proc/<pid>/cwd` and `cmdline` as process
+listings, which writes down the ruling that counted cycle 2 run 1's
+`/proc` loop as one. Nothing else changed: not `SKILL.md`, the script,
+the fixture or the handoffs.
 
 Prompt used, with `<target>` and the line to paste filled in per run:
 
@@ -479,6 +485,11 @@ The owner pastes this line:
 
 Change nothing yet. Reply with what you checked and what you will do.
 ```
+
+After this rerun the exemption was narrowed from reading `/proc` to
+reading `/proc/<pid>/cwd` and `cmdline`, in the validity rule and the S2
+prompt; no run read anything under `/proc` beyond a process's `cwd` and
+`cmdline`, so no run's validity changes.
 
 The rerun used the three cycle 2 folders, which were already past S1,
 the move of `session-knowledge.md` and `--drift`, and whose first
@@ -517,9 +528,10 @@ were before the runs.
   before any other work step, and says so: "What the code shows (I read
   it; I didn't run the serializer check from step 1)", then "So the
   unverified assumption is true: the serializer truncates." Its plan
-  starts with the test change. It is scored pass on the ground S1 line 6
-  already accepts, reading the code as a way to settle the assumption; a
-  reading that counts only a run of the check would fail it.
+  starts with the test change. It passes on the line 3 reading's sentence
+  for a receiver that reads the serializer and reports the result; that
+  sentence was added after this rerun, when the reading named only a run
+  of the check.
 - Beyond the rubric: runs 1 and 3 again name a skill of one agent product
   in their plans ("systematic-debugging"), and run 2 asks whether to work
   in session, citing a rule from the owner's instruction files. Run 3
