@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# fake-cli: the stand-in for codex, agy and opencode in tests/ext-run.test.sh.
+# The suite installs this one script under the three names; the name it was
+# started as decides what it does. It needs SCN, CALLS and TROUBLE_LOG in its
+# environment, which the runner passes on from the suite.
+#
+# Control calls read no standard input and are not model invocations:
+#   codex sandbox ...    $SCN/codex.sandbox.{hold,release,ignore-term,exit};
+#                        records $CALLS/sandbox.{pid,pgid,started}; prints
+#                        probe-stderr on standard error when its exit is not 0
+#   opencode --version   $SCN/opencode.version.{hold,release,ignore-term,exit};
+#                        records $CALLS/version.{pid,pgid,started}; prints
+#                        $SCN/opencode.version (default 1.19.0)
+#
+# A model invocation has a key (codex, agy, or for opencode the prefix of the
+# value after --model) and a number k, the first of 1 to 50 for which
+# mkdir "$CALLS/<key>.<k>" succeeds and the pid file in it is created
+# exclusively (uutils mkdir alone is not atomic). It records argv.json, cwd, stdin,
+# env.json, pid, pgid, parent and prior_alive there, then plays the scenario
+# the suite's play helper wrote to $SCN/<key>.<k>/. A text given to play is
+# printed followed by a newline (nothing at all when empty); a file given to
+# play is printed byte for byte.
+#
+# Exit statuses of its own: 96 trouble with the record, 98 a wait that was
+# never released (30 s), 99 no scenario. Trouble also goes to $TROUBLE_LOG.
+
+set -u
+me="${0##*/}"
+
+if [ -z "${SCN:-}" ] || [ -z "${CALLS:-}" ] || [ -z "${TROUBLE_LOG:-}" ]; then
+    printf 'fake-cli: SCN, CALLS and TROUBLE_LOG must be set\n' >&2
+    exit 96
+fi
+
+trouble() { # message
+    printf 'fake-cli %s: %s\n' "$me" "$1" >> "$TROUBLE_LOG"
+    printf 'fake-cli: %s\n' "$1" >&2
+}
+
+alive() { # pid: running and not a zombie
+    local s
+    case "${1:-}" in '' | *[!0-9]*) return 1 ;; esac
+    s="$(ps -o stat= -p "$1" 2>/dev/null)"
+    s="${s//[[:space:]]/}"
+    [ -n "$s" ] && [ "${s#Z}" = "$s" ]
+}
+
+own_pgid() {
+    local g
+    g="$(ps -o pgid= -p "$$")"
+    printf '%s\n' "${g//[[:space:]]/}"
+}
+
+wait_file() { # path who: waits at most 30 s for the path to exist
+    local n=0
+    until [ -e "$1" ]; do
+        if [ "$n" -ge 300 ]; then
+            trouble "$2 waited 30 s for ${1##*/}"
+            exit 98
+        fi
+        sleep 0.1
+        n=$((n + 1))
+    done
+}
+
+exit_code() { # file: the number in it, 0 when there is no file
+    local c=0
+    if [ -f "$1" ]; then c="$(< "$1")"; fi
+    c="${c//[[:space:]]/}"
+    printf '%s\n' "${c:-0}"
+}
+
+control() { # scenario-base record-name
+    local base="$1" rec="$CALLS/$2" code
+    if [ -e "$base.ignore-term" ]; then trap '' TERM; fi
+    printf '%s\n' "$$" > "$rec.pid"
+    own_pgid > "$rec.pgid"
+    : > "$rec.started"
+    if [ -e "$base.hold" ]; then wait_file "$base.release" "$2"; fi
+    code="$(exit_code "$base.exit")"
+    if [ "$2" = sandbox ] && [ "$code" != 0 ]; then printf 'probe-stderr\n' >&2; fi
+    if [ "$2" = version ]; then
+        if [ -f "$SCN/opencode.version" ]; then cat "$SCN/opencode.version"; else printf '1.19.0\n'; fi
+    fi
+    exit "$code"
+}
+
+if [ "$me" = codex ] && [ "${1:-}" = sandbox ]; then control "$SCN/codex.sandbox" sandbox; fi
+if [ "$me" = opencode ] && [ "${1:-}" = --version ]; then control "$SCN/opencode.version" version; fi
+
+# The key of a model invocation.
+case "$me" in
+    codex | agy) key="$me" ;;
+    opencode)
+        model="" prev=""
+        for a in "$@"; do
+            if [ "$prev" = --model ]; then model="$a"; break; fi
+            prev="$a"
+        done
+        case "$model" in
+            alibaba-token-plan/deepseek-v4-pro-0813) key=deepseek ;;
+            kimi-code-plan-global/k3) key=kimi ;;
+            alibaba-token-plan/qwen3.8-max) key=qwen ;;
+            '') key=opencode ;;
+            *) key="${model//\//-}" ;;
+        esac
+        ;;
+    *)
+        trouble "started under an unknown name"
+        exit 96
+        ;;
+esac
+
+take_number() { # k: true when this invocation owns <key>.<k>
+    mkdir "$CALLS/$key.$k" 2>/dev/null || return 1
+    # uutils mkdir 0.10 can report success to two racing callers; the pid
+    # file, created exclusively (noclobber opens it with O_EXCL), decides.
+    if (set -C && printf '%s\n' "$$" > "$CALLS/$key.$k/pid") 2>/dev/null; then return 0; fi
+    [ -e "$CALLS/$key.$k/pid" ] && return 1
+    trouble "cannot write $CALLS/$key.$k/pid"
+    exit 96
+}
+
+# The first free number, so that concurrent invocations never share one.
+k=1
+until take_number; do
+    if [ ! -e "$CALLS/$key.$k" ]; then
+        trouble "cannot make $CALLS/$key.$k"
+        exit 96
+    fi
+    k=$((k + 1))
+    if [ "$k" -gt 50 ]; then
+        trouble "no free number for $key up to 50"
+        exit 96
+    fi
+done
+rec="$CALLS/$key.$k"
+
+# The record; pid is already in it.
+jq -cn '$ARGS.positional' --args -- "$@" > "$rec/argv.json"
+pwd -P > "$rec/cwd"
+cat > "$rec/stdin" 2>/dev/null
+jq -cn '{OPENCODE_CONFIG_CONTENT: $ENV.OPENCODE_CONFIG_CONTENT,
+         OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: $ENV.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT,
+         OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: $ENV.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS}' > "$rec/env.json"
+own_pgid > "$rec/pgid"
+ps -ww -o args= -p "$PPID" > "$rec/parent"
+n=0 j=1
+while [ "$j" -lt "$k" ]; do
+    if [ -f "$CALLS/$key.$j/child" ] && alive "$(< "$CALLS/$key.$j/child")"; then n=$((n + 1)); fi
+    j=$((j + 1))
+done
+printf '%s\n' "$n" > "$rec/prior_alive"
+
+# The play.
+scn="$SCN/$key.$k"
+if [ ! -d "$scn" ]; then
+    printf 'fake-cli: no scenario for %s.%s\n' "$key" "$k" >&2
+    exit 99
+fi
+if [ -e "$scn/ignore-term" ]; then trap '' TERM; fi
+if [ ! -e "$scn/stderr-held" ] && [ -f "$scn/stderr" ]; then cat "$scn/stderr" >&2; fi
+if [ -f "$scn/stdout-early" ]; then cat "$scn/stdout-early"; fi
+if [ -f "$scn/child" ]; then
+    sleep "$(< "$scn/child")" &
+    printf '%s\n' "$!" > "$rec/child"
+fi
+: > "$rec/started"
+if [ -e "$scn/stderr-held" ]; then
+    wait_file "$scn/release-stderr" "$key.$k"
+    if [ -f "$scn/stderr" ]; then cat "$scn/stderr" >&2; fi
+fi
+if [ -f "$scn/sleep" ]; then sleep "$(< "$scn/sleep")"; fi
+if [ -e "$scn/hold" ]; then wait_file "$scn/release" "$key.$k"; fi
+if [ -f "$scn/stdout" ]; then cat "$scn/stdout"; fi
+if [ -f "$scn/then-version" ]; then cat "$scn/then-version" > "$SCN/opencode.version"; fi
+exit "$(exit_code "$scn/exit")"

@@ -1,0 +1,440 @@
+#!/usr/bin/env bash
+# ext-run: runs one external CLI (Codex, agy, or OpenCode under an alias or a
+# full model id) in a run directory that holds prompt.md, and ends in exactly
+# one named outcome, recorded in <run>/<prefix>.status.
+#
+#   ext-run [run]    --cli <name> --run-dir <dir> [--level read|edit] [--limit <dur>]
+#                    [--resume-limit <dur>] [--model <id>] [--effort <value>] [--allow-dir <dir>]...
+#   ext-run continue --cli <name> --run-dir <dir>
+#   ext-run outcomes
+#
+# Standard output carries only the one-line summary,
+#   <prefix>: <outcome>[ (<message>)]; status: <status file|none>
+# and every other message goes to standard error. Facts about the CLIs come
+# from ext-run.conf beside this script. Test knobs: EXT_RUN_GRACE,
+# EXT_RUN_KILL_WAIT, EXT_RUN_PREFLIGHT_LIMIT, EXT_RUN_POLL, EXT_RUN_START_WAIT.
+
+set -uo pipefail
+
+# Outcomes and their exit statuses, in the order `outcomes` prints them.
+OUTCOME_NAMES=(answered answered_after_resume limit empty denied usage_limit cli_failure
+    trace_unreadable no_handle handle_conflict prerequisite_failed unsupported_version
+    cancelled runner_failure usage_error missing_cli)
+OUTCOME_CODES=(0 0 10 11 12 13 14 15 16 17 18 19 20 21 64 127)
+
+# Shared state (the plan's Contract). Some of it is read only by the attempt
+# code, hence the directive.
+# shellcheck disable=SC2034
+{
+    PROGRAM=''     # absolute path of the CLI, set by the lookup of preflight
+    OUTCOME=''     # set once, by whatever ends the run
+    OWNS_STATUS=0  # 1 once this invocation owns the status file
+    ACTIVE_JOB=''  # the background job of the command that is running
+    CANCEL=0       # 1 once a signal trap has run
+    POLL_HOOK=''   # a function run_cmd calls at every poll
+    HANDLE=''      # the session handle
+}
+
+# This invocation.
+ACTION=run
+NAME='' KIND='' PREFIX='' OC_MODEL=''
+LEVEL=read LIMIT=90m RESUME_LIMIT=30m MODEL='' EFFORT='' RUN_ARG=''
+ALLOW_DIRS=()  # --allow-dir values as given
+ALLOW_CANON=() # their canonical paths, once a check has made them; the status records these
+RUN_DIR='' CWD='' CANON=''
+PHASE=preflight MESSAGE=''
+LOCK='' CLAIMED=0
+STATUS_FILE='' STATUS_BROKEN=0 FINALIZING=0
+ST=''          # the status object in memory, compact JSON
+HAS_ANSWER=0 ANSWER_TEXT=''
+
+# Settings, read from ext-run.conf; these defaults only keep a short file from
+# tripping set -u.
+# shellcheck disable=SC2034
+{
+    OC_TESTED_VERSION='' OC_SKILL_DENY_KEY='' OC_ASK_REJECT_TEXT=''
+    AGY_EXTRA_ARGS=() CODEX_EXTRA_ARGS=() CODEX_WRITE_REFUSED=no
+}
+
+case "${BASH_SOURCE[0]}" in
+    */*) SELF_DIR="${BASH_SOURCE[0]%/*}" ;;
+    *) SELF_DIR=. ;;
+esac
+
+say() { printf 'ext-run: %s\n' "$1" >&2; }
+
+end_as() { # outcome message [further lines for standard error]: ends the run
+    local l
+    OUTCOME="$1"
+    MESSAGE="$2"
+    shift 2
+    say "$MESSAGE"
+    for l in "$@"; do printf '%s\n' "$l" >&2; done
+    exit
+}
+
+outcome_code() { # outcome: sets CODE to its exit status
+    local i
+    for i in "${!OUTCOME_NAMES[@]}"; do
+        if [ "${OUTCOME_NAMES[i]}" = "$1" ]; then
+            CODE="${OUTCOME_CODES[i]}"
+            return 0
+        fi
+    done
+    CODE=21
+}
+
+alias_model() { # alias: prints the OpenCode model id it stands for
+    case "$1" in
+        deepseek) printf '%s\n' alibaba-token-plan/deepseek-v4-pro-0813 ;;
+        kimi) printf '%s\n' kimi-code-plan-global/k3 ;;
+        qwen) printf '%s\n' alibaba-token-plan/qwen3.8-max ;;
+        *) return 1 ;;
+    esac
+}
+
+pid_alive() { # pid: the process exists and is not a zombie
+    local s
+    case "${1:-}" in '' | *[!0-9]* | 0) return 1 ;; esac
+    s="$(ps -o stat= -p "$1" 2>/dev/null)" || return 1
+    s="${s//[[:space:]]/}"
+    [ -n "$s" ] && [ "${s#Z}" = "$s" ]
+}
+
+canonical() { # path: sets CANON to its canonical absolute path, whatever it contains
+    local p
+    p="$(realpath -e -- "$1" 2>/dev/null && printf x)" || return 1
+    CANON="${p%$'\n'x}"
+    [ -n "$CANON" ]
+}
+
+valid_duration() { # timeout's syntax, greater than zero
+    [[ $1 =~ ^([0-9]+(\.[0-9]*)?|\.[0-9]+)[smhd]?$ ]] && [[ ${1%[smhd]} =~ [1-9] ]]
+}
+
+valid_model_id() { # a full OpenCode model id: provider/model, no empty part
+    [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._:@+-]*(/[A-Za-z0-9._:@+-]+)+$ ]]
+}
+
+derive_name() { # name: sets KIND, PREFIX and OC_MODEL when it is a valid --cli value
+    case "$1" in
+        codex | agy)
+            KIND="$1" PREFIX="$1" OC_MODEL=''
+            ;;
+        deepseek | kimi | qwen)
+            KIND=opencode PREFIX="$1"
+            OC_MODEL="$(alias_model "$1")"
+            ;;
+        *)
+            valid_model_id "$1" || return 1
+            KIND=opencode PREFIX="${1//\//-}" OC_MODEL="$1"
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# The status object.
+
+st_update() { # filter [jq options]: changes the status object in memory
+    local n
+    if n="$(jq -c "${@:2}" "$1" <<< "$ST")" && [ -n "$n" ]; then
+        ST="$n"
+        return 0
+    fi
+    if [ "$FINALIZING" = 1 ]; then
+        OUTCOME=runner_failure
+        MESSAGE="cannot update the status object"
+        say "$MESSAGE"
+        return 1
+    fi
+    end_as runner_failure "cannot update the status object"
+}
+
+init_status() { # the status object as step 6 of a run writes it
+    local s
+    s="$(jq -cn --arg name "$NAME" --arg kind "$KIND" --arg prefix "$PREFIX" --arg level "$LEVEL" \
+        --arg cwd "$CWD" --arg limit "$LIMIT" --arg rlimit "$RESUME_LIMIT" --arg model "$MODEL" \
+        --arg effort "$EFFORT" --arg ocm "$OC_MODEL" '
+        def named: if . == "" then null else . end;
+        {outcome: "running", phase: "preflight", message: "",
+         name: $name, kind: $kind, prefix: $prefix, level: $level, cwd: $cwd, boundary: null,
+         limit: $limit, resume_limit: $rlimit,
+         requested: {model: ($model | named), effort: ($effort | named)},
+         oc_model: ($ocm | named), reported: null, configured_model: null, prompt_sha256: null,
+         allow_dirs: $ARGS.positional,
+         handle: null, handle_source: "first1", fresh_start: false,
+         cut_off_phase: null, resume_reason: null, resume_used: false, reset_at: null,
+         versions: {preflight: null, later: []}, version_untested: false,
+         attempts: [],
+         tokens: (if $kind == "codex" then {reported: []} else null end),
+         denied: [], answer: null}' --args -- "${ALLOW_CANON[@]}")"
+    [ -n "$s" ] || end_as runner_failure "cannot build the status object"
+    ST="$s"
+}
+
+status_object() { # [-c]: the status object with this invocation's outcome, phase and message
+    local base="$ST"
+    if [ -z "$base" ]; then
+        base="$(jq -cn --arg name "$NAME" --arg kind "$KIND" --arg prefix "$PREFIX" '
+            def named: if . == "" then null else . end;
+            {outcome: null, phase: null, message: null,
+             name: ($name | named), kind: ($kind | named), prefix: ($prefix | named)}')" || return 1
+    fi
+    jq "$@" --arg o "${OUTCOME:-running}" --arg p "$PHASE" --arg m "$MESSAGE" \
+        '.outcome = $o | .phase = $p | .message = $m' <<< "$base"
+}
+
+write_status() { # writes <p>.status through <p>.status.tmp; a failure ends the run as runner_failure
+    local obj
+    [ "$STATUS_BROKEN" = 0 ] || return 1
+    if obj="$(status_object)" && [ -n "$obj" ] &&
+        { printf '%s\n' "$obj" > "$STATUS_FILE.tmp"; } 2>/dev/null &&
+        mv -fT -- "$STATUS_FILE.tmp" "$STATUS_FILE" 2>/dev/null; then
+        return 0
+    fi
+    rm -f -- "$STATUS_FILE.tmp" 2>/dev/null
+    STATUS_BROKEN=1
+    OUTCOME=runner_failure
+    MESSAGE="cannot write the status file $STATUS_FILE"
+    say "$MESSAGE"
+    [ "$FINALIZING" = 1 ] && return 1
+    exit
+}
+
+publish_answer() { # the answer to <p>.out through <p>.out.tmp
+    local out="$RUN_DIR/$PREFIX.out"
+    if { printf '%s\n' "$ANSWER_TEXT" > "$out.tmp"; } 2>/dev/null &&
+        mv -fT -- "$out.tmp" "$out" 2>/dev/null; then
+        # shellcheck disable=SC2016  # a jq variable
+        st_update '.answer = $a' --arg a "$out"
+        return
+    fi
+    rm -f -- "$out.tmp" 2>/dev/null
+    OUTCOME=runner_failure
+    MESSAGE="cannot write the answer file $out"
+    say "$MESSAGE"
+}
+
+# ---------------------------------------------------------------------------
+# The finalizer: the one EXIT trap, run once, whatever ended the runner.
+
+release_claim() { # removes the lock directory, only while it still records this process
+    local owner=''
+    [ "$CLAIMED" = 1 ] || return 0
+    CLAIMED=0
+    if [ -f "$LOCK/pid" ]; then owner="$(< "$LOCK/pid")"; fi 2>/dev/null
+    owner="${owner//[[:space:]]/}"
+    if [ "$owner" = "$$" ]; then rm -rf -- "$LOCK" 2>/dev/null; fi
+}
+
+finalize() {
+    local code=$? shown=none msg
+    trap - EXIT
+    FINALIZING=1
+    # Step 1, stopping the command in ACTIVE_JOB, arrives with run_cmd.
+    if [ -z "$OUTCOME" ]; then
+        OUTCOME=runner_failure
+        MESSAGE="unexpected exit (status $code)"
+        say "$MESSAGE"
+    fi
+    if [ "$OWNS_STATUS" = 1 ] && [ "$STATUS_BROKEN" = 0 ]; then
+        if [ "$HAS_ANSWER" = 1 ]; then publish_answer; fi
+        write_status && shown="$STATUS_FILE"
+    fi
+    msg="${MESSAGE//[$'\n\r']/ }"
+    printf '%s: %s%s; status: %s\n' "${PREFIX:-ext-run}" "$OUTCOME" "${msg:+ ($msg)}" "$shown"
+    release_claim
+    # A runner failure that no status file records: the object is the last line on standard error.
+    if [ "$OUTCOME" = runner_failure ] && [ "$shown" = none ]; then
+        status_object -c >&2 2>/dev/null || printf '{"outcome":"runner_failure"}\n' >&2
+    fi
+    outcome_code "$OUTCOME"
+    exit "$CODE"
+}
+
+# ---------------------------------------------------------------------------
+# Steps 1 and 2: the arguments and the ground.
+
+parse_args() {
+    local opt a prev='' seen=' '
+    # The summary names the prefix whenever the first --cli value is valid,
+    # also when the arguments fail for another reason.
+    for a in "$@"; do
+        if [ "$prev" = --cli ]; then
+            derive_name "$a"
+            break
+        fi
+        prev="$a"
+    done
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            run | continue)
+                ACTION="$1"
+                shift
+                ;;
+            outcomes) end_as usage_error "outcomes takes no arguments" ;;
+            --*) ;;
+            *) end_as usage_error "unknown action: $1" ;;
+        esac
+    fi
+    while [ $# -gt 0 ]; do
+        opt="$1"
+        case "$opt" in
+            --cli | --run-dir | --level | --limit | --resume-limit | --model | --effort | --allow-dir) ;;
+            *) end_as usage_error "unknown option: $opt" ;;
+        esac
+        if [ "$ACTION" = continue ] && [ "$opt" != --cli ] && [ "$opt" != --run-dir ]; then
+            end_as usage_error "continue accepts --cli and --run-dir only, not $opt"
+        fi
+        if [ $# -lt 2 ] || [ -z "$2" ]; then end_as usage_error "$opt needs a value"; fi
+        if [ "$opt" != --allow-dir ]; then
+            case "$seen" in *" $opt "*) end_as usage_error "$opt is given twice" ;; esac
+            seen+="$opt "
+        fi
+        case "$opt" in
+            --cli) NAME="$2" ;;
+            --run-dir) RUN_ARG="$2" ;;
+            --level) LEVEL="$2" ;;
+            --limit) LIMIT="$2" ;;
+            --resume-limit) RESUME_LIMIT="$2" ;;
+            --model) MODEL="$2" ;;
+            --effort) EFFORT="$2" ;;
+            --allow-dir) ALLOW_DIRS+=("$2") ;;
+        esac
+        shift 2
+    done
+
+    [ -n "$NAME" ] || end_as usage_error "--cli is required"
+    derive_name "$NAME" || end_as usage_error "unknown cli: $NAME"
+    [ -n "$RUN_ARG" ] || end_as usage_error "--run-dir is required"
+    case "$LEVEL" in read | edit) ;; *) end_as usage_error "--level is read or edit, not $LEVEL" ;; esac
+    valid_duration "$LIMIT" ||
+        end_as usage_error "bad duration for --limit: $LIMIT (a number greater than zero, then s, m, h or d if wanted)"
+    valid_duration "$RESUME_LIMIT" ||
+        end_as usage_error "bad duration for --resume-limit: $RESUME_LIMIT (a number greater than zero, then s, m, h or d if wanted)"
+    if [ "$KIND" = opencode ] && [ -n "$MODEL" ]; then
+        end_as usage_error "$NAME takes no --model: an alias or a full model id names the model itself"
+    fi
+    if [ "$KIND" = agy ] && [ -n "$EFFORT" ]; then
+        end_as usage_error "agy takes no --effort: its model ids carry the effort"
+    fi
+}
+
+check_ground() {
+    local conf="$SELF_DIR/ext-run.conf" h missing=()
+    if [ "${BASH_VERSINFO[0]}" -lt 5 ]; then
+        end_as prerequisite_failed "bash 5 or later is needed, this is bash $BASH_VERSION"
+    fi
+    if [ ! -f "$conf" ] || [ ! -r "$conf" ]; then
+        end_as prerequisite_failed "the settings file is missing or unreadable: $conf"
+    fi
+    # shellcheck source=/dev/null
+    source "$conf" || end_as prerequisite_failed "the settings file could not be read: $conf"
+    if [ "$KIND" = opencode ] && [ -z "$OC_SKILL_DENY_KEY" ]; then
+        end_as prerequisite_failed "OC_SKILL_DENY_KEY is empty in $conf"
+    fi
+    for h in jq timeout setsid realpath ps sha256sum; do
+        type -P "$h" > /dev/null || missing+=("$h")
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        end_as prerequisite_failed "missing helper programs: ${missing[*]}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# run: steps 3 to 7.
+
+validate_run() { # step 3, without writing
+    local prompt
+    [ -d "$RUN_ARG" ] || end_as usage_error "the run directory is not a directory: $RUN_ARG"
+    canonical "$RUN_ARG" || end_as usage_error "cannot resolve the run directory: $RUN_ARG"
+    RUN_DIR="$CANON"
+    CWD="$(pwd -P && printf x)" || end_as usage_error "cannot read the working directory"
+    CWD="${CWD%$'\n'x}"
+    prompt="$RUN_DIR/prompt.md"
+    if [ ! -f "$prompt" ] || [ ! -s "$prompt" ]; then
+        end_as usage_error "prompt.md is missing or empty: $prompt"
+    fi
+    [ -r "$prompt" ] || end_as usage_error "prompt.md is not readable: $prompt"
+}
+
+claim() { # step 4: the lock directory of the prefix, then the pid in it
+    local pid='' n=0 q
+    LOCK="$RUN_DIR/$PREFIX.lock"
+    if mkdir -- "$LOCK" 2>/dev/null; then
+        # uutils mkdir 0.10 can report success to two callers racing for one
+        # directory, so the pid file, created exclusively (noclobber opens it
+        # with O_EXCL), decides which of them holds the claim.
+        if (set -C && printf '%s\n' "$$" > "$LOCK/pid") 2>/dev/null; then
+            CLAIMED=1
+            return 0
+        fi
+        if [ ! -e "$LOCK/pid" ]; then
+            rmdir -- "$LOCK" 2>/dev/null
+            end_as runner_failure "cannot write $LOCK/pid"
+        fi
+    elif [ ! -e "$LOCK" ] && [ ! -L "$LOCK" ]; then
+        end_as runner_failure "cannot claim prefix $PREFIX: mkdir $LOCK failed"
+    fi
+    until [ -s "$LOCK/pid" ] || [ "$n" -ge 10 ]; do
+        sleep 0.1
+        n=$((n + 1))
+    done
+    if [ -s "$LOCK/pid" ]; then pid="$(< "$LOCK/pid")"; fi 2>/dev/null
+    pid="${pid//[[:space:]]/}"
+    printf -v q '%q' "$LOCK"
+    case "$pid" in
+        '' | *[!0-9]*)
+            end_as usage_error "prefix $PREFIX is claimed in $RUN_DIR: owner unknown (no pid recorded)" \
+                "If no run of this prefix is going on, remove the claim with:" "  rm -r -- $q"
+            ;;
+    esac
+    if pid_alive "$pid"; then
+        end_as usage_error "prefix $PREFIX is claimed in $RUN_DIR: pid $pid is running"
+    fi
+    end_as usage_error "prefix $PREFIX is claimed in $RUN_DIR: pid $pid is not running" \
+        "If no run of this prefix is going on, remove the claim with:" "  rm -r -- $q"
+}
+
+check_leftovers() { # step 5, under the claim
+    local f found=()
+    shopt -s nullglob
+    for f in "$RUN_DIR/$PREFIX".*; do
+        if [ "$f" != "$LOCK" ]; then found+=("${f##*/}"); fi
+    done
+    shopt -u nullglob
+    if [ "${#found[@]}" -gt 0 ]; then
+        end_as usage_error "files of prefix $PREFIX already exist in $RUN_DIR: ${found[*]}" \
+            "Start the run in a new run directory, or remove those files if no run needs them."
+    fi
+}
+
+do_run() {
+    validate_run
+    claim
+    check_leftovers
+    STATUS_FILE="$RUN_DIR/$PREFIX.status"
+    init_status
+    OWNS_STATUS=1
+    write_status
+    PROGRAM="$(type -P "$KIND")"
+    [ -n "$PROGRAM" ] || end_as missing_cli "$KIND is not on PATH"
+    end_as runner_failure "not implemented"
+}
+
+main() {
+    local i
+    if [ "$#" = 1 ] && [ "$1" = outcomes ]; then
+        for i in "${!OUTCOME_NAMES[@]}"; do printf '%s\t%s\n' "${OUTCOME_NAMES[i]}" "${OUTCOME_CODES[i]}"; done
+        exit 0
+    fi
+    trap finalize EXIT
+    parse_args "$@"
+    check_ground
+    case "$ACTION" in
+        run) do_run ;;
+        continue) end_as runner_failure "not implemented" ;;
+    esac
+}
+
+main "$@"
