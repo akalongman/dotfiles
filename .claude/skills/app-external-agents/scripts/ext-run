@@ -56,21 +56,93 @@ HAS_ANSWER=0 ANSWER_TEXT=''
     AGY_EXTRA_ARGS=() CODEX_EXTRA_ARGS=() CODEX_WRITE_REFUSED=no
 }
 
+# Test knobs, with their defaults.
+EXT_RUN_GRACE="${EXT_RUN_GRACE:-10s}"                   # timeout's kill grace; stop_group's wait after TERM
+EXT_RUN_KILL_WAIT="${EXT_RUN_KILL_WAIT:-5s}"            # stop_group's wait after KILL
+EXT_RUN_PREFLIGHT_LIMIT="${EXT_RUN_PREFLIGHT_LIMIT:-1m}" # limit of a preflight command
+EXT_RUN_POLL="${EXT_RUN_POLL:-1}"                       # seconds between looks at a running command
+EXT_RUN_START_WAIT="${EXT_RUN_START_WAIT:-5}"           # seconds for a started command to record its group
+GRACE_US=0 KILL_WAIT_US=0 START_WAIT_US=0               # the three waits in microseconds
+
+# The shell every CLI command is started through (the plan's "How a CLI
+# command is started"). It records its own pid, the leader of its new group,
+# in the gid file ($1), waits for the go-ahead file beside it, and only then
+# becomes the command.
+# shellcheck disable=SC2016  # expanded by the started shell
+START_LINE='printf %s "$$" > "$1" || exit 126
+n=0; until [ -e "$1.go" ]; do [ -d "${1%/*}" ] && [ "$n" -lt 100 ] || exit 125; sleep 0.05; n=$((n + 1)); done
+shift; exec "$@"'
+
+# Commands and attempts.
+ARGV=() STDIN_FILE=/dev/null  # the next attempt's arguments and standard input
+PROMPT_FILE=''                # the file the first attempt is given
+GID=''                        # the group read from the gid file
+C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false       # the last command run_cmd ran
+A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false # the last attempt
+A_ANSWER='' A_REASON='' A_HANDLE_SEEN=''
+RULE='' VERDICT=''
+NOW=0 US=0 TAIL=() LAST=''
+PROGRESS_TTY=0 PROGRESS_SHOWN=0 PROGRESS_T0=0 PROGRESS_LABEL='' PROGRESS_LIMIT=''
+
 case "${BASH_SOURCE[0]}" in
     */*) SELF_DIR="${BASH_SOURCE[0]%/*}" ;;
     *) SELF_DIR=. ;;
 esac
 
-say() { printf 'ext-run: %s\n' "$1" >&2; }
+progress_clear() { # removes the progress line, when one is drawn
+    if [ "$PROGRESS_SHOWN" = 1 ]; then
+        printf '\r\033[K' >&2
+        PROGRESS_SHOWN=0
+    fi
+}
+
+say() {
+    progress_clear
+    printf 'ext-run: %s\n' "$1" >&2
+}
 
 end_as() { # outcome message [further lines for standard error]: ends the run
     local l
     OUTCOME="$1"
     MESSAGE="$2"
     shift 2
-    say "$MESSAGE"
+    if [ -n "$MESSAGE" ]; then say "$MESSAGE"; fi
     for l in "$@"; do printf '%s\n' "$l" >&2; done
     exit
+}
+
+now_us() { NOW="${EPOCHREALTIME//[!0-9]/}"; } # sets NOW to the time in microseconds
+
+to_seconds() { # dur: prints the duration as decimal seconds
+    local v="${1%[smhd]}" m=1
+    case "$1" in *m) m=60 ;; *h) m=3600 ;; *d) m=86400 ;; esac
+    LC_ALL=C awk -v v="$v" -v m="$m" 'BEGIN { s = sprintf("%.6f", v * m); sub(/\.?0+$/, "", s); print s }'
+}
+
+to_us() { # decimal seconds: sets US to them in whole microseconds (at most 10^12 s)
+    local i f=''
+    [[ $1 =~ ^([0-9]*)(\.([0-9]*))?$ ]] || return 1
+    i="${BASH_REMATCH[1]:-0}"
+    f="${BASH_REMATCH[3]}000000"
+    if [ "${#i}" -gt 12 ]; then i=999999999999; fi
+    US=$((10#$i * 1000000 + 10#${f:0:6}))
+}
+
+tail_lines() { # file: sets TAIL to its last lines, with carriage returns, trailing blanks and trailing blank lines dropped
+    local l
+    TAIL=()
+    while IFS= read -r l || [ -n "$l" ]; do
+        [[ $l =~ ^(.*[^[:space:]])?[[:space:]]*$ ]] && l="${BASH_REMATCH[1]}"
+        TAIL+=("$l")
+    done < <(tail -n 20 -- "$1" 2>/dev/null)
+    while [ "${#TAIL[@]}" -gt 0 ] && [ -z "${TAIL[-1]}" ]; do unset 'TAIL[-1]'; done
+}
+
+last_line() { # file: sets LAST to its last line that is not blank, made fit for a one-line message
+    LAST=''
+    tail_lines "$1"
+    if [ "${#TAIL[@]}" -gt 0 ]; then LAST="${TAIL[-1]//[[:cntrl:]]/ }"; fi
+    LAST="${LAST:0:300}"
 }
 
 outcome_code() { # outcome: sets CODE to its exit status
@@ -216,6 +288,129 @@ publish_answer() { # the answer to <p>.out through <p>.out.tmp
 }
 
 # ---------------------------------------------------------------------------
+# Starting and stopping a command.
+
+group_alive() { # pgid: ps shows a process of that group whose state does not begin with Z
+    local g s
+    while read -r g s; do
+        if [ "$g" = "$1" ] && [ "${s#Z}" = "$s" ]; then return 0; fi
+    done < <(ps -A -o pgid= -o stat= 2>/dev/null)
+    return 1
+}
+
+group_gone_within() { # pgid microseconds: true once the group has no live process, false when the time ran out
+    local end
+    now_us
+    end=$((NOW + $2))
+    while group_alive "$1"; do
+        now_us
+        [ "$NOW" -lt "$end" ] || return 1
+        sleep 0.1
+    done
+    return 0
+}
+
+stop_group() { # pgid [term]: TERM when asked, the grace period, KILL, the wait after it; 1 when a process outlived it
+    case "$1" in '' | *[!0-9]* | 0 | 1) return 0 ;; esac
+    if [ "${2:-}" = term ]; then kill -TERM -- "-$1" 2>/dev/null; fi
+    group_gone_within "$1" "$GRACE_US" && return 0
+    kill -KILL -- "-$1" 2>/dev/null
+    group_gone_within "$1" "$KILL_WAIT_US" && return 0
+    return 1
+}
+
+job_running() { # pid: the shell still knows that background job as running (kill -0 would also count an unreaped one)
+    local p
+    for p in $(jobs -rp); do
+        if [ "$p" = "$1" ]; then return 0; fi
+    done
+    return 1
+}
+
+read_gid() { # sets GID from <p>.lock/gid when it is a regular file that is not empty and holds a pid
+    local v=''
+    GID=''
+    if [ -f "$LOCK/gid" ] && [ -s "$LOCK/gid" ]; then v="$(< "$LOCK/gid")"; fi 2>/dev/null
+    v="${v//[[:space:]]/}"
+    case "$v" in '' | *[!0-9]*) return 1 ;; esac
+    GID="$v"
+}
+
+stop_active() { # the finalizer's first step: the job, and the group the gid file names
+    if job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
+    if read_gid && ! stop_group "$GID" term; then
+        OUTCOME=runner_failure
+        MESSAGE="could not stop process group $GID: a process outlived the kill"
+        say "$MESSAGE"
+    fi
+    wait "$ACTIVE_JOB" 2>/dev/null
+    ACTIVE_JOB=''
+}
+
+run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner starts a CLI command
+    local limit="$1" out="$2" err="$3" in="$4" gidf="$LOCK/gid" what g t0 t1 end stuck=0
+    shift 4
+    what="${1##*/}${2:+ $2}"
+    C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false
+    rm -f -- "$gidf" "$gidf.go" 2>/dev/null
+    if [ -e "$gidf" ] || [ -L "$gidf" ] || [ -e "$gidf.go" ] || [ -L "$gidf.go" ]; then
+        end_as runner_failure "cannot clear $gidf before starting $what"
+    fi
+    now_us
+    t0="$NOW"
+    end=$((t0 + START_WAIT_US))
+    setsid -w "$BASH" -c "$START_LINE" ext-run "$gidf" timeout -k "$EXT_RUN_GRACE" "$limit" "$@" \
+        < "$in" > "$out" 2> "$err" &
+    ACTIVE_JOB=$!
+    # The command records its group before it may become the CLI.
+    until read_gid; do
+        job_running "$ACTIVE_JOB" || break
+        now_us
+        [ "$NOW" -lt "$end" ] || break
+        sleep 0.05
+    done
+    if ! read_gid; then
+        if job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
+        wait "$ACTIVE_JOB" 2>/dev/null
+        sleep "$EXT_RUN_POLL"
+        if read_gid; then stop_group "$GID" term; fi
+        ACTIVE_JOB=''
+        end_as runner_failure "could not start $what: no process group was recorded within $EXT_RUN_START_WAIT s"
+    fi
+    g="$GID"
+    C_PGID="$g"
+    { : > "$gidf.go"; } 2>/dev/null || end_as runner_failure "cannot write $gidf.go"
+    while job_running "$ACTIVE_JOB"; do
+        [ "$CANCEL" = 1 ] && break
+        if [ -n "$POLL_HOOK" ]; then "$POLL_HOOK"; fi
+        sleep "$EXT_RUN_POLL"
+    done
+    if [ "$CANCEL" = 1 ]; then
+        C_SIGNALLED=true
+        stop_group "$g" term || stuck=1
+        if [ "$stuck" = 1 ] && job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
+        wait "$ACTIVE_JOB"
+        C_EXIT=$?
+        now_us
+        t1="$NOW"
+    else
+        wait "$ACTIVE_JOB"
+        C_EXIT=$?
+        now_us
+        t1="$NOW"
+        # Whatever the command left in its group is stopped too; the job is
+        # reaped, so the finalizer would only stop the group from here on.
+        stop_group "$g" || stuck=1
+    fi
+    ACTIVE_JOB=''
+    C_WALL_US=$((t1 - t0))
+    printf -v C_WALL '%d.%03d' $((C_WALL_US / 1000000)) $((C_WALL_US % 1000000 / 1000))
+    if [ "$stuck" = 1 ]; then
+        end_as runner_failure "could not stop process group $g of $what: a process outlived the kill"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # The finalizer: the one EXIT trap, run once, whatever ended the runner.
 
 release_claim() { # removes the lock directory, only while it still records this process
@@ -231,7 +426,9 @@ finalize() {
     local code=$? shown=none msg
     trap - EXIT
     FINALIZING=1
-    # Step 1, stopping the command in ACTIVE_JOB, arrives with run_cmd.
+    progress_clear
+    # A command still running: the job, and the group the gid file names.
+    if [ -n "$ACTIVE_JOB" ]; then stop_active; fi
     if [ -z "$OUTCOME" ]; then
         OUTCOME=runner_failure
         MESSAGE="unexpected exit (status $code)"
@@ -339,13 +536,33 @@ check_ground() {
     if [ "${#missing[@]}" -gt 0 ]; then
         end_as prerequisite_failed "missing helper programs: ${missing[*]}"
     fi
+    check_knobs
+}
+
+check_knobs() { # the test knobs: three durations and two plain numbers of seconds
+    local v bad=()
+    for v in EXT_RUN_GRACE EXT_RUN_KILL_WAIT EXT_RUN_PREFLIGHT_LIMIT; do
+        valid_duration "${!v}" || bad+=("$v=${!v}")
+    done
+    for v in EXT_RUN_POLL EXT_RUN_START_WAIT; do
+        if ! valid_duration "${!v}" || [[ ${!v} == *[smhd] ]]; then bad+=("$v=${!v}"); fi
+    done
+    if [ "${#bad[@]}" -gt 0 ]; then
+        end_as prerequisite_failed "bad values in the environment: ${bad[*]}"
+    fi
+    to_us "$(to_seconds "$EXT_RUN_GRACE")" || end_as prerequisite_failed "cannot convert EXT_RUN_GRACE"
+    GRACE_US="$US"
+    to_us "$(to_seconds "$EXT_RUN_KILL_WAIT")" || end_as prerequisite_failed "cannot convert EXT_RUN_KILL_WAIT"
+    KILL_WAIT_US="$US"
+    to_us "$EXT_RUN_START_WAIT" || end_as prerequisite_failed "cannot convert EXT_RUN_START_WAIT"
+    START_WAIT_US="$US"
 }
 
 # ---------------------------------------------------------------------------
 # run: steps 3 to 7.
 
 validate_run() { # step 3, without writing
-    local prompt
+    local prompt size
     [ -d "$RUN_ARG" ] || end_as usage_error "the run directory is not a directory: $RUN_ARG"
     canonical "$RUN_ARG" || end_as usage_error "cannot resolve the run directory: $RUN_ARG"
     RUN_DIR="$CANON"
@@ -356,6 +573,17 @@ validate_run() { # step 3, without writing
         end_as usage_error "prompt.md is missing or empty: $prompt"
     fi
     [ -r "$prompt" ] || end_as usage_error "prompt.md is not readable: $prompt"
+    # agy and OpenCode take the prompt as one argument, and Linux refuses a
+    # single argument of 131072 bytes or more. Codex reads it on standard input.
+    if [ "$KIND" != codex ]; then
+        size="$(wc -c 2>/dev/null < "$prompt")"
+        size="${size//[[:space:]]/}"
+        case "$size" in '' | *[!0-9]*) end_as usage_error "cannot read the size of prompt.md: $prompt" ;; esac
+        if [ "$size" -ge 131072 ]; then
+            end_as usage_error "prompt.md is $size bytes; $KIND takes the prompt as one argument, which must be smaller than 131072 bytes"
+        fi
+    fi
+    PROMPT_FILE="$prompt"
 }
 
 claim() { # step 4: the lock directory of the prefix, then the pid in it
@@ -409,6 +637,287 @@ check_leftovers() { # step 5, under the claim
     fi
 }
 
+take_prompt_sum() { # step 7: prompt_sha256 of the file the first attempt is given
+    local s
+    s="$(sha256sum 2>/dev/null < "$PROMPT_FILE")"
+    s="${s%% *}"
+    [[ $s =~ ^[0-9a-f]{64}$ ]] || end_as runner_failure "cannot take the checksum of $PROMPT_FILE"
+    # shellcheck disable=SC2016  # a jq variable
+    st_update '.prompt_sha256 = $s' --arg s "$s"
+}
+
+# ---------------------------------------------------------------------------
+# Codex: what its files say, and its sandbox probe.
+
+codex_header() { # stderr-file key: the values of "<key>: " lines between the first two lines of dashes
+    LC_ALL=C awk -v k="$2: " '
+        /^-+\r?$/ { if (++d == 2) exit; next }
+        d == 1 && index($0, k) == 1 {
+            v = substr($0, length(k) + 1)
+            sub(/^[ \t]+/, "", v)
+            sub(/[ \t\r]+$/, "", v)
+            print v
+        }' "$1" 2>/dev/null
+}
+
+codex_handles() { # stderr-file: the distinct session handles of the header, one per line
+    codex_header "$1" 'session id' | LC_ALL=C awk 'NF && !seen[$0]++'
+}
+
+codex_answer() { # stdout-file: the answer is the attempt's standard output
+    cat -- "$1" 2>/dev/null
+}
+
+codex_reported() { # stderr-file: {model, effort} of the header as compact JSON, null where a line is absent
+    local m='' e=''
+    IFS= read -r m < <(codex_header "$1" model)
+    IFS= read -r e < <(codex_header "$1" 'reasoning effort')
+    jq -cn --arg m "$m" --arg e "$e" 'def named: if . == "" then null else . end;
+        {model: ($m | named), effort: ($e | named)}'
+}
+
+codex_tokens() { # stderr-file: the number after the closing "tokens used" line, commas removed; nothing when absent
+    local n
+    tail_lines "$1"
+    n="${#TAIL[@]}"
+    if [ "$n" -ge 2 ] && [ "${TAIL[n - 2]}" = 'tokens used' ] && [[ ${TAIL[n - 1]} =~ ^[0-9][0-9,]*$ ]]; then
+        printf '%s\n' "${TAIL[n - 1]//,/}"
+    fi
+}
+
+codex_ul_line() { # line: Codex's usage-limit error (its apostrophe is typographic, so the match starts after it)
+    [[ $1 == ERROR:* && $1 == *'hit your usage limit'* ]]
+}
+
+codex_usage_limit() { # stderr-file: true when its end is Codex's usage-limit error; sets A_REASON to that line
+    local n
+    tail_lines "$1"
+    n="${#TAIL[@]}"
+    # After work was done the error stands right before "tokens used" and the
+    # number; when the limit refused the run at the door it is the last line.
+    # Anywhere else it may be the echo of a file the run read.
+    if [ "$n" -ge 3 ] && [ "${TAIL[n - 2]}" = 'tokens used' ] && [[ ${TAIL[n - 1]} =~ ^[0-9][0-9,]*$ ]] &&
+        codex_ul_line "${TAIL[n - 3]}"; then
+        A_REASON="${TAIL[n - 3]//[[:cntrl:]]/ }"
+        return 0
+    fi
+    if [ "$n" -ge 1 ] && codex_ul_line "${TAIL[n - 1]}"; then
+        A_REASON="${TAIL[n - 1]//[[:cntrl:]]/ }"
+        return 0
+    fi
+    return 1
+}
+
+codex_probe() { # step 7: codex sandbox true, in a group of its own under the preflight limit
+    local err="$RUN_DIR/$PREFIX.probe.err"
+    run_cmd "$EXT_RUN_PREFLIGHT_LIMIT" /dev/null "$err" /dev/null "$PROGRAM" sandbox true
+    case "$C_EXIT" in
+        0) return 0 ;;
+        124 | 137)
+            end_as prerequisite_failed \
+                "the Codex sandbox probe timed out after $EXT_RUN_PREFLIGHT_LIMIT (status $C_EXIT); its standard error is in $err"
+            ;;
+    esac
+    last_line "$err"
+    end_as prerequisite_failed \
+        "the Codex sandbox probe failed with status $C_EXIT${LAST:+: $LAST}; its standard error is in $err"
+}
+
+# ---------------------------------------------------------------------------
+# Attempts: argument vectors, one attempt, classification and its record.
+
+build_first_argv() { # fills ARGV and STDIN_FILE for the first attempt, per "Argument vectors"
+    local sandbox=read-only
+    case "$KIND" in
+        codex)
+            if [ "$LEVEL" = edit ]; then sandbox=workspace-write; fi
+            ARGV=(exec --skip-git-repo-check -s "$sandbox")
+            if [ -n "$MODEL" ]; then ARGV+=(-m "$MODEL"); fi
+            if [ -n "$EFFORT" ]; then ARGV+=(-c "model_reasoning_effort=$EFFORT"); fi
+            ARGV+=("${CODEX_EXTRA_ARGS[@]}" -)
+            STDIN_FILE="$RUN_DIR/prompt.md"
+            ;;
+        *) end_as runner_failure "not implemented" ;;
+    esac
+}
+
+build_later_argv() { # read|edit text: fills ARGV and STDIN_FILE for a resume or a continue, per "Argument vectors"
+    local sandbox=read-only
+    if [ "$1" = edit ]; then sandbox=workspace-write; fi
+    case "$KIND" in
+        codex)
+            ARGV=(exec resume "$HANDLE" --skip-git-repo-check)
+            if [ -n "$MODEL" ]; then ARGV+=(-m "$MODEL"); fi
+            if [ -n "$EFFORT" ]; then ARGV+=(-c "model_reasoning_effort=$EFFORT"); fi
+            ARGV+=(-c "sandbox_mode=\"$sandbox\"" "${CODEX_EXTRA_ARGS[@]}" -)
+            STDIN_FILE="$LOCK/text"
+            { printf '%s\n' "$2" > "$STDIN_FILE"; } 2>/dev/null || end_as runner_failure "cannot write $STDIN_FILE"
+            ;;
+        *) end_as runner_failure "not implemented" ;;
+    esac
+}
+
+attempt_poll() { # POLL_HOOK of an attempt: redraws the progress line when standard error is a terminal
+    local e t
+    [ "$PROGRESS_TTY" = 1 ] || return 0
+    now_us
+    e=$(((NOW - PROGRESS_T0) / 1000000))
+    if [ "$e" -ge 3600 ]; then
+        printf -v t '%dh%02dm%02ds' $((e / 3600)) $((e % 3600 / 60)) $((e % 60))
+    elif [ "$e" -ge 60 ]; then
+        printf -v t '%dm%02ds' $((e / 60)) $((e % 60))
+    else
+        t="${e}s"
+    fi
+    printf '\r%s %s/%s\033[K' "$PROGRESS_LABEL" "$t" "$PROGRESS_LIMIT" >&2
+    PROGRESS_SHOWN=1
+}
+
+run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; sets the A_ variables
+    local base="$RUN_DIR/$PREFIX.$1$2"
+    PROGRESS_TTY=0
+    if [ -t 2 ]; then PROGRESS_TTY=1; fi
+    now_us
+    PROGRESS_T0="$NOW" PROGRESS_LABEL="$PREFIX $1" PROGRESS_LIMIT="$3"
+    POLL_HOOK=attempt_poll
+    run_cmd "$3" "$base.stdout" "$base.stderr" "$STDIN_FILE" "$PROGRAM" "${ARGV[@]}"
+    POLL_HOOK=''
+    progress_clear
+    A_EXIT="$C_EXIT" A_WALL="$C_WALL" A_PGID="$C_PGID" A_SIGNALLED="$C_SIGNALLED" A_DEADLINE=false
+    { printf '%s\n' "$A_WALL" > "$base.time" && printf '%s\n' "$A_EXIT" > "$base.exit"; } 2>/dev/null ||
+        end_as runner_failure "cannot write the files of attempt $1$2 in $RUN_DIR"
+    # timeout passes a CLI's own 124 or 137 through: the deadline expired only
+    # when the measured wall time also reached the limit.
+    case "$A_EXIT" in
+        124 | 137)
+            to_us "$(to_seconds "$3")" || end_as runner_failure "cannot read the limit $3"
+            if [ "$C_WALL_US" -ge "$US" ]; then A_DEADLINE=true; fi
+            ;;
+    esac
+}
+
+attempt_handles() { # attempt-base: the distinct handles in the attempt's files, one per line
+    case "$KIND" in
+        codex) codex_handles "$1.stderr" ;;
+    esac
+}
+
+attempt_answer() { # attempt-base: prints the attempt's answer
+    case "$KIND" in
+        codex) codex_answer "$1.stdout" ;;
+    esac
+}
+
+attempt_tokens() { # attempt-base: the attempt's tokens as compact JSON
+    local t
+    case "$KIND" in
+        codex)
+            t="$(codex_tokens "$1.stderr")"
+            jq -cn --arg t "$t" '{reported: (if $t == "" then null else ($t | tonumber) end)}'
+            ;;
+        *) printf 'null\n' ;;
+    esac
+}
+
+usage_limit_seen() { # attempt-base: the attempt ended in its CLI's usage-limit error (rule 5)
+    case "$KIND" in
+        codex) codex_usage_limit "$1.stderr" ;;
+        *) return 1 ;;
+    esac
+}
+
+classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules that matches
+    local base="$RUN_DIR/$PREFIX.$1$2" h
+    RULE='' VERDICT='' A_REASON='' A_ANSWER=''
+    if [ "$A_SIGNALLED" = true ]; then
+        RULE=1 VERDICT=cancelled
+        return
+    fi
+    # A later attempt is passed the handle and must not report another; one
+    # that starts afresh is passed none, and no handle in its files is no conflict.
+    if [ "$1" != first ] && [ -n "$HANDLE" ]; then
+        while IFS= read -r h; do
+            if [ "$h" != "$HANDLE" ]; then
+                RULE=2 VERDICT=handle_conflict A_REASON="the attempt reported handle $h, not $HANDLE"
+                return
+            fi
+        done < <(attempt_handles "$base")
+    fi
+    if [ "$A_DEADLINE" = true ]; then
+        RULE=3 VERDICT=limit
+        return
+    fi
+    # Rule 4 reads agy's trace (denied actions).
+    if [ "$A_EXIT" != 0 ] && usage_limit_seen "$base"; then
+        RULE=5 VERDICT=usage_limit
+        return
+    fi
+    # Rules 6 and 7 read OpenCode's and agy's traces (an error event, a result that is not SUCCESS).
+    if [ "$A_EXIT" != 0 ]; then
+        last_line "$base.stderr"
+        RULE=8 VERDICT=cli_failure A_REASON="$LAST"
+        return
+    fi
+    # Rules 9 and 10 read the traces (unreadable, an OpenCode last step that is not stop).
+    A_ANSWER="$(attempt_answer "$base")"
+    if [[ $A_ANSWER == *[![:space:]]* ]]; then
+        RULE=11 VERDICT=answered
+    else
+        RULE=12 VERDICT=empty
+    fi
+}
+
+record_attempt() { # phase n: appends the classified attempt to the status object; sets A_HANDLE_SEEN
+    local base="$RUN_DIR/$PREFIX.$1$2" h count=0 tok
+    A_HANDLE_SEEN=''
+    while IFS= read -r h; do
+        A_HANDLE_SEEN="$h"
+        count=$((count + 1))
+    done < <(attempt_handles "$base")
+    if [ "$count" != 1 ]; then A_HANDLE_SEEN=''; fi
+    tok="$(attempt_tokens "$base")"
+    # shellcheck disable=SC2016  # jq variables
+    st_update '.attempts += [{phase: $ph, n: $n, fresh: false, pgid: $pgid, exit: $exit, wall: $wall,
+            deadline_expired: $dl, signalled: $sig, rule: $rule, verdict: $verdict,
+            handle_seen: (if $hs == "" then null else $hs end), tokens: $tok,
+            skipped_lines: null, earlier_text: null, earlier_text_bytes: null, denied: []}]
+        | if .kind == "codex" then .tokens.reported += [$tok.reported] else . end' \
+        --arg ph "$1" --argjson n "$2" --argjson pgid "$A_PGID" --argjson exit "$A_EXIT" \
+        --argjson wall "$A_WALL" --argjson dl "$A_DEADLINE" --argjson sig "$A_SIGNALLED" \
+        --argjson rule "$RULE" --arg verdict "$VERDICT" --arg hs "$A_HANDLE_SEEN" --argjson tok "$tok"
+}
+
+take_session() { # phase n: the handle and what the CLI reported, from the attempt that created the session
+    local r
+    if [ -n "$A_HANDLE_SEEN" ]; then
+        HANDLE="$A_HANDLE_SEEN"
+        # shellcheck disable=SC2016  # a jq variable
+        st_update '.handle = $h' --arg h "$HANDLE"
+    fi
+    case "$KIND" in
+        codex)
+            r="$(codex_reported "$RUN_DIR/$PREFIX.$1$2.stderr")"
+            # shellcheck disable=SC2016  # a jq variable
+            st_update '.reported = $r' --argjson r "$r"
+            ;;
+    esac
+}
+
+end_with_verdict() { # ends the run under the verdict of the attempt just classified
+    case "$VERDICT" in
+        answered)
+            HAS_ANSWER=1
+            ANSWER_TEXT="$A_ANSWER"
+            end_as answered ''
+            ;;
+        limit) end_as limit "the time limit of $LIMIT was reached without an answer" ;;
+        empty) end_as empty "$KIND ended without an answer" ;;
+        usage_limit) end_as usage_limit "${A_REASON#ERROR: }" ;;
+        cli_failure) end_as cli_failure "$KIND exited with status $A_EXIT${A_REASON:+: $A_REASON}" ;;
+        *) end_as "$VERDICT" "${A_REASON:-classified by rule $RULE}" ;;
+    esac
+}
+
 do_run() {
     validate_run
     claim
@@ -417,9 +926,22 @@ do_run() {
     init_status
     OWNS_STATUS=1
     write_status
+    # Step 7: preflight that may write.
     PROGRAM="$(type -P "$KIND")"
     [ -n "$PROGRAM" ] || end_as missing_cli "$KIND is not on PATH"
-    end_as runner_failure "not implemented"
+    case "$KIND" in
+        codex) codex_probe ;;
+        *) end_as runner_failure "not implemented" ;;
+    esac
+    take_prompt_sum
+    # Step 8: the first attempt.
+    build_first_argv
+    PHASE=first
+    run_attempt first 1 "$LIMIT"
+    classify first 1
+    record_attempt first 1
+    take_session first 1
+    end_with_verdict
 }
 
 main() {

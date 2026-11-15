@@ -186,6 +186,13 @@ assert_ends() { # haystack suffix msg
     esac
 }
 
+assert_begins() { # haystack prefix msg
+    case "$1" in
+        "$2"*) _pass ;;
+        *) _fail "$3 (expected to begin with '$2', got '$1')" ;;
+    esac
+}
+
 fixture_repo() { # dir: a repository with one commit of README.md
     local d="$1"
     if ! { mkdir -p "$d" &&
@@ -394,26 +401,32 @@ ext_bg() { # args...: the runner in the background, its pid the job's; sets BG, 
 }
 
 ext_wait() { # [n]: waits at most 60 s for job n (the last by default); sets rc, OUT, ERR and PREFIX
-    local n="${1:-$BGN}" pid i=0
+    local n="${1:-$BGN}" pid i=0 late=0
     pid="${BG_PID[n]:-}"
     if [ -z "$pid" ]; then
         _fail "ext_wait: no job $n"
         rc=255
         return 1
     fi
-    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 600 ]; do
-        sleep 0.1
-        i=$((i + 1))
-    done
-    if kill -0 "$pid" 2>/dev/null; then
-        _fail "ext_wait: job $n did not end within 60 s"
-        kill -KILL "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null
-        rc=255
-    else
-        wait "$pid"
-        rc=$?
-    fi
+    # The shell reports a job that a signal ended at the first command after
+    # it reaped the job; the loop and the wait share one redirection so that
+    # report does not reach the suite's output (the cases check the status).
+    {
+        while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 600 ]; do
+            sleep 0.1
+            i=$((i + 1))
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            late=1
+            kill -KILL "$pid"
+            wait "$pid"
+            rc=255
+        else
+            wait "$pid"
+            rc=$?
+        fi
+    } 2>/dev/null
+    if [ "$late" = 1 ]; then _fail "ext_wait: job $n did not end within 60 s"; fi
     OUT="$(< "$CASE/bg.$n.out")"
     ERR="$(< "$CASE/bg.$n.err")"
     PREFIX="${BG_PREFIX[n]}"
@@ -508,6 +521,35 @@ sum() { # file: its SHA-256
     s="$(sha256sum < "$1")" || return 1
     printf '%s\n' "${s%% *}"
 }
+
+codex_err() { # uuid [last lines...]: a Codex standard error in the saved shape
+    local u="$1"
+    shift
+    printf '%s\n' \
+        '2026-11-14T10:58:38.263448Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed' \
+        '2026-11-14T10:58:38.264282Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed' \
+        'OpenAI Codex v0.167.2' '--------' "workdir: $WORK" 'model: gpt-6-astra' 'provider: openai' \
+        'approval: never' 'sandbox: read-only' 'reasoning effort: max' 'reasoning summaries: none' \
+        "session id: $u" '--------' user PROMPT "$@"
+}
+
+mk_tool() { # path: an executable bash script whose body is standard input
+    mkdir -p "${1%/*}" && { printf '#!%s\n' "$BIN_ROOT/utils/bash" && cat; } > "$1" && chmod +x "$1"
+}
+
+took_under() { # start seconds msg: less than that many seconds passed since start (an $EPOCHREALTIME)
+    local s="${1//[!0-9]/}" e="${EPOCHREALTIME//[!0-9]/}"
+    e=$(((e - s) / 1000000))
+    if [ "$e" -lt "$2" ]; then _pass; else _fail "$3 (took $e s)"; fi
+}
+
+has_cr() { # text: yes when it holds a carriage return
+    case "$1" in *$'\r'*) echo yes ;; *) echo no ;; esac
+}
+
+# Codex's usage-limit message has a typographic apostrophe, as here.
+# shellcheck disable=SC1112
+ul_line='ERROR: You’ve hit your usage limit. Upgrade to Pro, or try again at 2:40 PM.'
 
 # ---------------------------------------------------------------------------
 # The frame's own cases.
@@ -749,6 +791,322 @@ assert_eq "$OUT" "$(printf '%s\t%s\n' answered 0 answered_after_resume 0 limit 1
     usage_limit 13 cli_failure 14 trace_unreadable 15 no_handle 16 handle_conflict 17 \
     prerequisite_failed 18 unsupported_version 19 cancelled 20 runner_failure 21 usage_error 64 missing_cli 127)" \
     "outcomes: the sixteen lines in order"
+
+# ---------------------------------------------------------------------------
+# One Codex attempt, starting and stopping a command, the basic outcomes.
+
+new_case codex-answer
+play codex 1 --stdout ANSWER --stderr "$(codex_err U1 'tokens used' '8,834')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "codex-answer: rc"
+assert_eq "$(cat "$RUN/codex.out")" ANSWER "codex-answer: the answer file"
+assert_eq "$(st .outcome)" answered "codex-answer: outcome"
+assert_eq "$(st .phase)" first "codex-answer: phase"
+assert_eq "$(st .handle)" U1 "codex-answer: handle"
+assert_eq "$(st .handle_source)" first1 "codex-answer: handle_source"
+assert_eq "$(st '.attempts[0].rule')" 11 "codex-answer: rule"
+assert_eq "$(st '.attempts[0].handle_seen')" U1 "codex-answer: handle_seen"
+assert_eq "$(st '.attempts[0].pgid')" "$(callf codex 1 pgid)" "codex-answer: the group is the CLI's"
+assert_eq "$(st .reported.model)" gpt-6-astra "codex-answer: reported model"
+assert_eq "$(st .reported.effort)" max "codex-answer: reported effort"
+assert_eq "$(st .requested.model)" null "codex-answer: requested model"
+assert_eq "$(st .oc_model)" null "codex-answer: oc_model"
+assert_eq "$(st '.attempts[0].tokens.reported')" 8834 "codex-answer: the attempt's tokens"
+assert_eq "$(stj .tokens)" '{"reported":[8834]}' "codex-answer: the run's tokens"
+assert_eq "$(argv codex 1)" '["exec","--skip-git-repo-check","-s","read-only","--codex-x","-"]' "codex-answer: argv"
+assert_eq "$(callf codex 1 stdin)" PROMPT "codex-answer: the prompt on standard input"
+assert_eq "$(callf codex 1 cwd)" "$WORK" "codex-answer: cwd"
+assert_contains "$(callf codex 1 parent)" ' -k 1s 90m ' "codex-answer: timeout's grace and the default limit"
+assert_eq "$OUT" "codex: answered; status: $RUN/codex.status" "codex-answer: summary"
+assert_eq "$(has_cr "$ERR")" no "codex-answer: no progress line off a terminal"
+assert_eq "$(st .prompt_sha256)" "$(sum "$RUN/prompt.md")" "codex-answer: prompt_sha256"
+for x in stdout stderr time exit; do assert_file "$RUN/codex.first1.$x" "codex-answer: codex.first1.$x"; done
+assert_nofile "$RUN/codex.lock" "codex-answer: no lock"
+assert_nofile "$RUN/codex.status.tmp" "codex-answer: no status.tmp"
+assert_nofile "$RUN/codex.out.tmp" "codex-answer: no out.tmp"
+
+new_case codex-no-extra
+conf_set 'CODEX_EXTRA_ARGS=()'
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$(argv codex 1)" '["exec","--skip-git-repo-check","-s","read-only","-"]' "codex-no-extra: argv"
+
+new_case codex-edit-model
+play codex 1 --stdout DONE --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit --model m1 --effort low
+assert_eq "$(argv codex 1)" \
+    '["exec","--skip-git-repo-check","-s","workspace-write","-m","m1","-c","model_reasoning_effort=low","--codex-x","-"]' \
+    "codex-edit-model: argv"
+assert_eq "$(stj .requested)" '{"effort":"low","model":"m1"}' "codex-edit-model: requested"
+assert_eq "$(st .level)" edit "codex-edit-model: level"
+
+new_case spaces
+RUN="$CASE/run dir"
+WORK="$CASE/work dir"
+make_run "$RUN"
+fixture_repo "$WORK"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "spaces: rc"
+assert_eq "$(callf codex 1 cwd)" "$WORK" "spaces: cwd"
+
+new_case codex-fail
+play codex 1 --exit 3 --stdout PARTIAL --stderr "$(codex_err U1 boom)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 14 "codex-fail: rc"
+assert_eq "$(st .outcome)" cli_failure "codex-fail: outcome"
+assert_eq "$(st '.attempts[0].rule')" 8 "codex-fail: rule"
+assert_nofile "$RUN/codex.out" "codex-fail: no answer file"
+assert_eq "$(cat "$RUN/codex.first1.stdout")" PARTIAL "codex-fail: the attempt's stdout is kept"
+assert_contains "$(st .message)" boom "codex-fail: message"
+
+for x in 124 137 127; do
+    new_case "own-$x"
+    play codex 1 --exit "$x" --stderr "$(codex_err U1)"
+    ext run --cli codex --run-dir "$RUN" --limit 30s
+    assert_eq "$rc" 14 "own-$x: rc"
+    assert_eq "$(st .outcome)" cli_failure "own-$x: outcome"
+    assert_eq "$(st '.attempts[0].rule')" 8 "own-$x: rule"
+    assert_eq "$(st '.attempts[0].deadline_expired')" false "own-$x: deadline_expired"
+done
+
+new_case limit
+play codex 1 --sleep 5 --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --limit 1s
+assert_eq "$(st '.attempts[0].verdict')" limit "limit: verdict"
+assert_eq "$(st '.attempts[0].rule')" 3 "limit: rule"
+assert_eq "$(st '.attempts[0].exit')" 124 "limit: exit"
+assert_eq "$(st '.attempts[0].deadline_expired')" true "limit: deadline_expired"
+assert_eq "$(st '.attempts[0].wall >= 1')" true "limit: wall"
+assert_contains "$(callf codex 1 parent)" ' -k 1s 1s ' "limit: timeout's grace and limit"
+
+new_case ignore-term
+play codex 1 --sleep 30 --ignore-term --stderr "$(codex_err U1)"
+t0="$EPOCHREALTIME"
+ext run --cli codex --run-dir "$RUN" --limit 1s
+took_under "$t0" 10 "ignore-term: the run took less than 10 s"
+assert_eq "$(st '.attempts[0].exit')" 137 "ignore-term: exit"
+assert_eq "$(st '.attempts[0].verdict')" limit "ignore-term: verdict"
+assert_eq "$(alive "$(callf codex 1 pid)" && echo yes || echo no)" no "ignore-term: the CLI is gone"
+
+new_case whitespace
+play codex 1 --stdout $' \n\t\n' --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$(st '.attempts[0].verdict')" empty "whitespace: verdict"
+assert_eq "$(st '.attempts[0].rule')" 12 "whitespace: rule"
+
+new_case header-only
+# shellcheck disable=SC1112  # the typographic apostrophe of Codex's message
+play codex 1 --stdout ANSWER --stderr "$(codex_err U1 'session id: OTHER' \
+    'ERROR: You’ve hit your usage limit. try again at 2:40 PM.' 'more tool output' 'tokens used' '9')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$(st .handle)" U1 "header-only: handle"
+assert_eq "$(st .outcome)" answered "header-only: outcome"
+
+new_case ul-after-work
+play codex 1 --exit 1 --stderr "$(codex_err U1 "$ul_line" "$ul_line" 'tokens used' '131,586')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "ul-after-work: rc"
+assert_eq "$(st .outcome)" usage_limit "ul-after-work: outcome"
+assert_eq "$(st '.attempts[0].rule')" 5 "ul-after-work: rule"
+assert_eq "$(ncalls codex)" 1 "ul-after-work: one call"
+
+new_case ul-at-the-door
+play codex 1 --exit 1 --stderr "$(codex_err U1 "$ul_line" "$ul_line")"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "ul-at-the-door: rc"
+assert_eq "$(st .outcome)" usage_limit "ul-at-the-door: outcome"
+assert_eq "$(st '.attempts[0].rule')" 5 "ul-at-the-door: rule"
+
+new_case fail-with-quote
+# shellcheck disable=SC1112  # the typographic apostrophe of Codex's message
+play codex 1 --exit 3 --stderr "$(codex_err U1 'ERROR: You’ve hit your usage limit.' 'real error: boom')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$(st .outcome)" cli_failure "fail-with-quote: outcome"
+assert_eq "$(st '.attempts[0].rule')" 8 "fail-with-quote: rule"
+
+new_case child-after-answer
+play codex 1 --stdout ANSWER --child 300 --stderr "$(codex_err U1)"
+t0="$EPOCHREALTIME"
+ext run --cli codex --run-dir "$RUN"
+took_under "$t0" 10 "child-after-answer: the group is stopped, not waited out"
+assert_eq "$rc" 0 "child-after-answer: rc"
+assert_eq "$(alive "$(callf codex 1 child)" && echo yes || echo no)" no "child-after-answer: the child is gone"
+
+new_case probe-fails
+echo 1 > "$SCN/codex.sandbox.exit"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "probe-fails: rc"
+assert_eq "$(st .outcome)" prerequisite_failed "probe-fails: outcome"
+assert_eq "$(st .phase)" preflight "probe-fails: phase"
+assert_contains "$(cat "$RUN/codex.probe.err" 2>/dev/null)" probe-stderr "probe-fails: the probe's standard error"
+assert_eq "$(ncalls codex)" 0 "probe-fails: no call"
+
+new_case probe-hangs
+: > "$SCN/codex.sandbox.hold"
+: > "$SCN/codex.sandbox.ignore-term"
+PRE_LIMIT=1s
+t0="$EPOCHREALTIME"
+ext run --cli codex --run-dir "$RUN"
+took_under "$t0" 10 "probe-hangs: the run took less than 10 s"
+assert_eq "$rc" 18 "probe-hangs: rc"
+assert_contains "$(st .message)" "timed out" "probe-hangs: message"
+assert_eq "$(alive "$(cat "$CALLS/sandbox.pid" 2>/dev/null)" && echo yes || echo no)" no "probe-hangs: the probe is gone"
+assert_eq "$(ncalls codex)" 0 "probe-hangs: no call"
+assert_nofile "$RUN/codex.lock" "probe-hangs: no lock"
+
+new_case slow-start
+mk_tool "$CASE/slow/setsid" <<'EOF'
+sleep 0.5
+exec "$BIN_ROOT/utils/setsid" "$@"
+EOF
+EXT_PATH="$CASE/slow:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "slow-start: rc"
+assert_eq "$(st '.attempts[0].pgid')" "$(callf codex 1 pgid)" "slow-start: the group is the CLI's"
+
+new_case start-fails
+mk_tool "$CASE/broken/setsid" <<'EOF'
+exit 1
+EOF
+EXT_PATH="$CASE/broken:$CASE/bin:$BIN_ROOT/utils"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "start-fails: rc"
+assert_eq "$(st .outcome)" runner_failure "start-fails: outcome"
+assert_contains "$(st .message)" "could not start" "start-fails: message"
+assert_eq "$(ncalls codex)" 0 "start-fails: no call"
+assert_nofile "$RUN/codex.lock" "start-fails: no lock"
+
+new_case forced-fork
+mk_tool "$CASE/fork/setsid" <<'EOF'
+exec "$BIN_ROOT/utils/setsid" -f "$@"
+EOF
+EXT_PATH="$CASE/fork:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --child 300 --stderr "$(codex_err U1)"
+t0="$EPOCHREALTIME"
+ext run --cli codex --run-dir "$RUN"
+took_under "$t0" 10 "forced-fork: the run took less than 10 s"
+assert_eq "$rc" 0 "forced-fork: rc"
+assert_eq "$(st '.attempts[0].pgid')" "$(callf codex 1 pgid)" "forced-fork: the group is the CLI's, not the starter's"
+assert_eq "$(alive "$(callf codex 1 child)" && echo yes || echo no)" no "forced-fork: the child is gone"
+
+new_case start-no-gid
+mk_tool "$CASE/nogid/setsid" <<'EOF'
+rm -f -- "$6"
+mkdir -- "$6"
+exec "$BIN_ROOT/utils/setsid" -f "$@"
+EOF
+EXT_PATH="$CASE/nogid:$CASE/bin:$BIN_ROOT/utils"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "start-no-gid: rc"
+assert_contains "$(st .message)" "could not start" "start-no-gid: message"
+assert_nofile "$CALLS/sandbox.started" "start-no-gid: the command never ran"
+assert_nofile "$RUN/codex.lock" "start-no-gid: no lock"
+
+new_case survivor-probe
+mk_tool "$CASE/ghost/ps" <<'EOF'
+"$BIN_ROOT/utils/ps" "$@"
+st=$?
+if [ "${1:-}" = -A ]; then
+    for f in "$CASE"/run/*.lock/gid; do
+        if [ -f "$f" ]; then printf ' %s S\n' "$(cat "$f")"; fi
+    done
+fi
+exit "$st"
+EOF
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+t0="$EPOCHREALTIME"
+ext run --cli codex --run-dir "$RUN"
+took_under "$t0" 10 "survivor-probe: the run took less than 10 s"
+assert_eq "$rc" 21 "survivor-probe: rc"
+assert_contains "$(st .message)" "could not stop" "survivor-probe: message"
+assert_file "$CALLS/sandbox.started" "survivor-probe: the probe ran"
+assert_eq "$(ncalls codex)" 0 "survivor-probe: no model attempt after it"
+
+new_case unexpected-exit
+play codex 1 --hold --child 300 --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+kill -USR1 "$BG"
+ext_wait
+assert_eq "$rc" 138 "unexpected-exit: rc"
+assert_eq "$(st .outcome)" runner_failure "unexpected-exit: outcome"
+assert_contains "$(st .message)" "unexpected exit" "unexpected-exit: message"
+assert_begins "$OUT" "codex: runner_failure" "unexpected-exit: summary"
+assert_eq "$(alive "$(callf codex 1 pid)" && echo yes || echo no)" no "unexpected-exit: the CLI is gone"
+assert_eq "$(alive "$(callf codex 1 child)" && echo yes || echo no)" no "unexpected-exit: its child is gone"
+assert_nofile "$RUN/codex.lock" "unexpected-exit: no lock"
+
+new_case unexpected-exit-forked
+mk_tool "$CASE/fork/setsid" <<'EOF'
+exec "$BIN_ROOT/utils/setsid" -f "$@"
+EOF
+EXT_PATH="$CASE/fork:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --hold --child 300 --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+kill -USR1 "$BG"
+ext_wait
+assert_eq "$rc" 138 "unexpected-exit-forked: rc"
+assert_eq "$(alive "$(callf codex 1 pid)" && echo yes || echo no)" no "unexpected-exit-forked: the CLI is gone"
+assert_eq "$(alive "$(callf codex 1 child)" && echo yes || echo no)" no "unexpected-exit-forked: its child is gone"
+assert_nofile "$RUN/codex.lock" "unexpected-exit-forked: no lock"
+
+new_case start-abandoned
+mk_tool "$CASE/held/setsid" <<'EOF'
+printf '%s\n' "$$" > "$CASE/setsid.pid"
+k=0
+until [ -e "$CASE/setsid.go" ] || [ "$k" -ge 100 ]; do
+    sleep 0.1
+    k=$((k + 1))
+done
+exec "$BIN_ROOT/utils/setsid" -f "$@"
+EOF
+EXT_PATH="$CASE/held:$CASE/bin:$BIN_ROOT/utils"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CASE/setsid.pid"
+kill -USR1 "$BG"
+ext_wait
+: > "$CASE/setsid.go"
+hp="$(cat "$CASE/setsid.pid")"
+k=0
+while alive "$hp" && [ "$k" -lt 100 ]; do
+    sleep 0.1
+    k=$((k + 1))
+done
+assert_eq "$rc" 138 "start-abandoned: rc"
+assert_eq "$(alive "$hp" && echo yes || echo no)" no "start-abandoned: the starter ended"
+assert_nofile "$CALLS/sandbox.started" "start-abandoned: the command never ran"
+assert_nofile "$RUN/codex.lock" "start-abandoned: no lock"
+
+new_case progress-line
+play codex 1 --sleep 1 --stdout A --stderr "$(codex_err U1)"
+ext_tty run --cli codex --run-dir "$RUN" --limit 30s
+assert_eq "$rc" 0 "progress-line: rc"
+assert_contains "$OUT" "codex first " "progress-line: the prefix and phase"
+assert_contains "$OUT" "/30s" "progress-line: the limit"
+
+new_case big-prompt-oc
+head -c 131072 /dev/zero | tr '\0' x > "$RUN/prompt.md"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "big-prompt-oc: rc"
+assert_contains "$ERR" 131072 "big-prompt-oc: the size named"
+assert_eq "$(ncalls qwen)" 0 "big-prompt-oc: no call"
+assert_nofile "$RUN/qwen.status" "big-prompt-oc: no status"
+
+new_case big-prompt-ok
+head -c 131071 /dev/zero | tr '\0' x > "$RUN/prompt.md"
+ext run --cli qwen --run-dir "$RUN"
+assert_ne "$rc" 64 "big-prompt-ok: rc"
+
+new_case big-prompt-codex
+head -c 200000 /dev/zero | tr '\0' x > "$RUN/prompt.md"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "big-prompt-codex: rc"
+x="$(callf codex 1 stdin | wc -c)"
+assert_eq "${x//[[:space:]]/}" 200000 "big-prompt-codex: the whole prompt on standard input"
 
 # ---------------------------------------------------------------------------
 # Step 7: the end of the suite.
