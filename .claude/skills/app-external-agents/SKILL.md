@@ -383,7 +383,12 @@ Stopping a run. Send the runner the termination signal (TERM); its
 process id is in `<run>/<p>.lock/pid` while it runs. An interrupt (INT)
 is ignored by a runner that a shell started in the background, because
 such a command starts with the interrupt ignored. The runner passes the
-signal to the CLI's process group and records the outcome. A signal that
+signal to the CLI's process group, then to every process still alive in
+the session that group leads, which reaches a worker that moved to a
+process group of its own (Codex's `node_repl` and `codex-code-mode` did
+in the acceptance run of 2026-11-16), and records the outcome; the same
+stop, without the signal, follows every command it starts. A worker that
+starts a session of its own escapes both. A signal that
 arrives before or while the CLI runs ends the run as `cancelled`. One
 that arrives after the CLI has exited leaves that attempt's verdict
 standing: a run
@@ -481,7 +486,7 @@ with `outcomes`:
 | `limit` | 10 | that the limit was reached without an answer (the message names which limit), the attempts' wall times, and any earlier text |
 | `empty` | 11 | that the CLI ended without an answer, also after the resume, and any earlier text |
 | `denied` | 12 | the denied actions from `denied`, and the last lines of the attempt's standard error verbatim, including where agy says an allow-rule goes; for a refused file read, the rule shape agy's message gives. The skill never adds the rule: the owner decides, and a bundle is the way that needs none |
-| `usage_limit` | 13 | the message, the reset time (`reset_at`) and the continue command. `continue` waits for the owner's word: the runner never waits for a reset, and the session continues only when the owner says so. Before continuing an edit-level run whose status says `fresh_start: true`, compare the working tree with the before snapshot |
+| `usage_limit` | 13 | the message, the reset time (`reset_at`) and the continue command. For Codex the limit is its `hit your usage limit` error and `reset_at` the time it states; for agy it is its quota error (`Individual quota reached` in the result's error, or `RESOURCE_EXHAUSTED (code 429)` on standard error) and `reset_at` the attempt's end plus the `Resets in` duration it states, as a local time. `continue` waits for the owner's word: the runner never waits for a reset, and the session continues only when the owner says so. Before continuing an edit-level run whose status says `fresh_start: true`, compare the working tree with the before snapshot |
 | `cli_failure` | 14 | the message, which carries the CLI's own error, and the last lines of the attempt's standard error verbatim. After an OpenCode start-up failure nothing is started again by itself: a read-level run may be started again under a new prefix (the full model id in place of the alias, or a new run directory); before an edit-level run is started again, compare the working tree with the before snapshot. A missing or rejected key ends here too: point the user to "Prerequisite" |
 | `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
 | `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
@@ -516,8 +521,8 @@ fault the message names lies:
   file was written for), a claimed prefix, a missing CLI, a prerequisite
   (a helper program, the settings file, the Codex sandbox probe, a
   follow-up text, git that did not answer or cannot be run), an OpenCode
-  version the guard refused, a process group that outlived the kill, or
-  a signal. A record that could be continued before still can be: once
+  version the guard refused, a process group or session that outlived
+  the kill, or a signal. A record that could be continued before still can be: once
   the fault is cleared, the same continue command is checked afresh.
 - In the files and directories around the record: the recorded working
   directory is gone or not a directory; files of the attempts the
