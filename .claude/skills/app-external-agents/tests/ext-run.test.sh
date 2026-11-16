@@ -1632,6 +1632,33 @@ ext run --cli agy --run-dir "$RUN"
 assert_eq "$rc" 21 "survivor-no-resume: rc"
 assert_contains "$(st .message)" "could not stop" "survivor-no-resume: message"
 assert_eq "$(ncalls agy)" 1 "survivor-no-resume: no resume while a process of the attempt is reported alive"
+assert_eq "$(st '.attempts | length')" 1 "survivor-no-resume: the attempt is recorded"
+assert_eq "$(st '.attempts[0].verdict')" null "survivor-no-resume: and not classified"
+
+# A process of the group outlived the kill after the attempt ended: the
+# attempt is recorded as measured but not classified, because the survivor may
+# still write to its files, so an answer in them is not published.
+new_case survivor-unclassified
+mk_ghost_ps "$CASE/ghost"
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 21 "survivor-unclassified: rc"
+assert_eq "$(st .outcome)" runner_failure "survivor-unclassified: outcome"
+assert_contains "$(st .message)" "could not stop" "survivor-unclassified: message"
+assert_eq "$(st '.attempts | length')" 1 "survivor-unclassified: the attempt is recorded"
+assert_eq "$(stj '.attempts[0] | [.verdict, .rule, .handle_seen, .tokens, .skipped_lines, .earlier_text, .denied]')" \
+    '[null,null,null,null,null,null,[]]' "survivor-unclassified: no verdict, no rule, no trace fields"
+assert_eq "$(st '.attempts[0].exit')" 0 "survivor-unclassified: exit as measured"
+assert_eq "$(st '.attempts[0].pgid')" "$(callf agy 1 pgid)" "survivor-unclassified: pgid as measured"
+assert_eq "$(st '.attempts[0].signalled')" false "survivor-unclassified: signalled as measured"
+assert_eq "$(st '.attempts[0].wall | type')" number "survivor-unclassified: wall as measured"
+assert_file "$RUN/agy.first1.exit" "survivor-unclassified: agy.first1.exit"
+assert_file "$RUN/agy.first1.time" "survivor-unclassified: agy.first1.time"
+assert_nofile "$RUN/agy.out" "survivor-unclassified: no answer published"
+assert_eq "$(st .answer)" null "survivor-unclassified: answer"
+assert_eq "$(st .handle)" null "survivor-unclassified: no handle taken from an unclassified attempt"
+assert_eq "$(ncalls agy)" 1 "survivor-unclassified: one call"
 
 new_case resume-fails
 play codex 1 --stdout '' --stderr "$(codex_err U1)"
@@ -2900,6 +2927,453 @@ assert_eq "$rc" 18 "snap-status-fails: rc"
 assert_eq "$(st .outcome)" prerequisite_failed "snap-status-fails: outcome"
 assert_contains "$(st .message)" "git status" "snap-status-fails: the query named"
 assert_eq "$(ncalls codex)" 0 "snap-status-fails: no call"
+
+# ---------------------------------------------------------------------------
+# Signals, the live status, failed writes, and concurrency. Every case here
+# synchronises on files: the runner in the background, a wait for the fact the
+# action needs, the action, then the wait for the runner.
+
+alive_yn() { # pid: yes when alive, no otherwise
+    if alive "$1"; then echo yes; else echo no; fi
+}
+
+err_last() { # the last line of ERR
+    printf '%s\n' "$ERR" | tail -n 1
+}
+
+no_locks() { # the case's run directory holds no lock directory
+    local f
+    for f in "$RUN"/*.lock; do
+        if [ -e "$f" ]; then
+            echo "${f##*/}"
+            return
+        fi
+    done
+    echo none
+}
+
+mk_gate() { # a mkdir in $CASE/gate that holds every claim until two claimants have reached it (at most 5 s), then makes the directory
+    mkdir "$CASE/gate.d" || exit 2
+    mk_tool "$CASE/gate/mkdir" <<'EOF' || exit 2
+last="${*: -1}"
+if [[ $last == *.lock ]]; then
+    : > "$CASE/gate.d/$$"
+    n=0
+    while :; do
+        f=("$CASE/gate.d"/*)
+        if [ "${#f[@]}" -ge 2 ] || [ "$n" -ge 500 ]; then break; fi
+        sleep 0.01
+        n=$((n + 1))
+    done
+fi
+exec "$BIN_ROOT/utils/mkdir" "$@"
+EOF
+}
+
+gate_count() { # the number of claimants that reached the gate
+    local f n=0
+    for f in "$CASE/gate.d"/*; do
+        if [ -e "$f" ]; then n=$((n + 1)); fi
+    done
+    echo "$n"
+}
+
+new_case term
+play codex 1 --hold --child 30 --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+assert_eq "$(cat "$RUN/codex.lock/pid" 2>/dev/null)" "$BG" "term: the background runner holds the claim"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "term: rc"
+assert_eq "$(st .outcome)" cancelled "term: outcome"
+assert_eq "$(st .phase)" first "term: phase"
+assert_eq "$(st '.attempts[0].signalled')" true "term: signalled"
+assert_eq "$(st '.attempts[0].rule')" 1 "term: rule 1"
+assert_ne "$(st '.attempts[0].exit')" 0 "term: the attempt's exit is not 0, so rule 8 would match too"
+assert_nofile "$RUN/codex.lock" "term: no lock"
+assert_eq "$(alive_yn "$(callf codex 1 pid)")" no "term: the CLI is gone"
+assert_eq "$(alive_yn "$(callf codex 1 child)")" no "term: its child is gone"
+assert_begins "$OUT" "codex: cancelled" "term: summary"
+assert_ends "$OUT" "status: $RUN/codex.status" "term: the status named"
+
+new_case hup
+play codex 1 --hold --child 30 --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+kill -HUP "$BG"
+ext_wait
+assert_eq "$rc" 20 "hup: rc"
+assert_eq "$(st .outcome)" cancelled "hup: outcome"
+assert_eq "$(alive_yn "$(callf codex 1 pid)")" no "hup: the CLI is gone"
+assert_eq "$(alive_yn "$(callf codex 1 child)")" no "hup: its child is gone"
+assert_nofile "$RUN/codex.lock" "hup: no lock"
+
+new_case term-ignored
+play codex 1 --hold --ignore-term --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+t0="$EPOCHREALTIME"
+kill -TERM "$BG"
+ext_wait
+took_under "$t0" 10 "term-ignored: from the signal to the end"
+assert_eq "$rc" 20 "term-ignored: rc"
+assert_eq "$(st .outcome)" cancelled "term-ignored: outcome"
+assert_eq "$(alive_yn "$(callf codex 1 pid)")" no "term-ignored: the CLI is gone"
+
+new_case agy-denied-cancelled
+play agy 1 --stdout-early "$(t_agy_denied C)" --hold
+ext_bg run --cli agy --run-dir "$RUN"
+wait_for "$CALLS/agy.1/started"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "agy-denied-cancelled: rc"
+assert_eq "$(st .outcome)" cancelled "agy-denied-cancelled: outcome"
+assert_eq "$(st '.attempts[0].rule')" 1 "agy-denied-cancelled: rule 1, not rule 4"
+assert_eq "$(st '.attempts[0].denied | length')" 1 "agy-denied-cancelled: the denied action is recorded"
+
+new_case term-in-resume
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --hold --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.2/started"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "term-in-resume: rc"
+assert_eq "$(st .outcome)" cancelled "term-in-resume: outcome"
+assert_eq "$(st .phase)" resume "term-in-resume: phase"
+assert_eq "$(st '.attempts | length')" 2 "term-in-resume: two attempts"
+assert_eq "$(st '.attempts[1].signalled')" true "term-in-resume: the resume was signalled"
+assert_eq "$(alive_yn "$(callf codex 2 pid)")" no "term-in-resume: the CLI is gone"
+
+new_case term-in-preflight
+: > "$SCN/codex.sandbox.hold"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/sandbox.started"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "term-in-preflight: rc"
+assert_eq "$(st .outcome)" cancelled "term-in-preflight: outcome"
+assert_eq "$(st .phase)" preflight "term-in-preflight: phase"
+assert_eq "$(ncalls codex)" 0 "term-in-preflight: no call"
+assert_eq "$(alive_yn "$(cat "$CALLS/sandbox.pid" 2>/dev/null)")" no "term-in-preflight: the probe is gone"
+assert_nofile "$RUN/codex.lock" "term-in-preflight: no lock"
+
+new_case term-in-version
+: > "$SCN/opencode.version.hold"
+ext_bg run --cli qwen --run-dir "$RUN"
+wait_for "$CALLS/version.started"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "term-in-version: rc"
+assert_eq "$(st .outcome)" cancelled "term-in-version: outcome"
+assert_eq "$(st .phase)" preflight "term-in-version: phase"
+assert_eq "$(ncalls qwen)" 0 "term-in-version: no call"
+assert_eq "$(alive_yn "$(cat "$CALLS/version.pid" 2>/dev/null)")" no "term-in-version: the version command is gone"
+assert_nofile "$RUN/qwen.lock" "term-in-version: no lock"
+
+# The signal arrives during the --local-env-vars call: the call ends at its
+# limit, and the signal decides.
+new_case term-in-git
+mk_tool "$CASE/slowgit/git" <<'EOF'
+: > "$CASE/git-entered"
+exec sleep 30
+EOF
+EXT_PATH="$CASE/slowgit:$CASE/bin:$BIN_ROOT/utils"
+PRE_LIMIT=3s
+answering qwen 1
+ext_bg run --cli qwen --run-dir "$RUN"
+wait_for "$CASE/git-entered"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "term-in-git: rc, not 18"
+assert_begins "$OUT" "qwen: cancelled" "term-in-git: summary"
+assert_ends "$OUT" "status: none" "term-in-git: no status named"
+assert_eq "$(ncalls qwen)" 0 "term-in-git: no call"
+assert_nofile "$RUN/qwen.status" "term-in-git: no status"
+assert_nofile "$RUN/qwen.lock" "term-in-git: no lock"
+
+# The same during the query that follows, once --local-env-vars has answered.
+new_case term-in-git-query
+mk_tool "$CASE/slowgit/git" <<'EOF'
+printf '%s\n' "$*" >> "$CASE/git-calls"
+if [ "$*" = 'rev-parse --local-env-vars' ]; then exec "$BIN_ROOT/utils/git" "$@"; fi
+: > "$CASE/git-entered"
+exec sleep 30
+EOF
+EXT_PATH="$CASE/slowgit:$CASE/bin:$BIN_ROOT/utils"
+PRE_LIMIT=3s
+answering qwen 1
+ext_bg run --cli qwen --run-dir "$RUN"
+wait_for "$CASE/git-entered"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$(head -n 1 "$CASE/git-calls")" 'rev-parse --local-env-vars' "term-in-git-query: --local-env-vars answered first"
+assert_contains "$(tail -n 1 "$CASE/git-calls")" 'rev-parse --show-toplevel' "term-in-git-query: the signal came during the query"
+assert_eq "$rc" 20 "term-in-git-query: rc, not 18"
+assert_begins "$OUT" "qwen: cancelled" "term-in-git-query: summary"
+assert_ends "$OUT" "status: none" "term-in-git-query: no status named"
+assert_eq "$(ncalls qwen)" 0 "term-in-git-query: no call"
+assert_nofile "$RUN/qwen.lock" "term-in-git-query: no lock"
+
+new_case term-in-continue-preflight
+ul_first_run
+keep "$RUN/codex.status"
+rm "$CALLS/sandbox.started"
+: > "$SCN/codex.sandbox.hold"
+ext_bg continue --cli codex --run-dir "$RUN"
+wait_for "$CALLS/sandbox.started"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "term-in-continue-preflight: rc"
+assert_begins "$OUT" "codex: cancelled" "term-in-continue-preflight: summary"
+assert_ends "$OUT" "status: none" "term-in-continue-preflight: no status named"
+unchanged "$RUN/codex.status" "term-in-continue-preflight"
+assert_nofile "$RUN/codex.lock" "term-in-continue-preflight: no lock"
+rm "$SCN/codex.sandbox.hold"
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "term-in-continue-preflight then: the cancelled continue left the run continuable"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" DONE "term-in-continue-preflight then: the answer"
+
+new_case running-status
+play codex 1 --hold --stdout A --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+wait_st .handle U1 50
+assert_eq "$(st .outcome)" running "running-status: outcome while held"
+assert_eq "$(st .phase)" first "running-status: phase while held"
+assert_eq "$(st .handle)" U1 "running-status: handle while held"
+assert_eq "$(st '.attempts | length')" 0 "running-status: no attempt recorded while it runs"
+release codex 1
+ext_wait
+assert_eq "$rc" 0 "running-status: rc"
+assert_eq "$(st '.attempts | length')" 1 "running-status: the attempt recorded once it ended"
+
+new_case late-handle
+play codex 1 --stderr-held --hold --stdout A --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+sleep 1
+assert_eq "$(st .handle)" null "late-handle: no handle before the header"
+release_stderr codex 1
+wait_st .handle U1 50
+assert_eq "$(st .outcome)" running "late-handle: the handle came while the attempt was held"
+release codex 1
+ext_wait
+assert_eq "$rc" 0 "late-handle: rc"
+
+new_case running-status-agy
+play agy 1 --stdout-early "$(agy_init C)" --hold --stdout "$(agy_result C SUCCESS A)"
+ext_bg run --cli agy --run-dir "$RUN"
+wait_st .handle C 50
+assert_eq "$(st .outcome)" running "running-status-agy: outcome while held"
+assert_eq "$(st .phase)" first "running-status-agy: phase while held"
+release agy 1
+ext_wait
+assert_eq "$rc" 0 "running-status-agy: rc"
+assert_eq "$(cat "$RUN/agy.out" 2>/dev/null)" A "running-status-agy: the answer"
+
+new_case running-status-oc
+play qwen 1 --stdout-early "$(oc_start S)" --hold --stdout "$(oc_text S A; oc_finish S stop)"
+ext_bg run --cli qwen --run-dir "$RUN"
+wait_st .handle S 50
+assert_eq "$(st .outcome)" running "running-status-oc: outcome while held"
+release qwen 1
+ext_wait
+assert_eq "$rc" 0 "running-status-oc: rc"
+
+# A continue that starts afresh creates the session, so its handle is shown
+# while it runs too.
+new_case running-status-fresh
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+ext run --cli codex --run-dir "$RUN"
+play codex 2 --hold --stdout DONE --stderr "$(codex_err U2)"
+ext_bg continue --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.2/started"
+wait_st .handle U2 50
+assert_eq "$(st .outcome)" running "running-status-fresh: outcome while held"
+assert_eq "$(st .phase)" continue "running-status-fresh: phase while held"
+assert_eq "$(st .handle_source)" continue1 "running-status-fresh: handle_source"
+assert_eq "$(st '.attempts | length')" 1 "running-status-fresh: only the first attempt recorded"
+release codex 2
+ext_wait
+assert_eq "$rc" 0 "running-status-fresh: rc"
+assert_eq "$(st .handle)" U2 "running-status-fresh: handle"
+
+new_case live-write-fails
+play codex 1 --stderr-held --hold --child 30 --stdout A --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+mkdir "$RUN/codex.status.tmp"
+t0="$EPOCHREALTIME"
+release_stderr codex 1
+ext_wait
+rmdir "$RUN/codex.status.tmp"
+took_under "$t0" 10 "live-write-fails: the run ended while the CLI was still held"
+assert_eq "$(err_last | jq -r '.attempts | length' 2>/dev/null)" 0 "live-write-fails: no attempt had ended"
+assert_eq "$rc" 21 "live-write-fails: rc"
+assert_begins "$OUT" "codex: runner_failure" "live-write-fails: summary"
+assert_ends "$OUT" "status: none" "live-write-fails: no status named"
+assert_eq "$(err_last | jq -r .outcome 2>/dev/null)" runner_failure "live-write-fails: the status object on standard error"
+assert_eq "$(alive_yn "$(callf codex 1 pid)")" no "live-write-fails: the CLI was stopped"
+assert_eq "$(alive_yn "$(callf codex 1 child)")" no "live-write-fails: its child too"
+assert_eq "$(ncalls codex)" 1 "live-write-fails: one call"
+assert_nofile "$RUN/codex.lock" "live-write-fails: no lock"
+
+new_case final-write-fails
+play codex 1 --hold --stdout A --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+wait_st .handle U1 50
+mkdir "$RUN/codex.status.tmp"
+release codex 1
+ext_wait
+rmdir "$RUN/codex.status.tmp"
+assert_eq "$rc" 21 "final-write-fails: rc"
+assert_ends "$OUT" "status: none" "final-write-fails: no status named"
+assert_eq "$(err_last | jq -c '[.outcome, .attempts[0].verdict, .answer]' 2>/dev/null)" \
+    "[\"runner_failure\",\"answered\",\"$RUN/codex.out\"]" "final-write-fails: the status object on standard error"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" A "final-write-fails: the answer was published"
+assert_nofile "$RUN/codex.lock" "final-write-fails: no lock"
+
+new_case publish-fails
+play codex 1 --hold --stdout A --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+wait_st .handle U1 50
+mkdir "$RUN/codex.out.tmp"
+release codex 1
+ext_wait
+rmdir "$RUN/codex.out.tmp"
+assert_eq "$rc" 21 "publish-fails: rc"
+assert_eq "$(st .outcome)" runner_failure "publish-fails: outcome"
+assert_eq "$(st .answer)" null "publish-fails: answer"
+assert_eq "$(st '.attempts[0].verdict')" answered "publish-fails: verdict"
+assert_nofile "$RUN/codex.out" "publish-fails: no answer file"
+assert_eq "$(cat "$RUN/codex.first1.stdout" 2>/dev/null)" A "publish-fails: the attempt's output is kept"
+assert_ends "$OUT" "status: $RUN/codex.status" "publish-fails: the status named"
+
+new_case write-fails-exit
+play codex 1 --hold --stdout A --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+mkdir "$RUN/codex.first1.exit"
+release codex 1
+ext_wait
+assert_eq "$rc" 21 "write-fails-exit: rc"
+assert_eq "$(st .outcome)" runner_failure "write-fails-exit: outcome"
+assert_nofile "$RUN/codex.out" "write-fails-exit: no answer file"
+
+new_case write-fails-config
+: > "$SCN/opencode.version.hold"
+answering qwen 1
+ext_bg run --cli qwen --run-dir "$RUN"
+wait_for "$CALLS/version.started"
+mkdir "$RUN/qwen.first1.config.json"
+: > "$SCN/opencode.version.release"
+ext_wait
+assert_eq "$rc" 21 "write-fails-config: rc"
+assert_eq "$(st .outcome)" runner_failure "write-fails-config: outcome"
+assert_eq "$(ncalls qwen)" 0 "write-fails-config: no call"
+
+new_case write-fails-agy-copy
+mkdir "$RUN/agy-prompt.md"
+answering agy 1
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 21 "write-fails-agy-copy: rc"
+assert_eq "$(st .outcome)" runner_failure "write-fails-agy-copy: outcome"
+assert_eq "$(ncalls agy)" 0 "write-fails-agy-copy: no call"
+
+new_case write-fails-snapshot
+mkdir "$RUN/before.txt"
+answering codex 1
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 21 "write-fails-snapshot: rc"
+assert_eq "$(st .outcome)" runner_failure "write-fails-snapshot: outcome"
+assert_eq "$(ncalls codex)" 0 "write-fails-snapshot: no call"
+
+new_case unwritable-claim
+if [ "$(id -u)" = 0 ]; then
+    printf 'ext-run.test: unwritable-claim skipped: as root the run directory stays writable\n' >&2
+else
+    answering codex 1
+    chmod a-w "$RUN"
+    ext run --cli codex --run-dir "$RUN"
+    chmod u+w "$RUN"
+    assert_eq "$rc" 21 "unwritable-claim: rc"
+    assert_contains "$OUT" runner_failure "unwritable-claim: outcome"
+    assert_contains "$OUT" "status: none" "unwritable-claim: no status named"
+    assert_eq "$(err_last | jq -r .outcome 2>/dev/null)" runner_failure "unwritable-claim: the status object on standard error"
+    assert_eq "$(ncalls codex)" 0 "unwritable-claim: no call"
+fi
+
+new_case prefix-in-use
+play codex 1 --hold --stdout A --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "prefix-in-use: the second's rc"
+assert_contains "$ERR" "pid $BG is running" "prefix-in-use: the owner named"
+assert_lacks "$ERR" "rm -r" "prefix-in-use: no removal command for a running owner"
+release codex 1
+ext_wait 1
+assert_eq "$rc" 0 "prefix-in-use: the first's rc"
+assert_eq "$(ncalls codex)" 1 "prefix-in-use: one call"
+
+# Two runs with one prefix reach the claim before either has made it; the
+# exclusive pid file lets exactly one of them through (uutils mkdir alone can
+# report success to both).
+for r in 1 2 3; do
+    new_case "same-prefix-race-$r"
+    mk_gate
+    EXT_PATH="$CASE/gate:$CASE/bin:$BIN_ROOT/utils"
+    play codex 1 --stdout A --stderr "$(codex_err U1)"
+    ext_bg run --cli codex --run-dir "$RUN"
+    ext_bg run --cli codex --run-dir "$RUN"
+    ext_wait 1
+    r1="$rc"
+    ext_wait 2
+    assert_eq "$(gate_count)" 2 "same-prefix-race-$r: both runners reached the claim"
+    assert_eq "$(printf '%s\n' "$r1" "$rc" | LC_ALL=C sort | tr '\n' ' ')" "0 64 " "same-prefix-race-$r: one rc 0, one rc 64"
+    assert_eq "$(ncalls codex)" 1 "same-prefix-race-$r: one call"
+    assert_eq "$(no_locks)" none "same-prefix-race-$r: no lock"
+done
+
+new_case two-continues
+ul_first_run
+mk_gate
+EXT_PATH="$CASE/gate:$CASE/bin:$BIN_ROOT/utils"
+play codex 2 --stdout A --stderr "$(codex_err U1)"
+ext_bg continue --cli codex --run-dir "$RUN"
+ext_bg continue --cli codex --run-dir "$RUN"
+ext_wait 1
+r1="$rc"
+ext_wait 2
+assert_eq "$(gate_count)" 2 "two-continues: both reached the claim"
+assert_eq "$(printf '%s\n' "$r1" "$rc" | LC_ALL=C sort | tr '\n' ' ')" "0 64 " "two-continues: one rc 0, one rc 64"
+assert_eq "$(ncalls codex)" 2 "two-continues: the run's call and one continue's"
+assert_eq "$(no_locks)" none "two-continues: no lock"
+
+new_case five-at-once
+five=(codex agy deepseek kimi qwen)
+play codex 1 --hold --stdout codex --stderr "$(codex_err U1)"
+play agy 1 --hold --stdout "$(t_agy_answer C agy)"
+for a in deepseek kimi qwen; do play "$a" 1 --hold --stdout "$(t_oc_only S "$a")"; done
+for a in "${five[@]}"; do ext_bg run --cli "$a" --run-dir "$RUN"; done
+for a in "${five[@]}"; do wait_for "$CALLS/$a.1/started" 300; done
+for a in "${five[@]}"; do release "$a" 1; done
+for i in 1 2 3 4 5; do
+    ext_wait "$i"
+    assert_eq "$rc" 0 "five-at-once: ${BG_PREFIX[i]} rc"
+done
+for a in "${five[@]}"; do
+    assert_eq "$(cat "$RUN/$a.out" 2>/dev/null)" "$a" "five-at-once: $a.out holds its own answer"
+    assert_file "$RUN/$a.status" "five-at-once: $a.status"
+    for x in stdout stderr time exit; do assert_file "$RUN/$a.first1.$x" "five-at-once: $a.first1.$x"; done
+done
+for a in deepseek kimi qwen; do assert_file "$RUN/$a.first1.config.json" "five-at-once: $a.first1.config.json"; done
+assert_eq "$(no_locks)" none "five-at-once: no lock is left"
 
 # ---------------------------------------------------------------------------
 # Step 7: the end of the suite.

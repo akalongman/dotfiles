@@ -104,7 +104,11 @@ TRACE_OF='' T_EVENTS='' T_SKIPPED=0 T_DAMAGED=false
 T_RESULT=false T_STATUS='' T_DENIED_N=0 T_DENIED_TOOLS=''          # agy
 T_LAST='' T_REASON='' T_ERROR_SEEN=false T_ERROR='' T_ASK_REFUSED=false # OpenCode
 GID=''                        # the group read from the gid file
+CANCEL_SIG=''                 # the signal that set CANCEL: TERM, HUP or INT
 C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false       # the last command run_cmd ran
+C_STUCK=false C_STUCK_MSG=''  # a process of its group outlived the kill, and the message that says so
+A_BASE='' A_CREATES=0         # the running attempt's file base; 1 when it creates the session (first1, or a continue that starts afresh)
+LIVE_HANDLE=''                # the handle the running attempt's files showed; only a running status carries it
 A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false # the last attempt
 A_ANSWER='' A_REASON='' A_HANDLE_SEEN='' A_LIMIT=''
 A_PHASE='' A_ID=''            # the last attempt's phase and id (<phase><n>)
@@ -166,6 +170,15 @@ end_as() { # outcome message [further lines for standard error]: ends the run
     if [ -n "$MESSAGE" ]; then say "$MESSAGE"; fi
     for l in "$@"; do printf '%s\n' "$l" >&2; done
     exit
+}
+
+on_signal() { # TERM|HUP|INT: the trap of those three; the runner acts on it where it next looks at CANCEL
+    if [ "$CANCEL" = 0 ]; then CANCEL_SIG="$1"; fi
+    CANCEL=1
+}
+
+end_if_cancelled() { # when: ends the run as cancelled once a signal has arrived
+    if [ "$CANCEL" = 1 ]; then end_as cancelled "the runner received SIG$CANCEL_SIG $1"; fi
 }
 
 now_us() { NOW="${EPOCHREALTIME//[!0-9]/}"; } # sets NOW to the time in microseconds
@@ -302,16 +315,20 @@ init_status() { # the status object as step 6 of a run writes it
 }
 
 status_object() { # [-c]: the status object with this invocation's outcome, phase and message (the notes after it)
-    local base="$ST"
+    local base="$ST" live=''
     joined_message
+    # The handle a running attempt's files already show belongs to a running
+    # status only; the final record takes the handle from the classified attempt.
+    if [ -z "$OUTCOME" ]; then live="$LIVE_HANDLE"; fi
     if [ -z "$base" ]; then
         base="$(jq -cn --arg name "$NAME" --arg kind "$KIND" --arg prefix "$PREFIX" '
             def named: if . == "" then null else . end;
             {outcome: null, phase: null, message: null,
              name: ($name | named), kind: ($kind | named), prefix: ($prefix | named)}')" || return 1
     fi
-    jq "$@" --arg o "${OUTCOME:-running}" --arg p "$PHASE" --arg m "$JOINED" \
-        '.outcome = $o | .phase = $p | .message = $m' <<< "$base"
+    jq "$@" --arg o "${OUTCOME:-running}" --arg p "$PHASE" --arg m "$JOINED" --arg h "$live" \
+        '.outcome = $o | .phase = $p | .message = $m | if $h != "" and .handle == null then .handle = $h else . end' \
+        <<< "$base"
 }
 
 write_status() { # writes <p>.status through <p>.status.tmp; a failure ends the run as runner_failure
@@ -405,11 +422,13 @@ stop_active() { # the finalizer's first step: the job, and the group the gid fil
     ACTIVE_JOB=''
 }
 
-run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner starts a CLI command
+run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner starts a CLI command; sets the C_ variables
     local limit="$1" out="$2" err="$3" in="$4" gidf="$LOCK/gid" what g t0 t1 end stuck=0
     shift 4
     what="${1##*/}${2:+ $2}"
-    C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false
+    C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false C_STUCK=false C_STUCK_MSG=''
+    # Nothing starts once a signal has arrived.
+    end_if_cancelled "before $what started"
     rm -f -- "$gidf" "$gidf.go" 2>/dev/null
     if [ -e "$gidf" ] || [ -L "$gidf" ] || [ -e "$gidf.go" ] || [ -L "$gidf.go" ]; then
         end_as runner_failure "cannot clear $gidf before starting $what"
@@ -448,12 +467,18 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     fi
     g="$GID"
     C_PGID="$g"
-    { : > "$gidf.go"; } 2>/dev/null || end_as runner_failure "cannot write $gidf.go"
-    while job_running "$ACTIVE_JOB"; do
-        [ "$CANCEL" = 1 ] && break
-        if [ -n "$POLL_HOOK" ]; then "$POLL_HOOK"; fi
-        sleep "$EXT_RUN_POLL"
-    done
+    # A signal that arrived while the command recorded its group: it gets no
+    # go-ahead, so it never becomes the CLI, and the group is stopped below.
+    if [ "$CANCEL" = 0 ]; then
+        { : > "$gidf.go"; } 2>/dev/null || end_as runner_failure "cannot write $gidf.go"
+        # The loop is left at the next poll after a signal; the hook may end
+        # the run, and the finalizer then stops the command.
+        while job_running "$ACTIVE_JOB"; do
+            [ "$CANCEL" = 1 ] && break
+            if [ -n "$POLL_HOOK" ]; then "$POLL_HOOK"; fi
+            sleep "$EXT_RUN_POLL"
+        done
+    fi
     if [ "$CANCEL" = 1 ]; then
         C_SIGNALLED=true
         stop_group "$g" term || stuck=1
@@ -474,9 +499,16 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     ACTIVE_JOB=''
     C_WALL_US=$((t1 - t0))
     printf -v C_WALL '%d.%03d' $((C_WALL_US / 1000000)) $((C_WALL_US % 1000000 / 1000))
+    # The caller ends the run: an attempt records itself first, unclassified.
     if [ "$stuck" = 1 ]; then
-        end_as runner_failure "could not stop process group $g of $what: a process outlived the kill"
+        C_STUCK=true
+        C_STUCK_MSG="could not stop process group $g of $what: a process outlived the kill"
     fi
+}
+
+after_preflight_cmd() { # what: after a preflight command, a group that outlived the kill ends the run as runner_failure, a signal as cancelled
+    if [ "$C_STUCK" = true ]; then end_as runner_failure "$C_STUCK_MSG"; fi
+    if [ "$C_SIGNALLED" = true ]; then end_as cancelled "the runner received SIG$CANCEL_SIG during $1"; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -843,6 +875,7 @@ codex_usage_limit() { # stderr-file: true when its end is Codex's usage-limit er
 codex_probe() { # step 7: codex sandbox true, in a group of its own under the preflight limit
     local err="$RUN_DIR/$PREFIX.probe.err"
     run_cmd "$EXT_RUN_PREFLIGHT_LIMIT" /dev/null "$err" /dev/null "$PROGRAM" sandbox true
+    after_preflight_cmd "the Codex sandbox probe"
     case "$C_EXIT" in
         0) return 0 ;;
         124 | 137)
@@ -1067,7 +1100,8 @@ git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repo
     )"
     GIT_RC="${out##*$'\n'}"
     out="${out%$'\n'*}"
-    if [ "$CANCEL" = 1 ]; then end_as cancelled "a signal arrived during a git query"; fi
+    # A signal that arrived during the call decides, whatever its status.
+    end_if_cancelled "during a git query (git rev-parse --local-env-vars)"
     # A git that did not answer, cannot be run, or answers with what is not a
     # list of names is a missing prerequisite. Any other failure is a usage
     # error (the plan's Contract, run step 3), except once this invocation
@@ -1116,7 +1150,8 @@ own_git() { # [-o file] dir args...: one git query about dir, bounded, with the 
     )"
     GIT_RC="${out##*$'\n'}"
     GIT_OUT="${out%$'\n'*}"
-    if [ "$CANCEL" = 1 ]; then end_as cancelled "a signal arrived during a git query"; fi
+    # A signal that arrived during the query decides, whatever its status.
+    end_if_cancelled "during a git query (git $* in $dir)"
     case "$GIT_RC" in
         124 | 137) end_as prerequisite_failed "git did not answer within $EXT_RUN_PREFLIGHT_LIMIT (git $* in $dir)" ;;
         126 | 127) end_as prerequisite_failed "git cannot be run: git $* in $dir ended with status $GIT_RC (not found, or not executable)" ;;
@@ -1284,6 +1319,7 @@ valid_version() { # text: a version number such as 1.19.0
 
 oc_version() { # opencode --version under the preflight limit, its output in the lock directory
     run_cmd "$EXT_RUN_PREFLIGHT_LIMIT" "$LOCK/cmd.out" "$LOCK/cmd.err" /dev/null "$PROGRAM" --version
+    after_preflight_cmd "opencode --version"
 }
 
 oc_version_guard() { # preflight|later: reads OpenCode's version, records it, and ends the run unless its major version is the tested one
@@ -1418,8 +1454,38 @@ followup_text() { # limit|empty|continue [after-edit]: prints that text, the aft
     printf '%s\n' "$t"
 }
 
-attempt_poll() { # POLL_HOOK of an attempt: redraws the progress line when standard error is a terminal
+live_handles() { # attempt-base: the distinct handles the running attempt's files show so far, one per line
+    # A trace is read up to its first 256 KiB, which hold the first events
+    # where agy and OpenCode name the session, so a long trace is not parsed
+    # again at every poll. A line not yet complete does not parse and is left
+    # out, and nothing here ends the run: the attempt's classification reads
+    # the whole trace once it has ended.
+    case "$KIND" in
+        codex) codex_handles "$1.stderr" ;;
+        agy)
+            head -c 262144 2>/dev/null < "$1.stdout" |
+                jq -nRr "$JQ_TRACE"' [inputs | try fromjson catch empty | objects] | agy_handles' 2>/dev/null
+            ;;
+        opencode)
+            head -c 262144 2>/dev/null < "$1.stdout" |
+                jq -nRr "$JQ_TRACE"' [inputs | try fromjson catch empty | objects] | oc_handles' 2>/dev/null
+            ;;
+    esac
+}
+
+live_handle() { # while an attempt that creates the session runs: once exactly one handle has appeared in its files, the status shows it
+    local hs=()
+    [ "$A_CREATES" = 1 ] && [ -z "$LIVE_HANDLE" ] || return 0
+    mapfile -t hs < <(live_handles "$A_BASE")
+    [ "${#hs[@]}" = 1 ] && [ -n "${hs[0]}" ] || return 0
+    LIVE_HANDLE="${hs[0]}"
+    # A failed write ends the run here; the finalizer stops the command first.
+    write_status
+}
+
+attempt_poll() { # POLL_HOOK of an attempt: the handle into the status as soon as it is known, and the progress line when standard error is a terminal
     local e t
+    live_handle
     [ "$PROGRESS_TTY" = 1 ] || return 0
     now_us
     e=$(((NOW - PROGRESS_T0) / 1000000))
@@ -1436,7 +1502,12 @@ attempt_poll() { # POLL_HOOK of an attempt: redraws the progress line when stand
 
 run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; sets the A_ variables
     local base="$RUN_DIR/$PREFIX.$1$2"
-    A_LIMIT="$3" A_PHASE="$1" A_ID="$1$2"
+    A_LIMIT="$3" A_PHASE="$1" A_ID="$1$2" A_BASE="$base" A_CREATES=0 LIVE_HANDLE=''
+    if [ "$1$2" = first1 ] || { [ "$1" = continue ] && [ "$FRESH" = 1 ]; }; then A_CREATES=1; fi
+    # The status says running, in this attempt's phase (PHASE, which the
+    # caller set), before the attempt starts; the attempt enters .attempts
+    # once it has ended.
+    write_status
     # The config this attempt is given, beside its other files.
     if [ "$KIND" = opencode ]; then
         { printf '%s' "$OC_CONFIG" > "$base.config.json"; } 2>/dev/null ||
@@ -1451,6 +1522,7 @@ run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; 
     run_cmd "$3" "$base.stdout" "$base.stderr" "$STDIN_FILE" "$PROGRAM" "${ARGV[@]}"
     CMD_ENV=()
     POLL_HOOK=''
+    LIVE_HANDLE=''
     progress_clear
     A_EXIT="$C_EXIT" A_WALL="$C_WALL" A_PGID="$C_PGID" A_SIGNALLED="$C_SIGNALLED" A_DEADLINE=false
     { printf '%s\n' "$A_WALL" > "$base.time" && printf '%s\n' "$A_EXIT" > "$base.exit"; } 2>/dev/null ||
@@ -1463,6 +1535,25 @@ run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; 
             if [ "$C_WALL_US" -ge "$US" ]; then A_DEADLINE=true; fi
             ;;
     esac
+    # A process of the group outlived the kill and may still write to the
+    # attempt's files: the attempt is recorded as measured, not classified,
+    # and no answer is taken from it.
+    if [ "$C_STUCK" = true ]; then
+        record_unclassified "$1" "$2"
+        end_as runner_failure "$C_STUCK_MSG"
+    fi
+}
+
+record_unclassified() { # phase n: appends the attempt as measured, with no rule, verdict or trace fields
+    local fresh=false
+    if [ "$1" = continue ] && [ "$A_CREATES" = 1 ]; then fresh=true; fi
+    # shellcheck disable=SC2016  # jq variables
+    st_update '.attempts += [{phase: $ph, n: $n, fresh: $fresh, pgid: $pgid, exit: $exit, wall: $wall,
+            deadline_expired: $dl, signalled: $sig, rule: null, verdict: null, handle_seen: null, tokens: null,
+            skipped_lines: null, earlier_text: null, earlier_text_bytes: null, denied: []}]
+        | if .kind == "codex" then .tokens.reported += [null] else . end' \
+        --arg ph "$1" --argjson n "$2" --argjson fresh "$fresh" --argjson pgid "$A_PGID" --argjson exit "$A_EXIT" \
+        --argjson wall "$A_WALL" --argjson dl "$A_DEADLINE" --argjson sig "$A_SIGNALLED"
 }
 
 # For agy and OpenCode the three below read the trace that load_trace loaded;
@@ -1507,7 +1598,7 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
     local base="$RUN_DIR/$PREFIX.$1$2" h
     RULE='' VERDICT='' A_REASON='' A_ANSWER='' A_AT_DOOR=false
     if [ "$A_SIGNALLED" = true ]; then
-        RULE=1 VERDICT=cancelled
+        RULE=1 VERDICT=cancelled A_REASON="the runner received SIG$CANCEL_SIG while $KIND ran"
         return
     fi
     if [ "$KIND" != codex ]; then load_trace "$base"; fi
@@ -1679,8 +1770,10 @@ resume_due() { # the attempt just classified ended without an answer, and the on
 do_resume() { # limit|empty: the one resume of the session, always at the read level, under the resume limit
     local text after=()
     # Whatever ends the run from here on was decided in the resume, the
-    # handle check included.
+    # handle check included. A signal that arrived once the attempt had
+    # ended leaves the resume unstarted and unrecorded.
     PHASE=resume
+    end_if_cancelled "before the resume started"
     require_handle
     if [ "$LEVEL" = edit ]; then after=(after-edit); fi
     text="$(followup_text "$1" "${after[@]}")" ||
@@ -1767,7 +1860,7 @@ do_run() {
     record_attempt first 1
     take_session first 1
     # stop_group has run for the attempt inside run_cmd; had a process
-    # outlived it, the run would have ended there and no resume would start.
+    # outlived it, run_attempt would have ended the run and no resume would start.
     if resume_due; then do_resume "$VERDICT"; fi
     end_with_verdict
 }
@@ -1974,6 +2067,12 @@ main() {
         exit 0
     fi
     trap finalize EXIT
+    # A hang-up, termination or interrupt cancels the run. bash cannot trap a
+    # signal that was ignored when it started, which is the interrupt for a
+    # command a script started in the background.
+    trap 'on_signal TERM' TERM
+    trap 'on_signal HUP' HUP
+    trap 'on_signal INT' INT
     parse_args "$@"
     check_ground
     case "$ACTION" in
