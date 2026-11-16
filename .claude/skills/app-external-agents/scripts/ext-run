@@ -47,7 +47,7 @@ BOUNDARY=''                   # the project boundary, canonical
 REASON=''                     # why check_allow_dir refused a directory
 PROTECTED=() PROTECTED_READ=0 # the protected directories, canonical, listed once per invocation
 HOME_CANON='' VAR_TMP_CANON=''
-GIT_VARS=() GIT_VARS_READ=0   # the variables git lists as local to a repository, read once per invocation
+GIT_VARS=() GIT_VARS_READ=0   # the variables git lists as local to a repository, read once per invocation; unset for every git query and OpenCode command
 GIT_OUT='' GIT_RC=0           # what the last git query printed, and its status
 OC_CONFIG=''                  # the config the next OpenCode attempt is given
 PHASE=preflight MESSAGE=''
@@ -397,12 +397,19 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     if [ -e "$gidf" ] || [ -L "$gidf" ] || [ -e "$gidf.go" ] || [ -L "$gidf.go" ]; then
         end_as runner_failure "cannot clear $gidf before starting $what"
     fi
+    # An OpenCode command is started without git's repository variables, so
+    # that OpenCode's own repository discovery finds the work tree
+    # check_context checked, not one the caller's environment points at.
+    if [ "$KIND" = opencode ] && [ "$GIT_VARS_READ" != 1 ]; then
+        end_as runner_failure "git's repository variables were not read before starting $what"
+    fi
     now_us
     t0="$NOW"
     end=$((t0 + START_WAIT_US))
     # CMD_ENV is exported in the started job alone, so the variables reach this
     # command and none of the runner's own.
     {
+        if [ "$KIND" = opencode ] && [ "${#GIT_VARS[@]}" -gt 0 ]; then unset -v "${GIT_VARS[@]}"; fi
         if [ "${#CMD_ENV[@]}" -gt 0 ]; then export -- "${CMD_ENV[@]}"; fi
         exec setsid -w "$BASH" -c "$START_LINE" ext-run "$gidf" timeout -k "$EXT_RUN_GRACE" "$limit" "$@"
     } < "$in" > "$out" 2> "$err" &
@@ -943,33 +950,37 @@ agy_configured_model() { # step 7: .model of agy's settings file, the default ag
 # OpenCode: git queries, the project boundary, the outside directories, the
 # injected config and the version guard.
 
+git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repository, read once per invocation under the bound of the queries
+    local out v
+    [ "$GIT_VARS_READ" = 0 ] || return 0
+    out="$(
+        timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git rev-parse --local-env-vars < /dev/null 2>/dev/null
+        printf '\n%s' "$?"
+    )"
+    GIT_RC="${out##*$'\n'}"
+    out="${out%$'\n'*}"
+    if [ "$CANCEL" = 1 ]; then end_as cancelled "a signal arrived during a git query"; fi
+    # Only a git that did not answer is a missing prerequisite; every other
+    # fault here is a usage error (the plan's Contract, run step 3).
+    case "$GIT_RC" in
+        0) ;;
+        124 | 137) end_as prerequisite_failed "git did not answer within $EXT_RUN_PREFLIGHT_LIMIT (git rev-parse --local-env-vars)" ;;
+        *) end_as usage_error "git rev-parse --local-env-vars failed with status $GIT_RC" ;;
+    esac
+    GIT_VARS=()
+    while IFS= read -r v; do
+        [ -n "$v" ] || continue
+        [[ $v =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+            end_as usage_error "git rev-parse --local-env-vars (status 0) printed what is not a variable name: ${v//[[:cntrl:]]/ }"
+        GIT_VARS+=("$v")
+    done <<< "$out"
+    GIT_VARS_READ=1
+}
+
 own_git() { # dir args...: one git query about dir, bounded, with the repository variables unset; sets GIT_OUT and GIT_RC, returns GIT_RC
-    local dir="$1" out v
+    local dir="$1" out
     shift
-    # The variables git lists as local to a repository, read once per
-    # invocation, under the same bound as the queries.
-    if [ "$GIT_VARS_READ" = 0 ]; then
-        out="$(
-            timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git rev-parse --local-env-vars < /dev/null 2>/dev/null
-            printf '\n%s' "$?"
-        )"
-        GIT_RC="${out##*$'\n'}"
-        out="${out%$'\n'*}"
-        if [ "$CANCEL" = 1 ]; then end_as cancelled "a signal arrived during a git query"; fi
-        case "$GIT_RC" in
-            0) ;;
-            124 | 137) end_as prerequisite_failed "git did not answer within $EXT_RUN_PREFLIGHT_LIMIT (git rev-parse --local-env-vars)" ;;
-            *) end_as prerequisite_failed "git rev-parse --local-env-vars failed with status $GIT_RC" ;;
-        esac
-        GIT_VARS=()
-        while IFS= read -r v; do
-            [ -n "$v" ] || continue
-            [[ $v =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
-                end_as prerequisite_failed "git rev-parse --local-env-vars printed what is not a variable name: ${v//[[:cntrl:]]/ }"
-            GIT_VARS+=("$v")
-        done <<< "$out"
-        GIT_VARS_READ=1
-    fi
+    git_local_vars
     # git runs in the foreground of this command substitution, so a signal to
     # the runner is handled once the query has returned.
     out="$(
@@ -1101,6 +1112,10 @@ check_context() { # level cwd [dirs...]: the OpenCode validation; sets ALLOW_CAN
         check_allow_dir "$d" || end_as usage_error "$REASON"
         ALLOW_CANON+=("$CANON")
     done
+    # Every OpenCode invocation passes here before its first command, a run in
+    # step 3 and a continue in step 5, so the list run_cmd unsets for OpenCode
+    # is read by then (project_boundary's query would read it too).
+    git_local_vars
     project_boundary "$cwd"
     load_protected
     if within "$HOME_CANON" "$BOUNDARY"; then

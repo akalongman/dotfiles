@@ -2351,6 +2351,45 @@ ext run --cli qwen --run-dir "$RUN"
 assert_eq "$rc" 0 "boundary-own-repo: rc"
 assert_eq "$(st .boundary)" "$WORK" "boundary-own-repo: inherited repository variables do not move the boundary"
 
+# OpenCode gets none of them either, so that its own repository discovery finds
+# the bundle the runner checked, not the home directory they point at. A
+# stand-in in front of the fake writes only whether each variable reached it,
+# never a value, and then becomes the fake; a run and a continue each start
+# the version command and an attempt through it.
+new_case oc-git-vars
+git -C "$HOME" init -q --template="$ROOT/tpl"
+WORK="$RUN/bundle"
+mkdir "$WORK"
+git -C "$WORK" init -q --template="$ROOT/tpl"
+EXT_VARS=("GIT_DIR=$HOME/.git" "GIT_WORK_TREE=$HOME")
+# Without the stand-in the name would resolve to the sentinel, so a failed
+# setup stops the suite.
+if ! { mkdir "$CASE/oc-fake" && mv "$CASE/bin/opencode" "$CASE/oc-fake/opencode" &&
+    mk_tool "$CASE/bin/opencode"; } <<'EOF'; then
+d=absent w=absent
+if [ -n "${GIT_DIR+set}" ]; then d=present; fi
+if [ -n "${GIT_WORK_TREE+set}" ]; then w=present; fi
+printf '%s GIT_DIR %s GIT_WORK_TREE %s\n' "${1:-}" "$d" "$w" >> "$CASE/git-vars"
+exec "$CASE/oc-fake/opencode" "$@"
+EOF
+    printf 'ext-run.test: cannot put the stand-in in front of the fake opencode\n' >&2
+    exit 2
+fi
+none=$'--version GIT_DIR absent GIT_WORK_TREE absent\nrun GIT_DIR absent GIT_WORK_TREE absent'
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-git-vars: rc"
+assert_eq "$(st .boundary)" "$WORK" "oc-git-vars: the boundary is the bundle"
+assert_eq "$(LC_ALL=C sort -u "$CASE/git-vars")" "$none" \
+    "oc-git-vars: neither variable reached the version command or the first attempt"
+mv "$CASE/git-vars" "$CASE/git-vars.run"
+fake_ul qwen
+play qwen 2 --stdout "$(t_oc_only S)"
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-git-vars continue: rc"
+assert_eq "$(LC_ALL=C sort -u "$CASE/git-vars")" "$none" \
+    "oc-git-vars continue: neither variable reached the version command or the continue attempt"
+
 new_case boundary-git-hangs
 mk_tool "$CASE/slowgit/git" <<< 'sleep 30'
 EXT_PATH="$CASE/slowgit:$CASE/bin:$BIN_ROOT/utils"
@@ -2363,6 +2402,17 @@ assert_eq "$rc" 18 "boundary-git-hangs: rc"
 assert_contains "$ERR" "git did not answer" "boundary-git-hangs: message"
 assert_eq "$(ncalls qwen)" 0 "boundary-git-hangs: no call"
 assert_nofile "$RUN/qwen.status" "boundary-git-hangs: no status"
+
+# A git that answers with a failure is a usage error, not a missing prerequisite.
+new_case boundary-git-fails
+mk_tool "$CASE/failgit/git" <<< 'exit 1'
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "boundary-git-fails: rc"
+assert_contains "$ERR" "--local-env-vars" "boundary-git-fails: the message names the query"
+assert_eq "$(ncalls qwen)" 0 "boundary-git-fails: no call"
+assert_nofile "$RUN/qwen.status" "boundary-git-fails: no status"
 
 # git fails although a .git lies above the directory (here a .git file git
 # cannot read): the boundary is unknown, and the directory is not taken for it.
