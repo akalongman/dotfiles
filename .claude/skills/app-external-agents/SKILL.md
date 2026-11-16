@@ -69,16 +69,21 @@ user's own OpenCode config. The read agent denies edits, writes outside
 the project, web access and every shell command except a short read-only
 list that its system prompt states, and within that list it denies
 output redirection and the `find`, `git` and `rg` options that write
-files or run programs. Three ways through that fence are known. A write
+files or run programs. Four ways through that fence are known. A write
 shaped to get past the patterns (a redirection after a pipeline or a
 `{ }` group) is stopped only by its instructions. An allowed command
 that runs a helper program runs that program, for example `git diff`
 with an external diff or text-conversion driver set in git config; only
 the owner's own configuration can name such a helper, because a cloned
-repository cannot set one. And outside paths leak: OpenCode infers the
+repository cannot set one. Outside paths leak: OpenCode infers the
 directory of a shell command from its text on a best-effort basis, so on
 a file outside the project and every granted directory the read tool and
-`cat` were denied while `grep -n`, `head -1` and `ls` completed. OpenCode's
+`cat` were denied while `grep -n`, `head -1` and `ls` completed. And a
+symbolic link leads out: in the acceptance run of 2026-11-16 the read
+tool of two models (`deepseek`, `qwen`) read a file through a link
+inside the project whose target lay outside the project and every
+granted directory, so a project that holds such a link exposes its
+target; a bundle holds none, because its copies follow links. OpenCode's
 own tool-output directory (`~/.local/share/opencode/tool-output/`) stays
 readable in every run. The edit agent allows edits and shell commands
 inside the project. Its rule denies the direct `git commit` and
