@@ -194,6 +194,24 @@ assert_begins() { # haystack prefix msg
     esac
 }
 
+assert_lacks() { # haystack needle msg
+    case "$1" in
+        *"$2"*) _fail "$3 (found '$2')" ;;
+        *) _pass ;;
+    esac
+}
+
+assert_line() { # text line msg: one of the text's lines is exactly that line
+    local l
+    while IFS= read -r l; do
+        if [ "$l" = "$2" ]; then
+            _pass
+            return
+        fi
+    done <<< "$1"
+    _fail "$3 (no line '$2')"
+}
+
 fixture_repo() { # dir: a repository with one commit of README.md
     local d="$1"
     if ! { mkdir -p "$d" &&
@@ -2662,6 +2680,226 @@ assert_eq "$(st .phase)" resume "version-changes: phase"
 assert_eq "$(ncalls qwen)" 1 "version-changes: no resume call"
 assert_eq "$(stj .versions.later)" '["2.0.0"]' "version-changes: the later version recorded"
 assert_eq "$(st .versions.preflight)" 1.19.0 "version-changes: the preflight version recorded"
+
+# ---------------------------------------------------------------------------
+# agy's prompt copy and the before snapshot.
+
+new_case agy-prompt
+mkdir -p "$CASE/ok/in" "$CASE/elsewhere"
+ln -s "$CASE/elsewhere" "$CASE/ok/link"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN" --allow-dir "$CASE/ok/in" --allow-dir "$CASE/ok/link"
+assert_eq "$rc" 0 "agy-prompt: rc"
+p="$(cat "$RUN/agy-prompt.md" 2>/dev/null)"
+assert_begins "$p" PROMPT "agy-prompt: the copy begins with prompt.md"
+for l in "- cat" "- grep" "- $CASE/ok" "- $CASE/elsewhere"; do
+    assert_line "$p" "$l" "agy-prompt: a list line"
+done
+assert_lacks "$p" "- $CASE/ok/in" "agy-prompt: an outside directory under a file-reading directory is not named"
+assert_eq "$(argv agy 1 | jq -r '.[1]')" "$p" "agy-prompt: agy is given the copy"
+# shellcheck disable=SC2016  # the backticks are the copy's own text
+printf '%s\n' PROMPT '' '# Shell commands' 'You may run only these shell commands (matched by word prefix):' \
+    '- cat' '- grep' \
+    'Any other shell command is denied and ends this run with no answer. When a command would have settled a question, say which command and what you expected instead of running it.' \
+    '' '# Reading files' \
+    "Your file-reading tool works in your working directory and under these directories, matched against a file's real path:" \
+    "- $CASE/ok" \
+    'For every other path, and for any path that may be a symbolic link, use `cat`, `head` or `grep`. One refused file read ends this run with no answer.' \
+    'These directories named for this task are outside those rules, so read them with shell commands only:' \
+    "- $CASE/elsewhere" > "$CASE/want-copy"
+assert_eq "$(cmp -s "$CASE/want-copy" "$RUN/agy-prompt.md" && echo same || echo differs)" same \
+    "agy-prompt: the whole copy, byte for byte"
+
+new_case agy-prompt-no-dirs
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-prompt-no-dirs: rc"
+assert_lacks "$(cat "$RUN/agy-prompt.md" 2>/dev/null)" "outside those rules" "agy-prompt-no-dirs: no outside list"
+
+# An outside directory under the working directory is not named either.
+new_case agy-prompt-in-work
+mkdir "$WORK/sub"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN" --allow-dir "$WORK/sub"
+assert_eq "$rc" 0 "agy-prompt-in-work: rc"
+assert_contains "$(cat "$RUN/agy-prompt.md" 2>/dev/null)" "# Reading files" "agy-prompt-in-work: the copy has its blocks"
+assert_lacks "$(cat "$RUN/agy-prompt.md" 2>/dev/null)" "outside those rules" "agy-prompt-in-work: no outside list"
+
+new_case agy-no-settings
+rm "$HOME/.gemini/antigravity-cli/settings.json"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 18 "agy-no-settings: rc"
+assert_contains "$OUT" prerequisite_failed "agy-no-settings: outcome"
+assert_contains "$OUT" "status: none" "agy-no-settings: no status named"
+assert_contains "$ERR" "$HOME/.gemini/antigravity-cli/settings.json" "agy-no-settings: the file named"
+assert_eq "$(ncalls agy)" 0 "agy-no-settings: no call"
+assert_nofile "$RUN/agy.status" "agy-no-settings: no status"
+
+new_case agy-settings-untouched
+s="$(sum "$HOME/.gemini/antigravity-cli/settings.json")"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-settings-untouched: rc"
+assert_eq "$(sum "$HOME/.gemini/antigravity-cli/settings.json")" "$s" "agy-settings-untouched: the settings file"
+
+new_case big-prompt-agy
+head -c 131000 /dev/zero | tr '\0' x > "$RUN/prompt.md"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 64 "big-prompt-agy: rc"
+assert_contains "$ERR" 131072 "big-prompt-agy: the limit named"
+assert_eq "$(ncalls agy)" 0 "big-prompt-agy: no call"
+assert_nofile "$RUN/agy.status" "big-prompt-agy: no status"
+
+new_case snap-edit
+echo changed >> "$WORK/README.md"
+echo x > "$WORK/untracked"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 0 "snap-edit: rc"
+assert_line "$(cat "$RUN/before.txt" 2>/dev/null)" ' M README.md' "snap-edit: before.txt, the change"
+assert_line "$(cat "$RUN/before.txt" 2>/dev/null)" '?? untracked' "snap-edit: before.txt, the untracked file"
+assert_line "$(cat "$RUN/before.diff" 2>/dev/null)" '+changed' "snap-edit: before.diff"
+assert_eq "$(st .message)" "" "snap-edit: no note"
+
+new_case snap-agy-read
+echo changed >> "$WORK/README.md"
+echo x > "$WORK/untracked"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "snap-agy-read: rc"
+assert_line "$(cat "$RUN/before.txt" 2>/dev/null)" ' M README.md' "snap-agy-read: before.txt"
+
+new_case snap-codex-read
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "snap-codex-read: rc"
+assert_nofile "$RUN/before.txt" "snap-codex-read: no before.txt"
+assert_nofile "$RUN/before.diff" "snap-codex-read: no before.diff"
+
+new_case snap-unborn
+WORK="$CASE/unborn"
+mkdir "$WORK"
+git init -q --template="$ROOT/tpl" "$WORK"
+echo x > "$WORK/new"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "snap-unborn: rc"
+assert_contains "$(cat "$RUN/before.txt" 2>/dev/null)" '??' "snap-unborn: before.txt"
+assert_file "$RUN/before.diff" "snap-unborn: before.diff exists"
+assert_eq "$(wc -c 2>/dev/null < "$RUN/before.diff" | tr -d '[:space:]')" 0 "snap-unborn: before.diff is empty"
+assert_contains "$(st .message)" "no commit" "snap-unborn: message"
+assert_contains "$OUT" "no commit" "snap-unborn: the note in the summary"
+
+new_case snap-no-git
+WORK="$CASE/plain"
+mkdir "$WORK"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 0 "snap-no-git: rc"
+assert_eq "$(st .outcome)" answered "snap-no-git: outcome"
+assert_nofile "$RUN/before.txt" "snap-no-git: no before.txt"
+assert_nofile "$RUN/before.diff" "snap-no-git: no before.diff"
+assert_contains "$(st .message)" "not a git repository" "snap-no-git: message"
+
+# The note stays when the outcome brings a message of its own.
+new_case snap-note-kept
+WORK="$CASE/plain"
+mkdir "$WORK"
+play codex 1 --exit 3 --stderr "$(codex_err U1 boom)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 14 "snap-note-kept: rc"
+assert_contains "$(st .message)" "boom" "snap-note-kept: the outcome's message"
+assert_contains "$(st .message)" "not a git repository" "snap-note-kept: the note"
+assert_eq "$(printf '%s\n' "$OUT" | wc -l | tr -d '[:space:]')" 1 "snap-note-kept: one summary line"
+
+new_case snap-own-repo
+fixture_repo "$CASE/other"
+echo elsewhere >> "$CASE/other/README.md"
+echo changed >> "$WORK/README.md"
+EXT_VARS=("GIT_DIR=$CASE/other/.git" "GIT_WORK_TREE=$CASE/other")
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 0 "snap-own-repo: rc"
+assert_line "$(cat "$RUN/before.diff" 2>/dev/null)" '+changed' "snap-own-repo: the working directory's change"
+assert_lacks "$(cat "$RUN/before.diff" 2>/dev/null)" '+elsewhere' "snap-own-repo: not the inherited repository's"
+
+new_case snap-no-helper
+# shellcheck disable=SC2016  # expanded when git runs the helper
+mk_tool "$CASE/helper" <<< ': > "$CASE/helper-ran"'
+git -C "$WORK" config diff.external "$CASE/helper"
+echo changed >> "$WORK/README.md"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 0 "snap-no-helper: rc"
+assert_line "$(cat "$RUN/before.diff" 2>/dev/null)" '+changed' "snap-no-helper: before.diff"
+assert_nofile "$CASE/helper-ran" "snap-no-helper: the snapshot ran no diff helper"
+
+new_case snap-kept-by-continue
+ul_first_run
+assert_file "$RUN/before.diff" "snap-kept-by-continue: the run wrote before.diff"
+keep "$RUN/before.diff"
+keep "$RUN/before.txt"
+echo more >> "$WORK/README.md"
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "snap-kept-by-continue: rc"
+unchanged "$RUN/before.diff" "snap-kept-by-continue"
+unchanged "$RUN/before.txt" "snap-kept-by-continue"
+
+new_case agy-continue-keeps-copy
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+fake_ul agy
+keep "$RUN/agy-prompt.md"
+keep "$RUN/before.txt"
+rm "$HOME/.gemini/antigravity-cli/settings.json"
+echo more >> "$WORK/README.md"
+play agy 2 --stdout "$(t_agy_answer C)"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-continue-keeps-copy: rc (a continue does not read agy's settings)"
+unchanged "$RUN/agy-prompt.md" "agy-continue-keeps-copy"
+unchanged "$RUN/before.txt" "agy-continue-keeps-copy"
+assert_eq "$(st .configured_model)" "Fixture Default" "agy-continue-keeps-copy: configured_model"
+assert_begins "$(argv agy 2)" '["--conversation","C","-p",' "agy-continue-keeps-copy: argv"
+assert_eq "$(argv agy 2 | jq -r '.[3]')" "$CONTINUE_TEXT" "agy-continue-keeps-copy: the continue text"
+
+# In step 7 the run owns its status file, where no usage error is written: a
+# git that cannot be run, or that fails, there ends the run as a missing
+# prerequisite, recorded in the status file, before the CLI starts.
+new_case snap-git-cannot-run
+mk_tool "$CASE/nogit/git" <<< 'exit 127'
+EXT_PATH="$CASE/nogit:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 18 "snap-git-cannot-run: rc"
+assert_eq "$(st .outcome)" prerequisite_failed "snap-git-cannot-run: outcome"
+assert_contains "$(st .message)" "git cannot be run" "snap-git-cannot-run: message"
+assert_eq "$(ncalls codex)" 0 "snap-git-cannot-run: no call"
+
+new_case snap-git-vars-fail
+mk_tool "$CASE/failgit/git" <<< 'exit 1'
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 18 "snap-git-vars-fail: rc, not a usage error"
+assert_eq "$(st .outcome)" prerequisite_failed "snap-git-vars-fail: outcome"
+assert_contains "$(st .message)" "--local-env-vars" "snap-git-vars-fail: the query named"
+assert_eq "$(ncalls codex)" 0 "snap-git-vars-fail: no call"
+
+new_case snap-status-fails
+mk_tool "$CASE/failgit/git" <<'EOF'
+case " $* " in *' status '*) exit 1 ;; esac
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 18 "snap-status-fails: rc"
+assert_eq "$(st .outcome)" prerequisite_failed "snap-status-fails: outcome"
+assert_contains "$(st .message)" "git status" "snap-status-fails: the query named"
+assert_eq "$(ncalls codex)" 0 "snap-status-fails: no call"
 
 # ---------------------------------------------------------------------------
 # Step 7: the end of the suite.

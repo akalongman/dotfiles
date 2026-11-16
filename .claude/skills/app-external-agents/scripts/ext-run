@@ -50,7 +50,13 @@ HOME_CANON='' VAR_TMP_CANON=''
 GIT_VARS=() GIT_VARS_READ=0   # the variables git lists as local to a repository, read once per invocation; unset for every git query and OpenCode command
 GIT_OUT='' GIT_RC=0           # what the last git query printed, and its status
 OC_CONFIG=''                  # the config the next OpenCode attempt is given
+# agy: its settings, read and never changed, and the prompt copy built from them.
+AGY_SETTINGS="${HOME:-}/.gemini/antigravity-cli/settings.json"
+AGY_CMDS=() AGY_READS=()      # the X of its command(X) rules and the P of its read_file(P) rules
+AGY_COPY=''                   # agy-prompt.md as step 3 built it; step 7 writes it
 PHASE=preflight MESSAGE=''
+NOTES=''                      # notes no outcome replaces (the before snapshot's), joined by "; "; the status's message carries them after MESSAGE
+JOINED=''                     # MESSAGE and NOTES as joined_message joined them
 LOCK='' CLAIMED=0
 STATUS_FILE='' STATUS_BROKEN=0 FINALIZING=0
 ST=''          # the status object in memory, compact JSON
@@ -140,6 +146,16 @@ progress_clear() { # removes the progress line, when one is drawn
 say() {
     progress_clear
     printf 'ext-run: %s\n' "$1" >&2
+}
+
+note() { # text: a note for the status's message, kept whatever outcome follows
+    say "$1"
+    NOTES="${NOTES:+$NOTES; }$1"
+}
+
+joined_message() { # sets JOINED to the outcome's message followed by the notes, "; " between them
+    JOINED="$MESSAGE"
+    if [ -n "$NOTES" ]; then JOINED="${JOINED:+$JOINED; }$NOTES"; fi
 }
 
 end_as() { # outcome message [further lines for standard error]: ends the run
@@ -285,15 +301,16 @@ init_status() { # the status object as step 6 of a run writes it
     ST="$s"
 }
 
-status_object() { # [-c]: the status object with this invocation's outcome, phase and message
+status_object() { # [-c]: the status object with this invocation's outcome, phase and message (the notes after it)
     local base="$ST"
+    joined_message
     if [ -z "$base" ]; then
         base="$(jq -cn --arg name "$NAME" --arg kind "$KIND" --arg prefix "$PREFIX" '
             def named: if . == "" then null else . end;
             {outcome: null, phase: null, message: null,
              name: ($name | named), kind: ($kind | named), prefix: ($prefix | named)}')" || return 1
     fi
-    jq "$@" --arg o "${OUTCOME:-running}" --arg p "$PHASE" --arg m "$MESSAGE" \
+    jq "$@" --arg o "${OUTCOME:-running}" --arg p "$PHASE" --arg m "$JOINED" \
         '.outcome = $o | .phase = $p | .message = $m' <<< "$base"
 }
 
@@ -490,7 +507,8 @@ finalize() {
         if [ "$HAS_ANSWER" = 1 ]; then publish_answer; fi
         write_status && shown="$STATUS_FILE"
     fi
-    msg="${MESSAGE//[$'\n\r']/ }"
+    joined_message
+    msg="${JOINED//[$'\n\r']/ }"
     printf '%s: %s%s; status: %s\n' "${PREFIX:-ext-run}" "$OUTCOME" "${msg:+ ($msg)}" "$shown"
     release_claim
     # A runner failure that no status file records: the object is the last line on standard error.
@@ -660,6 +678,19 @@ validate_run() { # step 3, without writing
         fi
     fi
     PROMPT_FILE="$prompt"
+    # agy: its settings, and the prompt copy built in memory, which is longer
+    # than prompt.md and must also fit in one argument; step 7 writes it.
+    if [ "$KIND" = agy ]; then
+        agy_rules || end_as prerequisite_failed "cannot read agy's settings file $AGY_SETTINGS"
+        AGY_COPY="$(agy_prompt_text && printf x)" || end_as usage_error "prompt.md is not readable: $prompt"
+        AGY_COPY="${AGY_COPY%x}"
+        SIZE="$(printf '%s' "$AGY_COPY" | wc -c)"
+        SIZE="${SIZE//[[:space:]]/}"
+        case "$SIZE" in '' | *[!0-9]*) end_as runner_failure "cannot measure agy's prompt copy" ;; esac
+        if [ "$SIZE" -ge 131072 ]; then
+            end_as usage_error "agy's prompt copy (prompt.md and the rules from $AGY_SETTINGS) would be $SIZE bytes; agy takes the prompt as one argument, which must be smaller than 131072 bytes"
+        fi
+    fi
     # The outside directories, the level and the project boundary.
     if [ "$KIND" = opencode ]; then check_context "$LEVEL" "$CWD" "${ALLOW_DIRS[@]}"; fi
 }
@@ -719,6 +750,32 @@ take_prompt_sum() { # step 7: prompt_sha256 of the file the first attempt is giv
     file_sum "$PROMPT_FILE" || end_as runner_failure "cannot take the checksum of $PROMPT_FILE"
     # shellcheck disable=SC2016  # a jq variable
     st_update '.prompt_sha256 = $s' --arg s "$SUM"
+}
+
+take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt and before.diff of the git work tree that holds the working directory; outside one, a note
+    local txt="$RUN_DIR/before.txt" dif="$RUN_DIR/before.diff"
+    # Only "true" is a work tree. A failing query is git's answer outside
+    # one, and it cannot end the run: a usage error is never written to the
+    # status file this step owns.
+    if ! own_git "$CWD" rev-parse --is-inside-work-tree || [ "${GIT_OUT%$'\n'}" != true ]; then
+        note "not a git repository: no before snapshot"
+        return 0
+    fi
+    # Each file is made first, so that a failed write is told apart from a
+    # failed query; git then writes into it.
+    { : > "$txt"; } 2>/dev/null || end_as runner_failure "cannot write $txt"
+    own_git -o "$txt" "$CWD" status --short -uall ||
+        end_as prerequisite_failed "git status failed with status $GIT_RC in $CWD, so no before snapshot was taken"
+    { : > "$dif"; } 2>/dev/null || end_as runner_failure "cannot write $dif"
+    own_git "$CWD" rev-parse --verify --quiet HEAD
+    case "$GIT_RC" in
+        0)
+            own_git -o "$dif" "$CWD" diff --no-ext-diff --no-textconv HEAD ||
+                end_as prerequisite_failed "git diff failed with status $GIT_RC in $CWD, so before.diff is incomplete"
+            ;;
+        1) note "no commit yet: before.diff is empty" ;;
+        *) end_as prerequisite_failed "git rev-parse --verify HEAD failed with status $GIT_RC in $CWD, so before.diff is incomplete" ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
@@ -930,18 +987,69 @@ load_trace() { # attempt-base: reads the attempt's trace and its facts, once per
     TRACE_OF="$1"
 }
 
-agy_copy_prompt() { # step 7: agy-prompt.md, the file agy's first attempt is given; here a plain copy of prompt.md
+agy_rules() { # step 3: sets AGY_CMDS and AGY_READS from the command(X) and read_file(P) rules of agy's settings; 1 when the file cannot be read
+    local r x
+    AGY_CMDS=() AGY_READS=()
+    # One rule per NUL-ended item, "c" or "r" and its value, so that any value survives.
+    mapfile -d '' -t r < <(jq --raw-output0 -s '
+        if length == 1 and (.[0] | type) == "object" then .[0] else error("not one object") end
+        | .permissions.allow? // [] | if type == "array" then .[] else empty end | strings
+        | (capture("^command\\((?<x>.+)\\)$") | "c" + .x), (capture("^read_file\\((?<x>.+)\\)$") | "r" + .x)' \
+        "$AGY_SETTINGS" 2>/dev/null)
+    wait "$!" || return 1
+    for x in "${r[@]}"; do
+        case "$x" in
+            c*) AGY_CMDS+=("${x#c}") ;;
+            r*) AGY_READS+=("${x#r}") ;;
+        esac
+    done
+}
+
+agy_prompt_text() { # prints agy-prompt.md: prompt.md, then agy's shell commands, its file-reading directories, and the outside directories the file-reading tool cannot open; 1 when prompt.md cannot be read
+    local d p under outside=()
+    read_text "$PROMPT_FILE" || return 1
+    # Each outside directory by its real path (as given when it has none),
+    # unless it lies in the working directory or under a file-reading
+    # directory, which agy matches against a file's real path as written.
+    for d in "${ALLOW_DIRS[@]}"; do
+        if canonical "$d"; then d="$CANON"; fi
+        within "$d" "$CWD" && continue
+        under=0
+        for p in "${AGY_READS[@]}"; do
+            if within "$d" "$p"; then
+                under=1
+                break
+            fi
+        done
+        if [ "$under" = 0 ]; then outside+=("$d"); fi
+    done
+    printf '%s' "$TEXT"
+    # prompt.md's last line is ended before the blocks begin.
+    case "$TEXT" in *$'\n') ;; *) printf '\n' ;; esac
+    printf '\n%s\n%s\n' '# Shell commands' 'You may run only these shell commands (matched by word prefix):'
+    for p in "${AGY_CMDS[@]}"; do printf -- '- %s\n' "$p"; done
+    printf '%s\n' 'Any other shell command is denied and ends this run with no answer. When a command would have settled a question, say which command and what you expected instead of running it.'
+    printf '\n%s\n%s\n' '# Reading files' "Your file-reading tool works in your working directory and under these directories, matched against a file's real path:"
+    for p in "${AGY_READS[@]}"; do printf -- '- %s\n' "$p"; done
+    # shellcheck disable=SC2016  # the backticks are the copy's own text
+    printf '%s\n' 'For every other path, and for any path that may be a symbolic link, use `cat`, `head` or `grep`. One refused file read ends this run with no answer.'
+    if [ "${#outside[@]}" -gt 0 ]; then
+        printf '%s\n' 'These directories named for this task are outside those rules, so read them with shell commands only:'
+        for d in "${outside[@]}"; do printf -- '- %s\n' "$d"; done
+    fi
+}
+
+agy_copy_prompt() { # step 7: writes agy-prompt.md, the copy step 3 built and checked, the file agy's first attempt is given
     local copy="$RUN_DIR/agy-prompt.md"
-    read_text "$PROMPT_FILE" || end_as runner_failure "cannot read $PROMPT_FILE"
-    { printf '%s' "$TEXT" > "$copy"; } 2>/dev/null || end_as runner_failure "cannot write $copy"
+    { printf '%s' "$AGY_COPY" > "$copy"; } 2>/dev/null || end_as runner_failure "cannot write $copy"
     PROMPT_FILE="$copy"
 }
 
 agy_configured_model() { # step 7: .model of agy's settings file, the default agy uses without --model; null when it names none
-    local settings="${HOME:-}/.gemini/antigravity-cli/settings.json" m
+    local m
     m="$(jq -c -s 'if length == 1 and (.[0] | type) == "object" then .[0].model else error("not one object") end
-        | if type == "string" and . != "" then . else null end' "$settings" 2>/dev/null)" && [ -n "$m" ] ||
-        end_as prerequisite_failed "cannot read agy's settings file $settings"
+        | if type == "string" and . != "" then . else null end' "$AGY_SETTINGS" 2>/dev/null)" && [ -n "$m" ] ||
+        end_as prerequisite_failed "cannot read agy's settings file $AGY_SETTINGS"
     # shellcheck disable=SC2016  # a jq variable
     st_update '.configured_model = $m' --argjson m "$m"
 }
@@ -962,12 +1070,18 @@ git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repo
     if [ "$CANCEL" = 1 ]; then end_as cancelled "a signal arrived during a git query"; fi
     # A git that did not answer, cannot be run, or answers with what is not a
     # list of names is a missing prerequisite. Any other failure is a usage
-    # error (the plan's Contract, run step 3).
+    # error (the plan's Contract, run step 3), except once this invocation
+    # owns a status file, where no usage error is ever written.
     case "$GIT_RC" in
         0) ;;
         124 | 137) end_as prerequisite_failed "git did not answer within $EXT_RUN_PREFLIGHT_LIMIT (git rev-parse --local-env-vars)" ;;
         126 | 127) end_as prerequisite_failed "git cannot be run: git rev-parse --local-env-vars ended with status $GIT_RC (not found, or not executable)" ;;
-        *) end_as usage_error "git rev-parse --local-env-vars failed with status $GIT_RC" ;;
+        *)
+            if [ "$OWNS_STATUS" = 1 ]; then
+                end_as prerequisite_failed "git rev-parse --local-env-vars failed with status $GIT_RC"
+            fi
+            end_as usage_error "git rev-parse --local-env-vars failed with status $GIT_RC"
+            ;;
     esac
     GIT_VARS=()
     while IFS= read -r v; do
@@ -979,16 +1093,25 @@ git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repo
     GIT_VARS_READ=1
 }
 
-own_git() { # dir args...: one git query about dir, bounded, with the repository variables unset; sets GIT_OUT and GIT_RC, returns GIT_RC
-    local dir="$1" out
+own_git() { # [-o file] dir args...: one git query about dir, bounded, with the repository variables unset; sets GIT_OUT and GIT_RC, returns GIT_RC. With -o, git's standard output goes to the file, byte for byte, and GIT_OUT is empty
+    local to='' dir out cmd
+    if [ "$1" = -o ]; then
+        to="$2"
+        shift 2
+    fi
+    dir="$1"
     shift
     git_local_vars
+    cmd=(timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git -c core.fsmonitor=false -C "$dir" "$@")
     # git runs in the foreground of this command substitution, so a signal to
     # the runner is handled once the query has returned.
     out="$(
         if [ "${#GIT_VARS[@]}" -gt 0 ]; then unset -v "${GIT_VARS[@]}"; fi
-        timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git -c core.fsmonitor=false -C "$dir" "$@" \
-            < /dev/null 2>/dev/null
+        if [ -n "$to" ]; then
+            "${cmd[@]}" < /dev/null 2>/dev/null > "$to"
+        else
+            "${cmd[@]}" < /dev/null 2>/dev/null
+        fi
         printf '\n%s' "$?"
     )"
     GIT_RC="${out##*$'\n'}"
@@ -1632,6 +1755,8 @@ do_run() {
         opencode) oc_version_guard preflight ;;
         agy) agy_copy_prompt ;;
     esac
+    # agy can write at the read level too (its read level is instructed only).
+    if [ "$LEVEL" = edit ] || [ "$KIND" = agy ]; then take_snapshot; fi
     take_prompt_sum
     if [ "$KIND" = agy ]; then agy_configured_model; fi
     # Step 8: the first attempt.
