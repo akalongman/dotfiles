@@ -77,10 +77,9 @@ if git -C "$DIR" rev-parse --git-dir > /dev/null 2>&1; then
     COMMON_DIR_ABS=$(cd "$DIR" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)
     if [ -n "$GIT_DIR_ABS" ] && [ "$GIT_DIR_ABS" != "$COMMON_DIR_ABS" ]; then
         IN_WORKTREE=1
+        # Shown even when it equals the branch (the usual --worktree case): the
+        # name confirms which directory the session sits in, which 🌿 does not.
         WT_NAME=$(basename "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)")
-        # Drop the name when it merely echoes the branch (the usual --worktree case); 🌳
-        # alone still flags "linked worktree" without repeating what 🌿 already shows.
-        [ "$WT_NAME" = "$BRANCH_NAME" ] && WT_NAME=""
     fi
 fi
 
