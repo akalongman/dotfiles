@@ -16,10 +16,14 @@
 # value after --model) and a number k, the first of 1 to 50 for which
 # mkdir "$CALLS/<key>.<k>" succeeds and the pid file in it is created
 # exclusively (uutils mkdir alone is not atomic). It records argv.json, cwd, stdin,
-# env.json, pid, pgid, parent and prior_alive there, then plays the scenario
+# env.json, pid, pgid, parent and prior_alive (the earlier invocations of
+# its key whose child or worker is still alive) there, then plays the scenario
 # the suite's play helper wrote to $SCN/<key>.<k>/. A text given to play is
 # printed followed by a newline (nothing at all when empty); a file given to
-# play is printed byte for byte.
+# play is printed byte for byte. A worker is a sleep started as a job of its
+# own process group inside the invocation's session, as Codex's node_repl
+# and codex-code-mode were seen on 2026-11-16; its pid, group and session go
+# to worker, worker.pgid and worker.sid.
 #
 # Exit statuses of its own: 96 trouble with the record, 98 a wait that was
 # never released (30 s), 99 no scenario. Trouble also goes to $TROUBLE_LOG.
@@ -148,6 +152,7 @@ ps -ww -o args= -p "$PPID" > "$rec/parent"
 n=0 j=1
 while [ "$j" -lt "$k" ]; do
     if [ -f "$CALLS/$key.$j/child" ] && alive "$(< "$CALLS/$key.$j/child")"; then n=$((n + 1)); fi
+    if [ -f "$CALLS/$key.$j/worker" ] && alive "$(< "$CALLS/$key.$j/worker")"; then n=$((n + 1)); fi
     j=$((j + 1))
 done
 printf '%s\n' "$n" > "$rec/prior_alive"
@@ -164,6 +169,19 @@ if [ -f "$scn/stdout-early" ]; then cat "$scn/stdout-early"; fi
 if [ -f "$scn/child" ]; then
     sleep "$(< "$scn/child")" &
     printf '%s\n' "$!" > "$rec/child"
+fi
+if [ -f "$scn/worker" ]; then
+    # With job control on, the job gets a process group of its own; the
+    # session stays the invocation's.
+    set -m
+    sleep "$(< "$scn/worker")" &
+    w=$!
+    set +m
+    printf '%s\n' "$w" > "$rec/worker"
+    v="$(ps -o pgid= -p "$w")"
+    printf '%s\n' "${v//[[:space:]]/}" > "$rec/worker.pgid"
+    v="$(ps -o sid= -p "$w")"
+    printf '%s\n' "${v//[[:space:]]/}" > "$rec/worker.sid"
 fi
 : > "$rec/started"
 if [ -e "$scn/stderr-held" ]; then

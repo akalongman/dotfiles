@@ -68,7 +68,7 @@ teardown() { # the suite's one EXIT trap; runs whatever failed
         g="${g//[[:space:]]/}"
         if group_ours "$g" "$age" "$own"; then kill -KILL -- "-$g" 2>/dev/null; fi
     done
-    for f in "$ROOT"/cases/*/calls/*/pid "$ROOT"/cases/*/calls/*/child \
+    for f in "$ROOT"/cases/*/calls/*/pid "$ROOT"/cases/*/calls/*/child "$ROOT"/cases/*/calls/*/worker \
         "$ROOT"/cases/*/calls/sandbox.pid "$ROOT"/cases/*/calls/version.pid; do
         [ -f "$f" ] || continue
         p="$(< "$f")"
@@ -331,7 +331,7 @@ play() { # key k [options]: writes the scenario $SCN/<key>.<k>/ that fake-cli pl
     while [ $# -gt 0 ]; do
         opt="$1"
         case "$opt" in
-            --stdout | --stdout-file | --stdout-early | --stderr | --stderr-file | --exit | --sleep | --child | --then-version)
+            --stdout | --stdout-file | --stdout-early | --stderr | --stderr-file | --exit | --sleep | --child | --worker | --then-version)
                 if [ $# -lt 2 ]; then
                     _fail "play: $opt needs a value"
                     return 1
@@ -347,6 +347,7 @@ play() { # key k [options]: writes the scenario $SCN/<key>.<k>/ that fake-cli pl
             --exit) printf '%s\n' "$2" > "$d/exit" ;;
             --sleep) printf '%s\n' "$2" > "$d/sleep" ;;
             --child) printf '%s\n' "$2" > "$d/child" ;;
+            --worker) printf '%s\n' "$2" > "$d/worker" ;;
             --then-version) printf '%s\n' "$2" > "$d/then-version" ;;
             --stderr-held) : > "$d/stderr-held" ;;
             --hold) : > "$d/hold" ;;
@@ -640,6 +641,65 @@ t_agy_denied() { # cid: an empty response with a denied action
     agy_result "$1" SUCCESS '' "$DENIED_JSON"
 }
 
+# agy's quota error, in the shapes of the saved traces of 2026-11-15
+# (build-probes/2026-11-15-1852-agy-no-slash, agy.ndjson and agy.err) and
+# 2026-11-16 (build-probes/2026-11-16-2137-acceptance, a/agy.first1.*).
+agy_quota_text() { # duration: the result's error text
+    printf 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in %s.' "$1"
+}
+
+agy_step() { # cid index type: a finished step
+    jq -cn --arg c "$1" --argjson i "$2" --arg t "$3" '{event: "step_update",
+        step_update: {conversation_id: $c, step_index: $i, state: "DONE", step_type: $t}}'
+}
+
+agy_error_result() { # cid error-text: a result with status ERROR, no response and no tokens
+    jq -cn --arg c "$1" --arg e "$2" '{event: "result", result: {conversation_id: $c, status: "ERROR",
+        response: "", error: $e, duration_seconds: 0, num_turns: 1,
+        usage: {input_tokens: 0, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0},
+        finished_reason: "error"}}'
+}
+
+agy_quota_err() { # duration: agy's standard error for the quota error
+    printf 'error: %s\n' "$(agy_quota_text "$1")"
+    printf 'AGY_ERROR: %s\n' "$(jq -cn --arg s "RESOURCE_EXHAUSTED (code 429): $(agy_quota_text "$1")" \
+        '{short_error: $s, status: "RESOURCE_EXHAUSTED", error_code: 429, code_kind: "http", retryable: true,
+          error_id: "566e972d-937e-4866-8700-7f1a1beb7f74-1"}')"
+}
+
+t_agy_quota_door() { # cid duration: the quota refused the run before the model's first turn
+    jq -cn --arg c "$1" '{event: "init", conversation_id: $c, init: {cwd: "/w", permission_mode: "request-review"}}'
+    agy_step "$1" 0 user_input
+    agy_step "$1" 1 error_message
+    agy_error_result "$1" "$(agy_quota_text "$2")"
+}
+
+t_agy_quota_work() { # cid duration: the quota ended the run after a model turn and a tool step
+    jq -cn --arg c "$1" '{event: "init", conversation_id: $c, init: {cwd: "/w", permission_mode: "request-review"}}'
+    agy_step "$1" 0 user_input
+    agy_step "$1" 1 agent_response
+    jq -cn --arg c "$1" '{event: "step_update", step_update: {conversation_id: $c, step_index: 2, state: "DONE",
+        step_type: "tool", tool_name: "run_command", tool_info: {name: "run_command",
+        parameters: {CommandLine: "cat notes.txt"}}}}'
+    agy_step "$1" 3 error_message
+    agy_error_result "$1" "$(agy_quota_text "$2")"
+}
+
+reset_within() { # label seconds s0 s1: reset_at is a local time in the form %Y-%m-%d %H:%M:%S %z, the stated seconds after an end between s0 and s1
+    local r e
+    r="$(st .reset_at)"
+    if [[ ! $r =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ [+-][0-9]{4}$ ]]; then
+        _fail "$1: reset_at '$r' is not in the form %Y-%m-%d %H:%M:%S %z"
+        return
+    fi
+    e="$(date -d "$r" +%s)"
+    if [ "$e" -ge $(($3 + $2)) ] && [ "$e" -le $(($4 + $2)) ]; then
+        _pass
+    else
+        _fail "$1: reset_at $r is not $2 s after the attempt's end"
+    fi
+}
+
 answering() { # key k: an answering scenario for whatever kind the key is
     case "$1" in
         codex) play codex "$2" --stdout A --stderr "$(codex_err U1)" ;;
@@ -663,6 +723,26 @@ if [ "${1:-}" = -A ]; then
 fi
 exit "$st"
 EOF
+}
+
+mk_ghost_session_ps() { # dir: a ps there whose session listing (-A -o pid=,sid=,stat=) also shows a live process in the session of every group a lock's gid file names
+    # The ghost's pid, 2147483000, lies above the kernel's highest pid
+    # (4194304), so no process has it and a signal sent to it reaches none.
+    mk_tool "$1/ps" <<'EOF'
+"$BIN_ROOT/utils/ps" "$@"
+st=$?
+if [ "$*" = '-A -o pid=,sid=,stat=' ]; then
+    for f in "$CASE"/run/*.lock/gid; do
+        if [ -f "$f" ]; then printf ' 2147483000 %s S\n' "$(cat "$f")"; fi
+    done
+fi
+exit "$st"
+EOF
+}
+
+worker_placed() { # key k label: the invocation's worker led a process group of its own inside the invocation's session
+    assert_ne "$(callf "$1" "$2" worker.pgid)" "$(callf "$1" "$2" pgid)" "$3: the worker leads a group of its own"
+    assert_eq "$(callf "$1" "$2" worker.sid)" "$(callf "$1" "$2" pgid)" "$3: the worker is in the session the group leads"
 }
 
 agent_env_is() { # key k agent-file: true when that invocation's environment held the agent file as injected with no outside directory (the read agent's external_directory a deny of everything) and the two switches
@@ -1175,6 +1255,76 @@ assert_eq "$rc" 21 "survivor-probe: rc"
 assert_contains "$(st .message)" "could not stop" "survivor-probe: message"
 assert_file "$CALLS/sandbox.started" "survivor-probe: the probe ran"
 assert_eq "$(ncalls codex)" 0 "survivor-probe: no model attempt after it"
+
+# A worker that leads a process group of its own inside the CLI's session (as
+# Codex's node_repl was seen on 2026-11-16) is stopped with the session.
+new_case worker-after-answer
+play codex 1 --stdout ANSWER --worker 300 --stderr "$(codex_err U1)"
+t0="$EPOCHREALTIME"
+ext run --cli codex --run-dir "$RUN"
+took_under "$t0" 10 "worker-after-answer: the session is stopped, not waited out"
+assert_eq "$rc" 0 "worker-after-answer: rc"
+worker_placed codex 1 worker-after-answer
+assert_eq "$(alive "$(callf codex 1 worker)" && echo yes || echo no)" no "worker-after-answer: the worker is gone"
+
+new_case worker-deadline
+play codex 1 --hold --worker 300 --stderr "$(codex_err U1)"
+play codex 2 --stdout LATE --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --limit 2s --resume-limit 20s
+assert_eq "$rc" 0 "worker-deadline: rc"
+assert_eq "$(st .outcome)" answered_after_resume "worker-deadline: outcome"
+assert_eq "$(st '.attempts[0].deadline_expired')" true "worker-deadline: the deadline expired"
+worker_placed codex 1 worker-deadline
+assert_eq "$(callf codex 2 prior_alive)" 0 "worker-deadline: the worker was gone before the resume started"
+assert_eq "$(alive "$(callf codex 1 worker)" && echo yes || echo no)" no "worker-deadline: the worker is gone"
+
+new_case worker-cancel
+play codex 1 --hold --worker 300 --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "worker-cancel: rc"
+assert_eq "$(st .outcome)" cancelled "worker-cancel: outcome"
+worker_placed codex 1 worker-cancel
+assert_eq "$(alive "$(callf codex 1 worker)" && echo yes || echo no)" no "worker-cancel: the worker is gone"
+assert_nofile "$RUN/codex.lock" "worker-cancel: no lock"
+
+# A process of the session outlived the kill: the attempt is recorded as
+# measured and not classified, as for a survivor in the group.
+new_case session-survivor
+mk_ghost_session_ps "$CASE/ghost"
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --stdout "$(t_agy_answer C)"
+t0="$EPOCHREALTIME"
+ext run --cli agy --run-dir "$RUN"
+took_under "$t0" 10 "session-survivor: the run took less than 10 s"
+assert_eq "$rc" 21 "session-survivor: rc"
+assert_eq "$(st .outcome)" runner_failure "session-survivor: outcome"
+assert_contains "$(st .message)" "could not stop session" "session-survivor: message"
+assert_eq "$(st '.attempts | length')" 1 "session-survivor: the attempt is recorded"
+assert_eq "$(st '.attempts[0].verdict')" null "session-survivor: and not classified"
+assert_nofile "$RUN/agy.out" "session-survivor: no answer published"
+assert_eq "$(ncalls agy)" 1 "session-survivor: one call"
+
+new_case session-survivor-probe
+mk_ghost_session_ps "$CASE/ghost"
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "session-survivor-probe: rc"
+assert_contains "$(st .message)" "could not stop session" "session-survivor-probe: message"
+assert_contains "$(st .message)" "codex sandbox" "session-survivor-probe: the probe is named"
+assert_file "$CALLS/sandbox.started" "session-survivor-probe: the probe ran"
+assert_eq "$(ncalls codex)" 0 "session-survivor-probe: no model attempt after it"
+
+new_case session-survivor-version
+mk_ghost_session_ps "$CASE/ghost"
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 21 "session-survivor-version: rc"
+assert_contains "$(st .message)" "could not stop session" "session-survivor-version: message"
+assert_file "$CALLS/version.started" "session-survivor-version: the version command ran"
+assert_eq "$(ncalls qwen)" 0 "session-survivor-version: no model attempt after it"
 
 new_case unexpected-exit
 play codex 1 --hold --child 300 --stderr "$(codex_err U1)"
@@ -1978,6 +2128,74 @@ play codex 1 --exit 1 --stderr "$(codex_err U1 'ERROR: You’ve hit your usage l
 ext run --cli codex --run-dir "$RUN"
 assert_eq "$rc" 13 "ul-no-reset-time: rc"
 assert_eq "$(st .reset_at)" null "ul-no-reset-time: no time stated, none recorded"
+
+# agy's quota error is its usage limit (rule 5, ahead of rule 7). Refused
+# before the model's first turn, the trace holds only the user_input and
+# error_message steps, so a continue starts afresh with agy-prompt.md.
+new_case agy-quota-door
+play agy 1 --exit 3 --stdout "$(t_agy_quota_door C1 113h24m55s)" --stderr "$(agy_quota_err 113h24m55s)"
+s0="$(date +%s)"
+ext run --cli agy --run-dir "$RUN"
+s1="$(date +%s)"
+assert_eq "$rc" 13 "agy-quota-door: rc"
+assert_eq "$(st .outcome)" usage_limit "agy-quota-door: outcome"
+assert_eq "$(st '.attempts[0].rule')" 5 "agy-quota-door: rule"
+assert_eq "$(st .message)" "$(agy_quota_text 113h24m55s)" "agy-quota-door: message"
+assert_eq "$(st .cut_off_phase)" first "agy-quota-door: cut_off_phase"
+assert_eq "$(st .fresh_start)" true "agy-quota-door: fresh_start"
+assert_eq "$(st .handle)" C1 "agy-quota-door: handle"
+reset_within agy-quota-door $((113 * 3600 + 24 * 60 + 55)) "$s0" "$s1"
+play agy 2 --stdout "$(t_agy_answer C2)"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-quota-door continue: rc"
+assert_eq "$(st .outcome)" answered "agy-quota-door continue: outcome"
+assert_eq "$(argv agy 2)" \
+    "$(jq -cn --rawfile p "$RUN/agy-prompt.md" '["-p", $p, "--output-format", "stream-json", "--agy-x"]' 2>/dev/null)" \
+    "agy-quota-door continue: argv, the first-attempt form with agy-prompt.md"
+assert_eq "$(st '.attempts[1].fresh')" true "agy-quota-door continue: the attempt started afresh"
+assert_eq "$(st .handle)" C2 "agy-quota-door continue: the new conversation's handle"
+
+# After a model turn and a tool step there is a conversation to continue.
+new_case agy-quota-work
+play agy 1 --exit 3 --stdout "$(t_agy_quota_work C1 2h5m)" --stderr "$(agy_quota_err 2h5m)"
+s0="$(date +%s)"
+ext run --cli agy --run-dir "$RUN"
+s1="$(date +%s)"
+assert_eq "$rc" 13 "agy-quota-work: rc"
+assert_eq "$(st '.attempts[0].rule')" 5 "agy-quota-work: rule"
+assert_eq "$(st .fresh_start)" false "agy-quota-work: fresh_start"
+reset_within agy-quota-work $((2 * 3600 + 5 * 60)) "$s0" "$s1"
+play agy 2 --stdout "$(t_agy_answer C1)"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-quota-work continue: rc"
+assert_eq "$(argv agy 2)" "$(jq -cn --arg t "$CONTINUE_TEXT" \
+    '["--conversation", "C1", "-p", $t, "--output-format", "stream-json", "--agy-x"]')" \
+    "agy-quota-work continue: argv, the conversation continued by its handle"
+
+# The quota wording on standard error alone is enough; the reset time is read
+# from the line that holds it.
+new_case agy-quota-stderr
+play agy 1 --exit 3 --stdout "$(t_agy_quota_door C1 45m)" --stderr "$(agy_quota_err 45m)"
+jq -c 'if .event == "result" then .result.error = "" else . end' "$SCN/agy.1/stdout" > "$CASE/t" &&
+    mv "$CASE/t" "$SCN/agy.1/stdout"
+s0="$(date +%s)"
+ext run --cli agy --run-dir "$RUN"
+s1="$(date +%s)"
+assert_eq "$rc" 13 "agy-quota-stderr: rc"
+assert_eq "$(st '.attempts[0].rule')" 5 "agy-quota-stderr: rule"
+assert_contains "$(st .message)" "RESOURCE_EXHAUSTED (code 429)" "agy-quota-stderr: message"
+reset_within agy-quota-stderr $((45 * 60)) "$s0" "$s1"
+
+# An ERROR result without the quota wording stays a CLI failure (rule 7).
+new_case agy-error-not-quota
+play agy 1 --exit 3 --stdout "$(t_agy_quota_door C1 1h | jq -c 'if .event == "result" then .result.error = "Internal error." else . end')" \
+    --stderr 'error: Internal error.'
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 14 "agy-error-not-quota: rc"
+assert_eq "$(st .outcome)" cli_failure "agy-error-not-quota: outcome"
+assert_eq "$(st '.attempts[0].rule')" 7 "agy-error-not-quota: rule"
+assert_eq "$(st .reset_at)" null "agy-error-not-quota: reset_at"
+assert_eq "$(st .fresh_start)" false "agy-error-not-quota: fresh_start"
 
 new_case fresh-then-empty
 play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"

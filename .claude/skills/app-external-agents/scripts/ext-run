@@ -68,6 +68,7 @@ HAS_ANSWER=0 ANSWER_TEXT=''
 {
     OC_TESTED_VERSION='' OC_SKILL_DENY_KEY='' OC_ASK_REJECT_TEXT=''
     AGY_EXTRA_ARGS=() CODEX_EXTRA_ARGS=() CODEX_WRITE_REFUSED=no
+    AGY_QUOTA_STDERR_TEXT='' AGY_QUOTA_ERROR_TEXT=''
 }
 
 # The start of OpenCode's error for a call that a permission rule denied; the
@@ -102,17 +103,19 @@ TEXT=''                       # what read_text read
 # An agy or OpenCode trace as read_trace and trace_facts left it, for the attempt TRACE_OF.
 TRACE_OF='' T_EVENTS='' T_SKIPPED=0 T_DAMAGED=false
 T_RESULT=false T_STATUS='' T_DENIED_N=0 T_DENIED_TOOLS=''          # agy
+T_RESULT_ERROR='' T_NO_TURN=false # agy: the last result's error text; true when no step_update is of a type other than user_input or error_message
 T_LAST='' T_REASON='' T_ERROR_SEEN=false T_ERROR='' T_ASK_REFUSED=false # OpenCode
 GID=''                        # the group read from the gid file
 CANCEL_SIG=''                 # the signal that set CANCEL: TERM, HUP or INT
-C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false       # the last command run_cmd ran
-C_STUCK=false C_STUCK_MSG=''  # a process of its group outlived the kill, and the message that says so
+C_EXIT='' C_WALL='' C_WALL_US=0 C_END_US=0 C_PGID='' C_SIGNALLED=false # the last command run_cmd ran; C_END_US is when it ended
+C_STUCK=false C_STUCK_MSG=''  # a process of its group or session outlived the kill, and the message that says so
+STOP_WHAT='' SESSION_PIDS=()  # where stop_cmd found a survivor; the live processes session_alive found
 A_BASE='' A_CREATES=0         # the running attempt's file base; 1 when it creates the session (first1, or a continue that starts afresh)
 LIVE_HANDLE=''                # the handle the running attempt's files showed; only a running status carries it
-A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false # the last attempt
+A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false A_END_US=0 # the last attempt
 A_ANSWER='' A_REASON='' A_HANDLE_SEEN='' A_LIMIT=''
 A_PHASE='' A_ID=''            # the last attempt's phase and id (<phase><n>)
-A_AT_DOOR=false               # rule 5 matched in its second place: the limit refused the attempt before its first model turn
+A_AT_DOOR=false               # rule 5 matched: the limit refused the attempt before its first model turn
 IN_RESUME=0                   # 1 while the attempt is the resume: an answer is then answered_after_resume
 # A continue: what the saved record says it repeats.
 CUT_OFF=''                    # the phase that was cut off, first or resume
@@ -394,6 +397,46 @@ stop_group() { # pgid [term]: TERM when asked, the grace period, KILL, the wait 
     return 1
 }
 
+# The started shell calls setsid, so the group it leads also leads a session
+# of the same id, and the kernel does not reuse that id while a member lives.
+# A worker that moved to a process group of its own stays in that session.
+session_alive() { # sid: ps shows a process of that session whose state does not begin with Z; sets SESSION_PIDS to them
+    local p s st
+    SESSION_PIDS=()
+    while read -r p s st; do
+        if [ "$s" = "$1" ] && [ "${st#Z}" = "$st" ]; then SESSION_PIDS+=("$p"); fi
+    done < <(ps -A -o pid=,sid=,stat= 2>/dev/null)
+    [ "${#SESSION_PIDS[@]}" -gt 0 ]
+}
+
+session_gone_within() { # sid microseconds: true once the session has no live process, false when the time ran out
+    local end
+    now_us
+    end=$((NOW + $2))
+    while session_alive "$1"; do
+        now_us
+        [ "$NOW" -lt "$end" ] || return 1
+        sleep 0.1
+    done
+    return 0
+}
+
+stop_session() { # sid [term]: its live processes, as stop_group does a group: TERM when asked, the grace period, KILL, the wait after it; 1 when one outlived it
+    case "$1" in '' | *[!0-9]* | 0 | 1) return 0 ;; esac
+    if [ "${2:-}" = term ] && session_alive "$1"; then kill -TERM -- "${SESSION_PIDS[@]}" 2>/dev/null; fi
+    session_gone_within "$1" "$GRACE_US" && return 0
+    if session_alive "$1"; then kill -KILL -- "${SESSION_PIDS[@]}" 2>/dev/null; fi
+    session_gone_within "$1" "$KILL_WAIT_US" && return 0
+    return 1
+}
+
+stop_cmd() { # pgid [term]: a started command's group, then the session it leads; 1 when a process outlived the kill, with STOP_WHAT naming where
+    STOP_WHAT=''
+    stop_group "$@" || STOP_WHAT="process group $1"
+    stop_session "$@" || STOP_WHAT="${STOP_WHAT:+$STOP_WHAT and }session $1"
+    [ -z "$STOP_WHAT" ]
+}
+
 job_running() { # pid: the shell still knows that background job as running (kill -0 would also count an unreaped one)
     local p
     for p in $(jobs -rp); do
@@ -411,11 +454,11 @@ read_gid() { # sets GID from <p>.lock/gid when it is a regular file that is not 
     GID="$v"
 }
 
-stop_active() { # the finalizer's first step: the job, and the group the gid file names
+stop_active() { # the finalizer's first step: the job, and the group and session the gid file names
     if job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
-    if read_gid && ! stop_group "$GID" term; then
+    if read_gid && ! stop_cmd "$GID" term; then
         OUTCOME=runner_failure
-        MESSAGE="could not stop process group $GID: a process outlived the kill"
+        MESSAGE="could not stop $STOP_WHAT: a process outlived the kill"
         say "$MESSAGE"
     fi
     wait "$ACTIVE_JOB" 2>/dev/null
@@ -426,7 +469,7 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     local limit="$1" out="$2" err="$3" in="$4" gidf="$LOCK/gid" what g t0 t1 end stuck=0
     shift 4
     what="${1##*/}${2:+ $2}"
-    C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false C_STUCK=false C_STUCK_MSG=''
+    C_EXIT='' C_WALL='' C_WALL_US=0 C_END_US=0 C_PGID='' C_SIGNALLED=false C_STUCK=false C_STUCK_MSG=''
     # Nothing starts once a signal has arrived.
     end_if_cancelled "before $what started"
     rm -f -- "$gidf" "$gidf.go" 2>/dev/null
@@ -461,7 +504,7 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
         if job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
         wait "$ACTIVE_JOB" 2>/dev/null
         sleep "$EXT_RUN_POLL"
-        if read_gid; then stop_group "$GID" term; fi
+        if read_gid; then stop_cmd "$GID" term; fi
         ACTIVE_JOB=''
         end_as runner_failure "could not start $what: no process group was recorded within $EXT_RUN_START_WAIT s"
     fi
@@ -481,7 +524,7 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     fi
     if [ "$CANCEL" = 1 ]; then
         C_SIGNALLED=true
-        stop_group "$g" term || stuck=1
+        stop_cmd "$g" term || stuck=1
         if [ "$stuck" = 1 ] && job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
         wait "$ACTIVE_JOB"
         C_EXIT=$?
@@ -492,17 +535,18 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
         C_EXIT=$?
         now_us
         t1="$NOW"
-        # Whatever the command left in its group is stopped too; the job is
-        # reaped, so the finalizer would only stop the group from here on.
-        stop_group "$g" || stuck=1
+        # Whatever the command left in its group or its session is stopped
+        # too; the job is reaped, so the finalizer would only stop them from
+        # here on.
+        stop_cmd "$g" || stuck=1
     fi
     ACTIVE_JOB=''
-    C_WALL_US=$((t1 - t0))
+    C_WALL_US=$((t1 - t0)) C_END_US="$t1"
     printf -v C_WALL '%d.%03d' $((C_WALL_US / 1000000)) $((C_WALL_US % 1000000 / 1000))
     # The caller ends the run: an attempt records itself first, unclassified.
     if [ "$stuck" = 1 ]; then
         C_STUCK=true
-        C_STUCK_MSG="could not stop process group $g of $what: a process outlived the kill"
+        C_STUCK_MSG="could not stop $STOP_WHAT of $what: a process outlived the kill"
     fi
 }
 
@@ -983,11 +1027,19 @@ trace_facts() { # sets the T_ facts the classification rules read from T_EVENTS
     case "$KIND" in
         agy)
             # shellcheck disable=SC2016  # jq variables
+            # A step_update of a type other than user_input or error_message
+            # means the model took a turn (agent_response, tool, ...); a quota
+            # error before the first one leaves only those two (rule 5).
             out="$(jq -r -s "$JQ_TRACE"' agy_result as $r | ($r != null), ($r | g(.result.status) | text1),
-                (agy_denied | length), (agy_denied | map(.tool) | join(", ") | text1), "."' "$T_EVENTS" 2>/dev/null)" &&
-                mapfile -t f <<< "$out" && [ "${#f[@]}" = 5 ] && [ "${f[4]}" = . ] ||
+                (agy_denied | length), (agy_denied | map(.tool) | join(", ") | text1),
+                ($r | g(.result.error) | if type == "string" then . else "" end | text1),
+                all(.[] | select(.event == "step_update") | g(.step_update.step_type);
+                    . == "user_input" or . == "error_message"),
+                "."' "$T_EVENTS" 2>/dev/null)" &&
+                mapfile -t f <<< "$out" && [ "${#f[@]}" = 7 ] && [ "${f[6]}" = . ] ||
                 end_as runner_failure "cannot read the events in $T_EVENTS"
             T_RESULT="${f[0]}" T_STATUS="${f[1]}" T_DENIED_N="${f[2]}" T_DENIED_TOOLS="${f[3]}"
+            T_RESULT_ERROR="${f[4]}" T_NO_TURN="${f[5]}"
             ;;
         opencode)
             # The last step is the events after the step_finish before the last
@@ -1531,7 +1583,7 @@ run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; 
     POLL_HOOK=''
     LIVE_HANDLE=''
     progress_clear
-    A_EXIT="$C_EXIT" A_WALL="$C_WALL" A_PGID="$C_PGID" A_SIGNALLED="$C_SIGNALLED" A_DEADLINE=false
+    A_EXIT="$C_EXIT" A_WALL="$C_WALL" A_PGID="$C_PGID" A_SIGNALLED="$C_SIGNALLED" A_DEADLINE=false A_END_US="$C_END_US"
     { printf '%s\n' "$A_WALL" > "$base.time" && printf '%s\n' "$A_EXIT" > "$base.exit"; } 2>/dev/null ||
         end_as runner_failure "cannot write the files of attempt $1$2 in $RUN_DIR"
     # timeout passes a CLI's own 124 or 137 through: the deadline expired only
@@ -1594,9 +1646,27 @@ attempt_tokens() { # attempt-base: the attempt's tokens as compact JSON
     esac
 }
 
+agy_usage_limit() { # attempt-base: true when the attempt ended in agy's quota error; sets A_REASON and A_AT_DOOR
+    local line=''
+    [ "$T_DAMAGED" = false ] && [ "$T_RESULT" = true ] && [ "$T_STATUS" != SUCCESS ] || return 1
+    if [ -n "$AGY_QUOTA_ERROR_TEXT" ] && [[ $T_RESULT_ERROR == *"$AGY_QUOTA_ERROR_TEXT"* ]]; then
+        A_REASON="$T_RESULT_ERROR"
+    else
+        if [ -n "$AGY_QUOTA_STDERR_TEXT" ] && [ -f "$1.stderr" ]; then
+            # shellcheck disable=SC2016  # jq variables
+            line="$(jq -nRr --arg t "$AGY_QUOTA_STDERR_TEXT" 'first(inputs | select(contains($t))) // empty' \
+                "$1.stderr" 2>/dev/null)"
+        fi
+        [ -n "$line" ] || return 1
+        A_REASON="${line//[[:cntrl:]]/ }"
+    fi
+    A_AT_DOOR="$T_NO_TURN"
+}
+
 usage_limit_seen() { # attempt-base: the attempt ended in its CLI's usage-limit error (rule 5)
     case "$KIND" in
         codex) codex_usage_limit "$1.stderr" ;;
+        agy) agy_usage_limit "$1" ;;
         *) return 1 ;;
     esac
 }
@@ -1797,11 +1867,21 @@ do_resume() { # limit|empty: the one resume of the session, always at the read l
 }
 
 record_cut_off() { # the usage-limit fields after the attempt just classified: reset_at, cut_off_phase, fresh_start
-    local at=''
-    # The time the message states: the text after "try again at " up to the final full stop.
-    case "$A_REASON" in *'try again at '*) at="${A_REASON##*try again at }" ;; esac
-    at="${at%.*}"
-    [[ $at == *[![:space:]]* ]] || at=''
+    local at='' re='Resets in (([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?' s
+    if [ "$KIND" = agy ]; then
+        # agy states a duration ("Resets in 113h24m55s."): the reset is that
+        # long after the attempt ended, written as a local time.
+        if [[ $A_REASON =~ $re ]] && [ -n "${BASH_REMATCH[1]}${BASH_REMATCH[3]}${BASH_REMATCH[5]}${BASH_REMATCH[7]}" ]; then
+            s=$((10#${BASH_REMATCH[2]:-0} * 86400 + 10#${BASH_REMATCH[4]:-0} * 3600 + 10#${BASH_REMATCH[6]:-0} * 60
+                + 10#${BASH_REMATCH[8]:-0}))
+            printf -v at '%(%Y-%m-%d %H:%M:%S %z)T' $((A_END_US / 1000000 + s))
+        fi
+    else
+        # The time Codex's message states: the text after "try again at " up to the final full stop.
+        case "$A_REASON" in *'try again at '*) at="${A_REASON##*try again at }" ;; esac
+        at="${at%.*}"
+        [[ $at == *[![:space:]]* ]] || at=''
+    fi
     # A continue repeats the phase that was cut off, so its own cut-off phase
     # is the recorded one. The first attempt can be started again only when
     # the limit refused it at the door, and only the attempt that created the
