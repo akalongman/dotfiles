@@ -18,3 +18,8 @@ template your dispatch was composed from, wherever they differ.
   unless the constraints file names the suite command as the gate.
 - Never print a secret (database password, token, key) into tool output;
   read connection details from the environment without echoing them.
+- Never override commit signing, in any repository, a throwaway probe
+  repository in the scratchpad included: no `commit.gpgsign false`, no
+  `-c commit.gpgsign=false`, no `--no-gpg-sign`; a probe that needs a
+  commit lets the configured signing run (2026-11-16, an implementer's
+  probe repository during an apply run).
