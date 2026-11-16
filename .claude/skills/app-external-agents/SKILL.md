@@ -496,13 +496,40 @@ invocation's record. Such a `runner_failure` puts the status object, as
 far as it is known, on the last line of standard error as one line of
 JSON; a status file of this prefix that still says `running` was left by
 this invocation and is not its record either. A `continue` that ended in
-its checks of the saved record or in its preflight, before its attempt
-(a refused record, a failed or cancelled preflight), writes nothing: the
-saved status stays as it was and still says `usage_limit`,
-so the run can still be continued. When such a continue ends
-`runner_failure`, its JSON line on standard error carries the earlier
-run's fields under outcome `runner_failure` and phase `preflight`; that
-line describes this invocation, not the saved record.
+its checks of the saved record or in its preflight, before its attempt,
+writes no status: the saved status file stays byte for byte as it was.
+When such a continue ends `runner_failure`, its JSON line on standard
+error carries outcome `runner_failure` and phase `preflight`; once the
+runner has found the saved record to be a usage limit, the line also
+carries the earlier run's fields, while the file on disk still says
+`usage_limit`. That line describes this invocation, not the saved
+record. Whether the run can be continued later depends on where the
+fault the message names lies:
+
+- Outside the run's files: the command line (a run directory or `--cli`
+  that names no status file, or a `--cli` other than the one the status
+  file was written for), a claimed prefix, a missing CLI, a prerequisite
+  (a helper program, the settings file, the Codex sandbox probe, a
+  follow-up text, git that did not answer or cannot be run), an OpenCode
+  version the guard refused, a process group that outlived the kill, or
+  a signal. A record that could be continued before still can be: once
+  the fault is cleared, the same continue command is checked afresh.
+- In the files and directories around the record: the recorded working
+  directory is gone or not a directory; files of the attempts the
+  continue would write already exist; the prompt changed since the
+  first attempt, when the continue starts afresh; for OpenCode, a
+  recorded outside directory, or the project boundary of the recorded
+  working directory, is now refused. Every retry is refused the same
+  way until that is fixed, for example the directory or the prompt
+  restored or the files moved aside, which the owner decides on.
+- In the record or the session it names: a status file that cannot be
+  read as one JSON object, is incomplete, contradicts itself or does not
+  match the CLI's kind or prefix; an outcome other than `usage_limit` (a
+  run that ended otherwise, or one that still says `running` because a
+  kill signal or a power loss stopped it); files of the attempt that
+  created the session that hold no session handle or more than one
+  (`no_handle`, `handle_conflict`). The runner never changes a saved
+  record, so such a run cannot be continued at all.
 
 The continue. It repeats the phase that the usage limit cut off. A cut
 off first attempt is continued in the same session at its original
