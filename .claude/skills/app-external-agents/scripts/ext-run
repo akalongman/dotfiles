@@ -42,6 +42,14 @@ LEVEL=read LIMIT=90m RESUME_LIMIT=30m MODEL='' EFFORT='' RUN_ARG=''
 ALLOW_DIRS=()  # --allow-dir values as given
 ALLOW_CANON=() # their canonical paths, once a check has made them; the status records these
 RUN_DIR='' CWD='' CANON=''
+# OpenCode: what check_context found, and what the git queries left.
+BOUNDARY=''                   # the project boundary, canonical
+REASON=''                     # why check_allow_dir refused a directory
+PROTECTED=() PROTECTED_READ=0 # the protected directories, canonical, listed once per invocation
+HOME_CANON='' VAR_TMP_CANON=''
+GIT_VARS=() GIT_VARS_READ=0   # the variables git lists as local to a repository, read once per invocation
+GIT_OUT='' GIT_RC=0           # what the last git query printed, and its status
+OC_CONFIG=''                  # the config the next OpenCode attempt is given
 PHASE=preflight MESSAGE=''
 LOCK='' CLAIMED=0
 STATUS_FILE='' STATUS_BROKEN=0 FINALIZING=0
@@ -259,10 +267,10 @@ init_status() { # the status object as step 6 of a run writes it
     local s
     s="$(jq -cn --arg name "$NAME" --arg kind "$KIND" --arg prefix "$PREFIX" --arg level "$LEVEL" \
         --arg cwd "$CWD" --arg limit "$LIMIT" --arg rlimit "$RESUME_LIMIT" --arg model "$MODEL" \
-        --arg effort "$EFFORT" --arg ocm "$OC_MODEL" '
+        --arg effort "$EFFORT" --arg ocm "$OC_MODEL" --arg boundary "$BOUNDARY" '
         def named: if . == "" then null else . end;
         {outcome: "running", phase: "preflight", message: "",
-         name: $name, kind: $kind, prefix: $prefix, level: $level, cwd: $cwd, boundary: null,
+         name: $name, kind: $kind, prefix: $prefix, level: $level, cwd: $cwd, boundary: ($boundary | named),
          limit: $limit, resume_limit: $rlimit,
          requested: {model: ($model | named), effort: ($effort | named)},
          oc_model: ($ocm | named), reported: null, configured_model: null, prompt_sha256: null,
@@ -567,8 +575,15 @@ check_ground() {
     fi
     # shellcheck source=/dev/null
     source "$conf" || end_as prerequisite_failed "the settings file could not be read: $conf"
-    if [ "$KIND" = opencode ] && [ -z "$OC_SKILL_DENY_KEY" ]; then
-        end_as prerequisite_failed "OC_SKILL_DENY_KEY is empty in $conf"
+    if [ "$KIND" = opencode ]; then
+        [ -n "$OC_SKILL_DENY_KEY" ] || end_as prerequisite_failed "OC_SKILL_DENY_KEY is empty in $conf"
+        valid_version "$OC_TESTED_VERSION" ||
+            end_as prerequisite_failed "OC_TESTED_VERSION in $conf is not a version: '${OC_TESTED_VERSION//[[:cntrl:]]/ }'"
+        # The protected directories are found from it.
+        case "${HOME:-}" in
+            /*) ;;
+            *) end_as prerequisite_failed "HOME is not an absolute path; an OpenCode run needs it to find the protected directories" ;;
+        esac
     fi
     for h in jq timeout setsid realpath ps sha256sum; do
         type -P "$h" > /dev/null || missing+=("$h")
@@ -638,6 +653,8 @@ validate_run() { # step 3, without writing
         fi
     fi
     PROMPT_FILE="$prompt"
+    # The outside directories, the level and the project boundary.
+    if [ "$KIND" = opencode ]; then check_context "$LEVEL" "$CWD" "${ALLOW_DIRS[@]}"; fi
 }
 
 claim() { # step 4: the lock directory of the prefix, then the pid in it
@@ -923,14 +940,250 @@ agy_configured_model() { # step 7: .model of agy's settings file, the default ag
 }
 
 # ---------------------------------------------------------------------------
+# OpenCode: git queries, the project boundary, the outside directories, the
+# injected config and the version guard.
+
+own_git() { # dir args...: one git query about dir, bounded, with the repository variables unset; sets GIT_OUT and GIT_RC, returns GIT_RC
+    local dir="$1" out v
+    shift
+    # The variables git lists as local to a repository, read once per
+    # invocation, under the same bound as the queries.
+    if [ "$GIT_VARS_READ" = 0 ]; then
+        out="$(
+            timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git rev-parse --local-env-vars < /dev/null 2>/dev/null
+            printf '\n%s' "$?"
+        )"
+        GIT_RC="${out##*$'\n'}"
+        out="${out%$'\n'*}"
+        if [ "$CANCEL" = 1 ]; then end_as cancelled "a signal arrived during a git query"; fi
+        case "$GIT_RC" in
+            0) ;;
+            124 | 137) end_as prerequisite_failed "git did not answer within $EXT_RUN_PREFLIGHT_LIMIT (git rev-parse --local-env-vars)" ;;
+            *) end_as prerequisite_failed "git rev-parse --local-env-vars failed with status $GIT_RC" ;;
+        esac
+        GIT_VARS=()
+        while IFS= read -r v; do
+            [ -n "$v" ] || continue
+            [[ $v =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+                end_as prerequisite_failed "git rev-parse --local-env-vars printed what is not a variable name: ${v//[[:cntrl:]]/ }"
+            GIT_VARS+=("$v")
+        done <<< "$out"
+        GIT_VARS_READ=1
+    fi
+    # git runs in the foreground of this command substitution, so a signal to
+    # the runner is handled once the query has returned.
+    out="$(
+        if [ "${#GIT_VARS[@]}" -gt 0 ]; then unset -v "${GIT_VARS[@]}"; fi
+        timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git -c core.fsmonitor=false -C "$dir" "$@" \
+            < /dev/null 2>/dev/null
+        printf '\n%s' "$?"
+    )"
+    GIT_RC="${out##*$'\n'}"
+    GIT_OUT="${out%$'\n'*}"
+    if [ "$CANCEL" = 1 ]; then end_as cancelled "a signal arrived during a git query"; fi
+    case "$GIT_RC" in
+        124 | 137) end_as prerequisite_failed "git did not answer within $EXT_RUN_PREFLIGHT_LIMIT (git $* in $dir)" ;;
+    esac
+    return "$GIT_RC"
+}
+
+project_boundary() { # dir: sets BOUNDARY to the top of the git work tree that holds dir, else to dir, canonical; 1 when no work tree holds it
+    local d
+    if own_git "$1" rev-parse --show-toplevel; then
+        canonical "${GIT_OUT%$'\n'}" ||
+            end_as usage_error "cannot resolve the top of the git work tree that holds $1: ${GIT_OUT//[[:cntrl:]]/ }"
+        BOUNDARY="$CANON"
+        return 0
+    fi
+    canonical "$1" || end_as usage_error "cannot resolve the directory $1"
+    BOUNDARY="$CANON"
+    # git found no work tree, or failed. That is the answer only when no .git
+    # lies on the way up; otherwise the boundary is unknown and the run stops.
+    d="$CANON"
+    while :; do
+        if [ -e "$d/.git" ] || [ -L "$d/.git" ]; then
+            end_as usage_error "cannot tell the project boundary of $1: git rev-parse --show-toplevel exited with status $GIT_RC there, and ${d%/}/.git exists"
+        fi
+        [ "$d" != / ] || break
+        d="${d%/*}"
+        d="${d:-/}"
+    done
+    return 1
+}
+
+protected_dirs() { # prints the protected directories, each made canonical and ended by a NUL
+    local cfg="${XDG_CONFIG_HOME:-$HOME/.config}" data="${XDG_DATA_HOME:-$HOME/.local/share}" p c list=()
+    list=("${CODEX_HOME:-$HOME/.codex}" "$HOME/.gemini" "$cfg/opencode" "$data/opencode" "$HOME/.opencode" "$HOME/.claude")
+    # This agent's numbered copies, those that exist.
+    for p in "$HOME"/.claude[0-9]*; do
+        if [ -e "$p" ] || [ -L "$p" ]; then list+=("$p"); fi
+    done
+    list+=("$HOME/.ssh" "$HOME/.gnupg" "$HOME/.aws" "$HOME/.secrets" "$cfg/gh")
+    for p in "${list[@]}"; do
+        # -m resolves the part of the path that exists, so a symbolic link
+        # above a directory that does not exist yet cannot hide it.
+        c="$(realpath -m -- "$p" && printf x)" || return 1
+        printf '%s\0' "${c%$'\n'x}"
+    done
+}
+
+load_protected() { # sets PROTECTED, HOME_CANON and VAR_TMP_CANON, once per invocation
+    local c
+    [ "$PROTECTED_READ" = 0 ] || return 0
+    mapfile -d '' -t PROTECTED < <(protected_dirs)
+    wait "$!" || end_as runner_failure "cannot list the protected directories"
+    c="$(realpath -m -- "$HOME" && printf x)" || end_as runner_failure "cannot resolve the home directory $HOME"
+    HOME_CANON="${c%$'\n'x}"
+    c="$(realpath -m -- /var/tmp && printf x)" || end_as runner_failure "cannot resolve /var/tmp"
+    VAR_TMP_CANON="${c%$'\n'x}"
+    PROTECTED_READ=1
+}
+
+within() { # a b: canonical path a is b or lies under it
+    [ "$1" = "$2" ] || [ "$2" = / ] || [[ $1 == "$2"/* ]]
+}
+
+overlaps() { # a b: on canonical paths, a is b, an ancestor of it or a descendant of it
+    within "$1" "$2" || within "$2" "$1"
+}
+
+check_allow_dir() { # dir: sets CANON to its canonical path when it may be granted; sets REASON and returns 1 when not
+    local c p
+    REASON=''
+    case "$1" in
+        /*) ;;
+        *)
+            REASON="the outside directory $1 is not absolute"
+            return 1
+            ;;
+    esac
+    if [ ! -e "$1" ]; then
+        REASON="the outside directory $1 does not exist"
+        return 1
+    fi
+    if [ ! -d "$1" ]; then
+        REASON="the outside directory $1 is not a directory: only directories can be granted, so name the directory that holds the file"
+        return 1
+    fi
+    if ! canonical "$1"; then
+        REASON="the outside directory $1 cannot be resolved"
+        return 1
+    fi
+    c="$CANON"
+    case "$c" in
+        *[*?]*)
+            REASON="the outside directory $1 resolves to $c, which holds a pattern character (* or ?) of OpenCode's rules"
+            return 1
+            ;;
+    esac
+    load_protected
+    if [[ $c =~ ^/[^/]*$ ]] || [ "$c" = "$VAR_TMP_CANON" ] || within "$HOME_CANON" "$c"; then
+        REASON="the outside directory $1 is too broad: $c is the root, a directory directly under it, /var/tmp, the home directory or an ancestor of it"
+        return 1
+    fi
+    for p in "${PROTECTED[@]}"; do
+        if overlaps "$c" "$p"; then
+            REASON="the outside directory $1 is protected: $c overlaps $p, where settings, sessions or credentials live; copy what the task needs into a bundle directory"
+            return 1
+        fi
+    done
+    CANON="$c"
+}
+
+check_context() { # level cwd [dirs...]: the OpenCode validation; sets ALLOW_CANON and BOUNDARY, or ends the run
+    local level="$1" cwd="$2" d p
+    shift 2
+    ALLOW_CANON=()
+    if [ "$level" = edit ] && [ $# -gt 0 ]; then
+        end_as usage_error "outside directories are for the read level only: OpenCode's external_directory rule gates edits as well as reads, so an edit-level run could write to them"
+    fi
+    for d in "$@"; do
+        check_allow_dir "$d" || end_as usage_error "$REASON"
+        ALLOW_CANON+=("$CANON")
+    done
+    project_boundary "$cwd"
+    load_protected
+    if within "$HOME_CANON" "$BOUNDARY"; then
+        end_as usage_error "the project boundary $BOUNDARY is too broad: it is the home directory or an ancestor of it, so OpenCode would count the credential directories as part of the project; copy the material into a bundle directory and start the run there"
+    fi
+    for p in "${PROTECTED[@]}"; do
+        if overlaps "$BOUNDARY" "$p"; then
+            end_as usage_error "the project boundary $BOUNDARY is protected: it overlaps $p, where settings, sessions or credentials live; copy the material into a bundle directory and start the run there"
+        fi
+    done
+}
+
+opencode_config() { # read|edit [dirs...]: prints the config to inject: the level's agent file with the skill key denied, and at the read level external_directory a deny of everything, then each directory and everything under it allowed
+    local agent=ext-read file="$SELF_DIR/../opencode/read-agent.json"
+    if [ "$1" = edit ]; then
+        agent=ext-edit file="$SELF_DIR/../opencode/edit-agent.json"
+        # Outside directories are for the read level only (check_context).
+        [ $# -eq 1 ] || return 1
+    fi
+    shift
+    # OpenCode applies the last rule that matches, so the deny comes first.
+    # shellcheck disable=SC2016  # jq variables
+    jq --arg a "$agent" --arg k "$OC_SKILL_DENY_KEY" '
+        if (.agent[$a].permission | type) != "object" then error("no permission object for \($a)") else . end
+        | .agent[$a].permission[$k] = "deny"
+        | if $a == "ext-read" then .agent[$a].permission.external_directory
+              = (reduce $ARGS.positional[] as $d ({"*": "deny"}; .[$d] = "allow" | .[$d + "/*"] = "allow"))
+          else . end' "$file" --args -- "$@" 2>/dev/null
+}
+
+valid_version() { # text: a version number such as 1.19.0
+    [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]
+}
+
+oc_version() { # opencode --version under the preflight limit, its output in the lock directory
+    run_cmd "$EXT_RUN_PREFLIGHT_LIMIT" "$LOCK/cmd.out" "$LOCK/cmd.err" /dev/null "$PROGRAM" --version
+}
+
+oc_version_guard() { # preflight|later: reads OpenCode's version, records it, and ends the run unless its major version is the tested one
+    local v shown
+    oc_version
+    case "$C_EXIT" in
+        0) ;;
+        124 | 137) end_as unsupported_version "opencode --version timed out after $EXT_RUN_PREFLIGHT_LIMIT (status $C_EXIT)" ;;
+        *)
+            last_line "$LOCK/cmd.err"
+            end_as unsupported_version "opencode --version failed with status $C_EXIT${LAST:+: $LAST}"
+            ;;
+    esac
+    read_text "$LOCK/cmd.out" || end_as runner_failure "cannot read $LOCK/cmd.out"
+    v="$TEXT"
+    if [[ $v =~ ^[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]]; then v="${BASH_REMATCH[1]}"; fi
+    if ! valid_version "$v"; then
+        shown="${v//[[:cntrl:]]/ }"
+        end_as unsupported_version "opencode --version printed '${shown:0:200}', which is not a version"
+    fi
+    # shellcheck disable=SC2016  # jq variables
+    if [ "$1" = preflight ]; then
+        st_update '.versions.preflight = $v' --arg v "$v"
+    else
+        st_update '.versions.later += [$v]' --arg v "$v"
+    fi
+    if [ "${v%%.*}" != "${OC_TESTED_VERSION%%.*}" ]; then
+        end_as unsupported_version \
+            "OpenCode $v is not supported: the agent files were tested with $OC_TESTED_VERSION, major version ${OC_TESTED_VERSION%%.*}"
+    fi
+    if [ "$v" != "$OC_TESTED_VERSION" ]; then
+        st_update '.version_untested = true'
+        say "OpenCode $v is untested: the agent files were tested with $OC_TESTED_VERSION; the run goes on"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Attempts: argument vectors, one attempt, classification and its record.
 
-oc_agent_env() { # read|edit: sets OC_AGENT to that level's agent, and ARGV_ENV to its config, unchanged, and the two switches
-    local agent=ext-read file="$SELF_DIR/../opencode/read-agent.json"
-    if [ "$1" = edit ]; then agent=ext-edit file="$SELF_DIR/../opencode/edit-agent.json"; fi
-    read_text "$file" || end_as prerequisite_failed "cannot read the OpenCode agent file $file"
-    ARGV_ENV=("OPENCODE_CONFIG_CONTENT=$TEXT" OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1)
-    OC_AGENT="$agent"
+oc_agent_env() { # read|edit: sets OC_AGENT to that level's agent, OC_CONFIG to the config to inject, and ARGV_ENV to it and the two switches
+    local t
+    OC_AGENT=ext-read
+    if [ "$1" = edit ]; then OC_AGENT=ext-edit; fi
+    t="$(opencode_config "$1" "${ALLOW_CANON[@]}" && printf x)" && [ "$t" != x ] ||
+        end_as prerequisite_failed "cannot build the OpenCode config of $OC_AGENT from the agent files in $SELF_DIR/../opencode"
+    OC_CONFIG="${t%x}"
+    ARGV_ENV=("OPENCODE_CONFIG_CONTENT=$OC_CONFIG" OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1)
 }
 
 build_first_argv() { # fills ARGV, ARGV_ENV and STDIN_FILE for the first attempt, per "Argument vectors"
@@ -1037,6 +1290,11 @@ attempt_poll() { # POLL_HOOK of an attempt: redraws the progress line when stand
 run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; sets the A_ variables
     local base="$RUN_DIR/$PREFIX.$1$2"
     A_LIMIT="$3" A_PHASE="$1" A_ID="$1$2"
+    # The config this attempt is given, beside its other files.
+    if [ "$KIND" = opencode ]; then
+        { printf '%s' "$OC_CONFIG" > "$base.config.json"; } 2>/dev/null ||
+            end_as runner_failure "cannot write $base.config.json"
+    fi
     PROGRESS_TTY=0
     if [ -t 2 ]; then PROGRESS_TTY=1; fi
     now_us
@@ -1280,6 +1538,8 @@ do_resume() { # limit|empty: the one resume of the session, always at the read l
     if [ "$LEVEL" = edit ]; then after=(after-edit); fi
     text="$(followup_text "$1" "${after[@]}")" ||
         end_as prerequisite_failed "cannot read the follow-up text for $1 in $SELF_DIR/../prompts/followup.md"
+    # The version again, before a later attempt.
+    if [ "$KIND" = opencode ]; then oc_version_guard later; fi
     build_later_argv read "$text"
     # shellcheck disable=SC2016  # a jq variable
     st_update '.resume_reason = $r | .resume_used = true' --arg r "$1"
@@ -1345,6 +1605,7 @@ do_run() {
     [ -n "$PROGRAM" ] || end_as missing_cli "$KIND is not on PATH"
     case "$KIND" in
         codex) codex_probe ;;
+        opencode) oc_version_guard preflight ;;
         agy) agy_copy_prompt ;;
     esac
     take_prompt_sum
@@ -1438,7 +1699,7 @@ check_prompt_kept() { # sha256: the prompt a continue that starts afresh gives i
 }
 
 load_record() { # step 5 of a continue: reads, validates and adopts the saved status; a fault leaves the file as it was
-    local sf="$RUN_DIR/$PREFIX.status" rec fault v=() found=()
+    local sf="$RUN_DIR/$PREFIX.status" rec fault dirs v=() found=()
     STATUS_FILE="$sf"
     if [ ! -e "$sf" ] && [ ! -L "$sf" ]; then end_as usage_error "there is no status file to continue: $sf"; fi
     if [ ! -f "$sf" ] || [ ! -r "$sf" ]; then end_as usage_error "the status file is not a readable file: $sf"; fi
@@ -1483,6 +1744,16 @@ load_record() { # step 5 of a continue: reads, validates and adopts the saved st
     fi
     if [ "$FRESH" = 1 ]; then check_prompt_kept "${v[11]}"; fi
     cd -- "$CWD" 2>/dev/null || end_as usage_error "cannot change to the recorded working directory: $CWD"
+    # OpenCode: the recorded level, outside directories and directory are
+    # validated again, here and not in the caller's directory. What the check
+    # found goes into the record in memory, which only step 7 writes.
+    if [ "$KIND" = opencode ]; then
+        check_context "$LEVEL" "$CWD" "${ALLOW_DIRS[@]}"
+        dirs="$(jq -cn '$ARGS.positional' --args -- "${ALLOW_CANON[@]}")" ||
+            end_as runner_failure "cannot list the outside directories"
+        # shellcheck disable=SC2016  # jq variables
+        st_update '.boundary = $b | .allow_dirs = $d' --arg b "$BOUNDARY" --argjson d "$dirs"
+    fi
 }
 
 do_continue() {
@@ -1494,7 +1765,10 @@ do_continue() {
     # failure here leaves it as it was and the run can be continued again.
     PROGRAM="$(type -P "$KIND")"
     [ -n "$PROGRAM" ] || end_as missing_cli "$KIND is not on PATH"
-    if [ "$KIND" = codex ]; then codex_probe; fi
+    case "$KIND" in
+        codex) codex_probe ;;
+        opencode) oc_version_guard later ;;
+    esac
     if [ "$FRESH" = 1 ]; then
         # The limit refused the first attempt before its first model turn, so
         # no session saw the task: the first attempt again, a new session.

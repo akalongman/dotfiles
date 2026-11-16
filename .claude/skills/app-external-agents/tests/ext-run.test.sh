@@ -647,10 +647,13 @@ exit "$st"
 EOF
 }
 
-agent_env_is() { # key k agent-file: true when that invocation's environment held the agent file unchanged and the two switches
-    jq -n --rawfile c "$CASE/skill/opencode/$3" --slurpfile e "$CALLS/$1.$2/env.json" \
-        '$e[0] == {OPENCODE_CONFIG_CONTENT: $c, OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
-            OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1"}' 2>/dev/null
+agent_env_is() { # key k agent-file: true when that invocation's environment held the agent file as injected with no outside directory (the read agent's external_directory a deny of everything) and the two switches
+    jq -n --slurpfile a "$CASE/skill/opencode/$3" --slurpfile e "$CALLS/$1.$2/env.json" '
+        ($a[0] | if .agent["ext-read"] then .agent["ext-read"].permission.external_directory = {"*": "deny"} else . end)
+            as $want
+        | ($e[0].OPENCODE_CONFIG_CONTENT | fromjson) == $want
+            and $e[0].OPENCODE_DISABLE_CLAUDE_CODE_PROMPT == "1" and $e[0].OPENCODE_DISABLE_CLAUDE_CODE_SKILLS == "1"' \
+        2>/dev/null
 }
 
 section() { # name: the lines of prompts/followup.md after "## <name>" up to the next "## " line, blank lines at either end dropped
@@ -2200,6 +2203,363 @@ play codex 2 --stdout DONE --stderr "$(codex_err U1)"
 ext continue --cli codex --run-dir "$RUN"
 assert_eq "$rc" 0 "continue-preflight-keeps: rc of the continue after the fix"
 assert_file "$RUN/codex.continue1.stdout" "continue-preflight-keeps: codex.continue1.stdout"
+
+# ---------------------------------------------------------------------------
+# What an OpenCode run is given and may read: the injected config, the
+# outside directories, the project boundary and the version guard.
+
+# The permission key that denies OpenCode's skill tool, from the shipped settings file.
+# shellcheck source=/dev/null
+K="$(source "$SKILL/scripts/ext-run.conf" && printf '%s' "$OC_SKILL_DENY_KEY")"
+
+oc_config() { # key k: the config that invocation was given in OPENCODE_CONFIG_CONTENT
+    callf "$1" "$2" env.json | jq -r '.OPENCODE_CONFIG_CONTENT // empty' 2>/dev/null
+}
+
+oc_grants() { # key k: the read agent's external_directory in that invocation's config, as key=value pairs in order
+    oc_config "$1" "$2" |
+        jq -r '.agent["ext-read"].permission.external_directory | to_entries | map(.key + "=" + .value) | join(" ")' \
+            2>/dev/null
+}
+
+oc_key_rule() { # key k agent: the rule for K in that agent's permission in that invocation's config
+    oc_config "$1" "$2" | jq -r --arg a "$3" --arg k "$K" '.agent[$a].permission[$k]' 2>/dev/null
+}
+
+config_as_injected() { # key k file: true when that file of the run directory holds exactly what the invocation was given
+    jq -n --rawfile c "$RUN/$3" --slurpfile e "$CALLS/$1.$2/env.json" '$e[0].OPENCODE_CONFIG_CONTENT == $c' 2>/dev/null
+}
+
+refused() { # reason allow-dir [more options]: an answering qwen run given that directory is refused before it writes
+    local reason="$1" dir="$2"
+    shift 2
+    answering qwen 1
+    ext run --cli qwen --run-dir "$RUN" --allow-dir "$dir" "$@"
+    assert_eq "$rc" 64 "$CASE_NAME: rc"
+    assert_contains "$ERR" "$reason" "$CASE_NAME: the reason"
+    assert_eq "$(ncalls qwen)" 0 "$CASE_NAME: no call"
+    assert_nofile "$RUN/qwen.status" "$CASE_NAME: no status"
+}
+
+new_case oc-env
+play qwen 1 --stdout "$(t_oc_empty_final S)"
+play qwen 2 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-env: rc"
+for k in 1 2; do
+    assert_eq "$(callf qwen "$k" env.json | jq -c '[.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT, .OPENCODE_DISABLE_CLAUDE_CODE_SKILLS]')" \
+        '["1","1"]' "oc-env $k: the two switches"
+    assert_eq "$(argv qwen "$k" | jq -r '.[1]')" --pure "oc-env $k: --pure at index 1"
+    assert_eq "$(oc_key_rule qwen "$k" ext-read)" deny "oc-env $k: the skill key is denied"
+done
+assert_eq "$(config_as_injected qwen 1 qwen.first1.config.json)" true "oc-env: qwen.first1.config.json is what the first attempt got"
+assert_eq "$(config_as_injected qwen 2 qwen.resume1.config.json)" true "oc-env: qwen.resume1.config.json is what the resume got"
+
+new_case oc-shipped-agents
+assert_ne "$K" "" "oc-shipped-agents: OC_SKILL_DENY_KEY is not empty"
+assert_eq "$(jq -r --arg k "$K" '.agent["ext-read"].permission[$k]' "$SKILL/opencode/read-agent.json")" deny \
+    "oc-shipped-agents: the read agent denies the skill key"
+assert_eq "$(jq -r --arg k "$K" '.agent["ext-edit"].permission[$k]' "$SKILL/opencode/edit-agent.json")" deny \
+    "oc-shipped-agents: the edit agent denies the skill key"
+
+new_case oc-edit-config
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN" --level edit
+assert_eq "$rc" 0 "oc-edit-config: rc"
+assert_contains "$(argv qwen 1)" '"--agent","ext-edit"' "oc-edit-config: the edit agent"
+assert_eq "$(oc_key_rule qwen 1 ext-edit)" deny "oc-edit-config: the skill key is denied"
+assert_eq "$(config_as_injected qwen 1 qwen.first1.config.json)" true "oc-edit-config: qwen.first1.config.json is what was injected"
+
+new_case oc-no-key
+conf_set "OC_SKILL_DENY_KEY=''"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 18 "oc-no-key: rc"
+assert_contains "$ERR" OC_SKILL_DENY_KEY "oc-no-key: the setting named"
+assert_eq "$(ncalls qwen)" 0 "oc-no-key: no call"
+assert_nofile "$RUN/qwen.status" "oc-no-key: no status"
+
+new_case oc-allow
+mkdir -p "$CASE/out/a" "$CASE/out/b"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN" --allow-dir "$CASE/out/a" --allow-dir "$CASE/out/b"
+assert_eq "$rc" 0 "oc-allow: rc"
+assert_eq "$(oc_grants qwen 1)" \
+    "*=deny $CASE/out/a=allow $CASE/out/a/*=allow $CASE/out/b=allow $CASE/out/b/*=allow" \
+    "oc-allow: deny everything, then each directory and everything under it"
+assert_eq "$(st '.allow_dirs | length')" 2 "oc-allow: allow_dirs"
+
+new_case oc-allow-link
+mkdir -p "$CASE/out/a"
+ln -s "$CASE/out/a" "$CASE/lnk"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN" --allow-dir "$CASE/lnk"
+assert_eq "$rc" 0 "oc-allow-link: rc"
+assert_eq "$(oc_config qwen 1 | jq -r '.agent["ext-read"].permission.external_directory
+    | [to_entries[] | select(.value == "allow") | .key] | join(" ")' 2>/dev/null)" \
+    "$CASE/out/a $CASE/out/a/*" "oc-allow-link: the canonical path is granted"
+assert_eq "$(st '.allow_dirs[0]')" "$CASE/out/a" "oc-allow-link: allow_dirs holds the canonical path"
+
+new_case oc-allow-resume
+mkdir "$CASE/out"
+play qwen 1 --stdout "$(t_oc_empty_final S)"
+play qwen 2 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN" --allow-dir "$CASE/out"
+assert_eq "$rc" 0 "oc-allow-resume: rc"
+assert_eq "$(oc_grants qwen 2)" "*=deny $CASE/out=allow $CASE/out/*=allow" "oc-allow-resume: the resume has the same grants"
+assert_eq "$(oc_grants qwen 2)" "$(oc_grants qwen 1)" "oc-allow-resume: as the first attempt"
+
+new_case oc-continue-config
+play qwen 1 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN"
+mkdir "$CASE/out"
+fake_ul qwen ".allow_dirs=[\"$CASE/out\"]"
+play qwen 2 --stdout "$(t_oc_only S)"
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-continue-config: rc"
+assert_eq "$(oc_grants qwen 2)" "*=deny $CASE/out=allow $CASE/out/*=allow" "oc-continue-config: the recorded directory is granted"
+assert_eq "$(oc_key_rule qwen 2 ext-read)" deny "oc-continue-config: the skill key is denied"
+assert_eq "$(config_as_injected qwen 2 qwen.continue1.config.json)" true \
+    "oc-continue-config: qwen.continue1.config.json is what was injected"
+
+new_case continue-oc-from-home
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+fake_ul qwen
+play qwen 2 --stdout "$(t_oc_only S)"
+EXT_CWD="$HOME" ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-oc-from-home: rc"
+assert_eq "$(callf qwen 2 cwd)" "$WORK" "continue-oc-from-home: in the recorded directory, not the refused caller's"
+
+new_case continue-oc-bad-record
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+mkdir -p "$HOME/.codex/sessions"
+fake_ul qwen ".cwd=\"$HOME/.codex/sessions\""
+keep "$RUN/qwen.status"
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-oc-bad-record: rc"
+assert_contains "$ERR" protected "continue-oc-bad-record: the reason"
+unchanged "$RUN/qwen.status" "continue-oc-bad-record"
+assert_eq "$(ncalls qwen)" 1 "continue-oc-bad-record: no call after the run"
+
+new_case boundary-own-repo
+git -C "$HOME" init -q --template="$ROOT/tpl"
+EXT_VARS=("GIT_DIR=$HOME/.git" "GIT_WORK_TREE=$HOME")
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "boundary-own-repo: rc"
+assert_eq "$(st .boundary)" "$WORK" "boundary-own-repo: inherited repository variables do not move the boundary"
+
+new_case boundary-git-hangs
+mk_tool "$CASE/slowgit/git" <<< 'sleep 30'
+EXT_PATH="$CASE/slowgit:$CASE/bin:$BIN_ROOT/utils"
+PRE_LIMIT=1s
+answering qwen 1
+t0="$EPOCHREALTIME"
+ext run --cli qwen --run-dir "$RUN"
+took_under "$t0" 10 "boundary-git-hangs: the run ended within 10 s"
+assert_eq "$rc" 18 "boundary-git-hangs: rc"
+assert_contains "$ERR" "git did not answer" "boundary-git-hangs: message"
+assert_eq "$(ncalls qwen)" 0 "boundary-git-hangs: no call"
+assert_nofile "$RUN/qwen.status" "boundary-git-hangs: no status"
+
+# git fails although a .git lies above the directory (here a .git file git
+# cannot read): the boundary is unknown, and the directory is not taken for it.
+new_case boundary-unknown
+mkdir -p "$CASE/broken/sub"
+: > "$CASE/broken/.git"
+WORK="$CASE/broken/sub"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "boundary-unknown: rc"
+assert_contains "$ERR" "cannot tell the project boundary" "boundary-unknown: message"
+assert_eq "$(ncalls qwen)" 0 "boundary-unknown: no call"
+assert_nofile "$RUN/qwen.status" "boundary-unknown: no status"
+
+# Refused outside directories: each row creates what it names, so that only
+# the stated check can refuse it.
+new_case refuse-relative
+mkdir -p "$WORK/relative/dir"
+refused 'not absolute' relative/dir
+
+new_case refuse-missing
+refused 'does not exist' "$CASE/missing"
+
+new_case refuse-file
+: > "$CASE/afile"
+refused 'not a directory' "$CASE/afile"
+
+new_case refuse-pattern
+mkdir -p "$CASE/out/star*"
+refused 'pattern character' "$CASE/out/star*"
+
+# (new_case sets d and n, so these loops use other names.)
+for b in / /tmp /home /var/tmp home parent-of-home; do
+    new_case "refuse-broad-${b//\//_}"
+    case "$b" in
+        home) b="$HOME" ;;
+        parent-of-home) b="${HOME%/*}" ;;
+    esac
+    refused 'too broad' "$b"
+done
+
+for p in .claude .claude/skills/x .claude2 .codex .gemini .config/opencode .local/share/opencode .opencode \
+    .ssh .gnupg .aws .secrets .config/gh .config; do
+    q="${p#.}"
+    new_case "refuse-protected-${q//\//-}"
+    mkdir -p "$HOME/$p"
+    refused protected "$HOME/$p"
+done
+
+new_case refuse-link-into-ssh
+mkdir -p "$HOME/.ssh/sub"
+ln -s "$HOME/.ssh/sub" "$CASE/link-into-ssh"
+refused protected "$CASE/link-into-ssh"
+
+new_case refuse-xdg-data
+mkdir -p "$CASE/xdg/opencode/sessions"
+EXT_VARS=("XDG_DATA_HOME=$CASE/xdg")
+refused protected "$CASE/xdg/opencode/sessions"
+
+new_case refuse-codex-home
+mkdir -p "$CASE/chome/sessions"
+EXT_VARS=("CODEX_HOME=$CASE/chome")
+refused protected "$CASE/chome/sessions"
+
+new_case refuse-xdg-config-gh
+mkdir -p "$CASE/xcfg/gh"
+EXT_VARS=("XDG_CONFIG_HOME=$CASE/xcfg")
+refused protected "$CASE/xcfg/gh"
+
+new_case refuse-config-link
+mkdir "$CASE/cfg-real"
+ln -s "$CASE/cfg-real" "$CASE/cfg-link"
+EXT_VARS=("XDG_CONFIG_HOME=$CASE/cfg-link")
+refused protected "$CASE/cfg-real"
+
+new_case refuse-edit-level
+mkdir "$CASE/out"
+refused 'read level only' "$CASE/out" --level edit
+
+new_case refusal-not-for-codex
+mkdir -p "$HOME/.ssh"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --allow-dir "$HOME/.ssh"
+assert_eq "$rc" 0 "refusal-not-for-codex: rc"
+assert_eq "$(st .outcome)" answered "refusal-not-for-codex: outcome"
+
+new_case refusal-not-for-agy
+mkdir -p "$HOME/.ssh"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN" --allow-dir "$HOME/.ssh"
+assert_eq "$rc" 0 "refusal-not-for-agy: rc"
+assert_eq "$(st .outcome)" answered "refusal-not-for-agy: outcome"
+
+# The project boundary.
+new_case oc-home-tree
+git -C "$HOME" init -q --template="$ROOT/tpl"
+WORK="$HOME/.claude/skills/x"
+mkdir -p "$WORK"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "oc-home-tree: rc"
+assert_contains "$ERR" "too broad" "oc-home-tree: the reason"
+assert_contains "$ERR" bundle "oc-home-tree: the remedy"
+assert_eq "$(ncalls qwen)" 0 "oc-home-tree: no call"
+assert_nofile "$RUN/qwen.status" "oc-home-tree: no status"
+
+new_case oc-inside-protected
+WORK="$HOME/.codex/sessions"
+mkdir -p "$WORK"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "oc-inside-protected: rc"
+assert_contains "$ERR" protected "oc-inside-protected: the reason"
+assert_contains "$ERR" bundle "oc-inside-protected: the remedy"
+assert_eq "$(ncalls qwen)" 0 "oc-inside-protected: no call"
+
+new_case oc-bundle
+WORK="$RUN/bundle"
+mkdir "$WORK"
+git -C "$WORK" init -q --template="$ROOT/tpl"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-bundle: rc"
+assert_eq "$(st .boundary)" "$WORK" "oc-bundle: boundary"
+
+for c in codex agy; do
+    new_case "home-tree-$c"
+    git -C "$HOME" init -q --template="$ROOT/tpl"
+    WORK="$HOME/.claude/skills/x"
+    mkdir -p "$WORK"
+    answering "$c" 1
+    ext run --cli "$c" --run-dir "$RUN"
+    assert_eq "$rc" 0 "home-tree-$c: rc"
+done
+
+# The version guard.
+new_case version-major
+echo 2.0.1 > "$SCN/opencode.version"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 19 "version-major: rc"
+assert_eq "$(st .outcome)" unsupported_version "version-major: outcome"
+assert_eq "$(st .phase)" preflight "version-major: phase"
+assert_eq "$(ncalls qwen)" 0 "version-major: no call"
+assert_eq "$(st .versions.preflight)" 2.0.1 "version-major: the version recorded"
+
+new_case version-minor
+echo 1.20.3 > "$SCN/opencode.version"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "version-minor: rc"
+assert_eq "$(st .version_untested)" true "version-minor: version_untested"
+assert_eq "$(st .versions.preflight)" 1.20.3 "version-minor: the version recorded"
+
+new_case version-tested
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .version_untested)" false "version-tested: version_untested"
+
+new_case version-garbage
+echo banana > "$SCN/opencode.version"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 19 "version-garbage: rc"
+assert_contains "$(st .message)" banana "version-garbage: the output named"
+assert_eq "$(ncalls qwen)" 0 "version-garbage: no call"
+
+new_case version-fails
+echo 1 > "$SCN/opencode.version.exit"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 19 "version-fails: rc"
+assert_eq "$(ncalls qwen)" 0 "version-fails: no call"
+
+new_case version-hangs
+: > "$SCN/opencode.version.hold"
+: > "$SCN/opencode.version.ignore-term"
+PRE_LIMIT=1s
+answering qwen 1
+t0="$EPOCHREALTIME"
+ext run --cli qwen --run-dir "$RUN"
+took_under "$t0" 10 "version-hangs: the run ended within 10 s"
+assert_eq "$rc" 19 "version-hangs: rc"
+assert_contains "$(st .message)" "timed out" "version-hangs: message"
+assert_eq "$(alive "$(cat "$CALLS/version.pid" 2>/dev/null)" && echo alive || echo gone)" gone \
+    "version-hangs: the version command is gone"
+assert_eq "$(ncalls qwen)" 0 "version-hangs: no call"
+assert_nofile "$RUN/qwen.lock" "version-hangs: no lock"
+
+new_case version-changes
+play qwen 1 --stdout "$(t_oc_empty_final S)" --then-version 2.0.0
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 19 "version-changes: rc"
+assert_eq "$(st .phase)" resume "version-changes: phase"
+assert_eq "$(ncalls qwen)" 1 "version-changes: no resume call"
+assert_eq "$(stj .versions.later)" '["2.0.0"]' "version-changes: the later version recorded"
+assert_eq "$(st .versions.preflight)" 1.19.0 "version-changes: the preflight version recorded"
 
 # ---------------------------------------------------------------------------
 # Step 7: the end of the suite.

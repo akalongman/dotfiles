@@ -9,6 +9,7 @@
         "webfetch": "deny",
         "websearch": "deny",
         "task": "deny",
+        "skill": "deny",
         "bash": {
           "*": "deny",
           "git log *": "allow",
