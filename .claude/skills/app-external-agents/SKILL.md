@@ -83,7 +83,9 @@ symbolic link leads out: in the acceptance run of 2026-11-16 the read
 tool of two models (`deepseek`, `qwen`) read a file through a link
 inside the project whose target lay outside the project and every
 granted directory, so a project that holds such a link exposes its
-target; a bundle holds none, because its copies follow links. OpenCode's
+target. The runner does not look for such links; step 3 says how the
+session finds one that leads into a protected directory, and a bundle
+holds none, because its copies follow links. OpenCode's
 own tool-output directory (`~/.local/share/opencode/tool-output/`) stays
 readable in every run. The edit agent allows edits and shell commands
 inside the project. Its rule denies the direct `git commit` and
@@ -186,12 +188,34 @@ them on the same files.
 Use one when the material lives in the dotfiles work tree (its top is the
 home directory, so an OpenCode run started anywhere in it is refused) or
 inside a protected directory (see step 6), when one file is needed from a
-directory that must not be opened as a whole, and for agy when a path
-falls outside its file-reading rules. Worked example: a review of this
-skill. Its directory lies in the dotfiles work tree, so the session
-copies `SKILL.md`, `scripts/`, `prompts/`, the design and the rule file
-it is checked against into `<run>/bundle`, runs `git init` there, and
-starts every reviewer from `<run>/bundle`.
+directory that must not be opened as a whole, for OpenCode when the
+project or an outside directory holds a symbolic link that leads into a
+protected directory (below), and for agy when a path falls outside its
+file-reading rules. Worked example: a review of this skill. Its directory
+lies in the dotfiles work tree, so the session copies `SKILL.md`,
+`scripts/`, `prompts/`, the design and the rule file it is checked
+against into `<run>/bundle`, runs `git init` there, and starts every
+reviewer from `<run>/bundle`.
+
+Links into a protected directory. The runner checks the project boundary
+and each outside directory by their own paths (step 6), not the links
+inside them, and OpenCode's read tool follows a link out of its fence
+(see "Levels"). So before an OpenCode run the session lists the links on
+disk under the boundary and under each outside directory, and resolves
+each: `find <dir> -type l -exec realpath -- {} +` prints where every
+link under `<dir>` leads. A target that is, lies inside or contains a
+protected directory (the home directory, for example) calls for a
+bundle. At the edit level, which never runs from a bundle, the session
+names the link to the owner before the run, and the owner decides.
+Worked example: the private dotfiles checkout, `~/.dotfiles-private`,
+is a git work tree of its own whose top overlaps no protected directory,
+so an OpenCode run started in it passes the boundary check, and its
+`home/.exports` is a link to `~/.secrets/.exports`. A `qwen` review of a
+plan under `home/.claude/docs` therefore runs from a bundle that holds
+the plan and the files it is checked against, never a copy of `home/`
+as a whole, which would carry the file the link leads to. That link is
+ignored by git, which is why the list comes from the disk and not from
+`git ls-files`.
 
 Rules for building it:
 
@@ -364,7 +388,11 @@ boundary (the top of the git work tree that holds the working directory,
 or the directory itself outside a work tree) is the home directory or an
 ancestor of it, or is, contains or lies inside a protected directory,
 because the credential directories would then be part of the project.
-The refusal names the remedy: a bundle. Codex and agy are not refused;
+The refusal names the remedy: a bundle. Both checks, of the outside
+directories and of the boundary, compare their own paths, not the links
+inside them, so a project or an outside directory that holds a link into
+a protected directory is not refused; step 3 says how the session finds
+one. Codex and agy are not refused;
 they already read anywhere, on the owner's own subscriptions.
 
 Start OpenCode runs a few seconds apart. Two started within a second once
