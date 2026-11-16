@@ -508,7 +508,9 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
 
 after_preflight_cmd() { # what: after a preflight command, a group that outlived the kill ends the run as runner_failure, a signal as cancelled
     if [ "$C_STUCK" = true ]; then end_as runner_failure "$C_STUCK_MSG"; fi
-    if [ "$C_SIGNALLED" = true ]; then end_as cancelled "the runner received SIG$CANCEL_SIG during $1"; fi
+    # Also a signal that arrived after the command's last poll, while it was
+    # reaped and its group stopped.
+    end_if_cancelled "during $1"
 }
 
 # ---------------------------------------------------------------------------
@@ -1136,7 +1138,12 @@ own_git() { # [-o file] dir args...: one git query about dir, bounded, with the 
     dir="$1"
     shift
     git_local_vars
-    cmd=(timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git -c core.fsmonitor=false -C "$dir" "$@")
+    # A query never refreshes and rewrites the project's index, which git
+    # status and git diff otherwise do when it is stale: --no-optional-locks
+    # stops git status, and only diff.autoRefreshIndex off stops git diff
+    # (git 2.53). The diff's output is the same either way.
+    cmd=(timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git --no-optional-locks
+        -c core.fsmonitor=false -c diff.autoRefreshIndex=false -C "$dir" "$@")
     # git runs in the foreground of this command substitution, so a signal to
     # the runner is handled once the query has returned.
     out="$(
@@ -2035,6 +2042,11 @@ do_continue() {
         st_update '.handle_source = $id | .handle = null | .reported = null | .fresh_start = false' \
             --arg id "continue$CONT_N"
     fi
+    # The last look at a signal before the saved status is rewritten: one that
+    # arrived after the preflight command returned (while the handle was read,
+    # for example) still leaves the record as it was, so the run can be
+    # continued again.
+    end_if_cancelled "before the continue started"
     OWNS_STATUS=1
     write_status
     # Step 8.

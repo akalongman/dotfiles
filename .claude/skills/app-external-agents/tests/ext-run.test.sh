@@ -2830,6 +2830,20 @@ assert_nofile "$RUN/before.txt" "snap-no-git: no before.txt"
 assert_nofile "$RUN/before.diff" "snap-no-git: no before.diff"
 assert_contains "$(st .message)" "not a git repository" "snap-no-git: message"
 
+# The snapshot leaves the project's index alone, also when it is stale (a file
+# touched without a change): git status would otherwise refresh and rewrite it.
+new_case snap-index-untouched
+touch -d @1000000000 "$WORK/README.md"
+keep "$WORK/.git/index"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 0 "snap-index-untouched: rc"
+assert_file "$RUN/before.txt" "snap-index-untouched: the snapshot was taken"
+unchanged "$WORK/.git/index" "snap-index-untouched"
+# The fixture is one in which the option matters: a plain git status rewrites it.
+git -C "$WORK" status --short > /dev/null 2>&1
+assert_ne "$(sum "$WORK/.git/index")" "$(sum "$CASE/kept/index")" "snap-index-untouched: the fixture's index was stale"
+
 # The note stays when the outcome brings a message of its own.
 new_case snap-note-kept
 WORK="$CASE/plain"
@@ -3135,6 +3149,45 @@ play codex 2 --stdout DONE --stderr "$(codex_err U1)"
 ext continue --cli codex --run-dir "$RUN"
 assert_eq "$rc" 0 "term-in-continue-preflight then: the cancelled continue left the run continuable"
 assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" DONE "term-in-continue-preflight then: the answer"
+
+# The same once the probe has returned: the signal arrives while the continue
+# reads the handle, before step 7, and still leaves the saved status alone.
+# A jq stand-in holds require_handle's first query until the signal is sent.
+new_case term-after-continue-probe
+ul_first_run
+keep "$RUN/codex.status"
+rm "$CALLS/sandbox.started"
+mk_tool "$CASE/slowjq/jq" <<'EOF'
+for a in "$@"; do
+    if [ "$a" = '.handle_source | strings' ] && [ ! -e "$CASE/jq-entered" ]; then
+        : > "$CASE/jq-entered"
+        n=0
+        until [ -e "$CASE/jq-go" ] || [ "$n" -ge 100 ]; do
+            sleep 0.1
+            n=$((n + 1))
+        done
+    fi
+done
+exec "$BIN_ROOT/utils/jq" "$@"
+EOF
+EXT_PATH="$CASE/slowjq:$CASE/bin:$BIN_ROOT/utils"
+ext_bg continue --cli codex --run-dir "$RUN"
+wait_for "$CASE/jq-entered"
+kill -TERM "$BG"
+: > "$CASE/jq-go"
+ext_wait
+assert_file "$CALLS/sandbox.started" "term-after-continue-probe: the continue's probe had run"
+assert_eq "$rc" 20 "term-after-continue-probe: rc"
+assert_begins "$OUT" "codex: cancelled" "term-after-continue-probe: summary"
+assert_ends "$OUT" "status: none" "term-after-continue-probe: no status named"
+unchanged "$RUN/codex.status" "term-after-continue-probe"
+assert_eq "$(ncalls codex)" 1 "term-after-continue-probe: no continue attempt"
+assert_nofile "$RUN/codex.lock" "term-after-continue-probe: no lock"
+unset EXT_PATH
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "term-after-continue-probe then: the cancelled continue left the run continuable"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" DONE "term-after-continue-probe then: the answer"
 
 new_case running-status
 play codex 1 --hold --stdout A --stderr "$(codex_err U1)"
