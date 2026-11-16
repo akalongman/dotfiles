@@ -3429,6 +3429,65 @@ for a in deepseek kimi qwen; do assert_file "$RUN/$a.first1.config.json" "five-a
 assert_eq "$(no_locks)" none "five-at-once: no lock is left"
 
 # ---------------------------------------------------------------------------
+# The skill text pinned to the runner: SKILL.md's outcome table, every command
+# line it shows in a fenced block, and the fixed sentences of SKILL.md and
+# prompts/review.md.
+
+# the outcome table of SKILL.md is the runner's list: same names, same numbers, same order
+new_case skill-outcomes; ext outcomes
+doc="$(awk -F'|' '/^\| `[a-z_]+` \| [0-9]+ \|/ { n = $2; c = $3; gsub(/[ `]/, "", n); gsub(/ /, "", c); print n "\t" c }' "$SKILL/SKILL.md")"
+assert_eq "$doc" "$OUT" "SKILL.md's outcome table equals ext-run outcomes"
+
+# every command line SKILL.md shows is one the runner accepts, for every CLI the line is written for
+mapfile -t shown < <(awk '/^```/ { f = !f; next }
+  f { if (sub(/\\$/, "")) { buf = buf $0 " "; next } print buf $0; buf = "" }' "$SKILL/SKILL.md")
+nrun=0; ncont=0; i=0; raw=()   # raw is filled by the eval below
+for line in "${shown[@]}"; do
+  case "$line" in
+    codex\ *|agy\ *|opencode\ *|timeout\ *) _fail "SKILL.md shows a bare CLI command line: $line"; continue ;;
+    ext-run\ *|*/ext-run\ *) ;;
+    *) continue ;;
+  esac
+  args="${line#*ext-run }"
+  args="${args//<name>/@NAME@}"; args="${args//<run>/@RUN@}"; args="${args//<dir>/@DIR@}"
+  args="${args//<dur>/30s}"; args="${args//<id>/m1}"; args="${args//<value>/low}"
+  case "$args" in
+    *'<'*|*'>'*|*'['*|*']'*|*'$'*|*'`'*|*';'*|*'|'*|*'&'*)
+      _fail "SKILL.md shows a command line the suite cannot run: $line"; continue ;;
+  esac
+  eval "raw=($args)"   # quote removal only: the line holds no operator and no expansion
+  cli=''
+  for ((j = 0; j < ${#raw[@]}; j++)); do [ "${raw[j]}" = --cli ] && cli="${raw[j + 1]:-}"; done
+  case "${raw[0]}:$cli" in
+    outcomes:*) names=none ;;
+    *:@NAME@) names='codex agy qwen' ;;
+    *:codex|*:agy|*:qwen) names="$cli" ;;
+    *) _fail "SKILL.md shows a command line whose CLI the suite cannot tell: $line"; continue ;;
+  esac
+  for name in $names; do
+    i=$((i + 1)); new_case "skill-line-$i"; mkdir "$CASE/dir"
+    words=()
+    for w in "${raw[@]}"; do w="${w//@NAME@/$name}"; w="${w//@RUN@/$RUN}"; words+=("${w//@DIR@/$CASE/dir}"); done
+    case "${words[0]}" in
+      run) nrun=$((nrun + 1)); answering "$name" 1 ;;
+      continue) ncont=$((ncont + 1))
+        answering "$name" 1; ext run --cli "$name" --run-dir "$RUN"; fake_ul "$name"; answering "$name" 2 ;;
+      outcomes) ;;
+      *) _fail "SKILL.md shows ext-run without an action: $line"; continue ;;
+    esac
+    ext "${words[@]}"
+    assert_eq "$rc" 0 "the runner accepts, for $name: $line"
+  done
+done
+assert_eq "$([ "$nrun" -ge 1 ] && [ "$ncont" -ge 1 ] && echo yes || echo no)" yes "SKILL.md shows a run line and a continue line"
+
+assert_eq "$(grep -c -F 'Do not modify any files and do not run experiments.' "$SKILL/SKILL.md")" 1 "the read-level line is stated"
+assert_eq "$(grep -c -F 'Write your complete answer as your final message' "$SKILL/SKILL.md")" 1 "the closing instruction is stated"
+assert_eq "$(grep -c -F 'Never tell a reviewer not to question, argue with or reverse a decision.' "$SKILL/prompts/review.md")" 1 "the ban is stated"
+assert_eq "$(grep -c -F 'Decisions I would reopen' "$SKILL/prompts/review.md")" 1 "the reopen section is named"
+assert_eq "$(grep -c -E 'timeout 30m|codex exec --skip-git' "$SKILL/SKILL.md")" 0 "no hand-typed command line is left"
+
+# ---------------------------------------------------------------------------
 # Step 7: the end of the suite.
 
 CASE_NAME=end

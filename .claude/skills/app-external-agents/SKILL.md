@@ -11,6 +11,17 @@ Run the Codex CLI, the Antigravity CLI (`agy`) and OpenCode headlessly on
 the user's behalf and relay what they answer. All three CLIs are trusted
 and run with the user's own configuration, environment and allow-rules.
 
+Every run goes through the runner, `scripts/ext-run` in this skill's
+directory. One invocation runs one CLI to exactly one named outcome: it
+checks the ground, builds the command line, keeps the time limit, resumes
+the session once when it ends without an answer, continues it after a
+usage limit when asked, and writes a status file from which the session
+reports. The session keeps the judgement: which CLIs, what to ask, how to
+weigh the answers. It never starts a task on `codex`, `agy` or `opencode`
+itself.
+
+## Aliases
+
 OpenCode carries three fixed model aliases. Any other OpenCode model id
 works when the user names it in full (`provider/model`).
 
@@ -22,26 +33,62 @@ works when the user names it in full (`provider/model`).
 
 ## Levels
 
-| Level | When | Codex flag | agy flag | OpenCode agent |
-|---|---|---|---|---|
-| Read | default | `-s read-only` | none | `ext-read` from `<skill>/opencode/read-agent.json` |
-| Edit | the user asked for changes to files | `-s workspace-write` | `--mode accept-edits` | `ext-edit` from `<skill>/opencode/edit-agent.json` |
+A run is at the read level unless the user asked for changes to files;
+then it is at the edit level. The runner passes each CLI's own flag for
+the level.
 
-`<skill>` is this skill's directory. OpenCode has no sandbox flag: its
-permissions are per-agent config, so each run injects one of the two
-agent files through the `OPENCODE_CONFIG_CONTENT` environment variable,
-which merges with the user's own OpenCode config. The read agent denies
-edits, writes outside the project, web access and every shell command
-except a short read-only list that its system prompt states, and within
-that list it denies output redirection and the `find`, `git` and `rg`
-options that write files or run programs. A write shaped to get past
-these patterns (a redirection after a pipeline or a `{ }` group) is
-stopped only by its instructions. The edit agent allows edits and shell
-commands inside the project. Its rule denies the direct `git commit` and
+What stops a write at the read level is stated in one of three words.
+Enforced: a boundary outside the model stops the write, whatever the
+model tries. Fenced: rules stop the forms of a write they recognise, and
+other forms get through. Instructed: the model is told not to write, and
+nothing else stops it.
+
+| CLI | Read level | Edit level | What the read level rests on |
+|---|---|---|---|
+| Codex | `-s read-only` | `-s workspace-write` | enforced: its OS sandbox; a write under `read-only` was seen refused |
+| agy | no flag | `--mode accept-edits` | instructed only: it can write files |
+| OpenCode | agent `ext-read`, from `opencode/read-agent.json` | agent `ext-edit`, from `opencode/edit-agent.json` | fenced |
+
+Codex's word rests on `CODEX_WRITE_REFUSED=yes` in `scripts/ext-run.conf`:
+a probe of 2026-11-15 saw `touch` refused with "Read-only file system"
+under the read-only policy. Were that setting `no`, the read level would
+only be configured: the sandbox is selected, a refused write was not
+observed.
+
+agy has no read-only setting. Its allow-rules gate shell commands, not
+its file-writing tool, and `--mode plan` is not a boundary, so it is not
+used. At the read level the prompt's read-level line (step 5 of
+"Steps") is all that stops a write. In a git repository the runner
+therefore takes the before snapshot for every agy run, and the report
+compares the working tree with it.
+
+OpenCode has no sandbox flag: its permissions are per-agent config, so
+each run injects one of the two agent files through the
+`OPENCODE_CONFIG_CONTENT` environment variable, which merges with the
+user's own OpenCode config. The read agent denies edits, writes outside
+the project, web access and every shell command except a short read-only
+list that its system prompt states, and within that list it denies
+output redirection and the `find`, `git` and `rg` options that write
+files or run programs. Three ways through that fence are known. A write
+shaped to get past the patterns (a redirection after a pipeline or a
+`{ }` group) is stopped only by its instructions. An allowed command
+that runs a helper program runs that program, for example `git diff`
+with an external diff or text-conversion driver set in git config; only
+the owner's own configuration can name such a helper, because a cloned
+repository cannot set one. And outside paths leak: OpenCode infers the
+directory of a shell command from its text on a best-effort basis, so on
+a file outside the project and every granted directory the read tool and
+`cat` were denied while `grep -n`, `head -1` and `ls` completed. OpenCode's
+own tool-output directory (`~/.local/share/opencode/tool-output/`) stays
+readable in every run. The edit agent allows edits and shell commands
+inside the project. Its rule denies the direct `git commit` and
 `git push` commands only; a wrapped or scripted commit or push
 (`git -c ... commit`, `sh -c '...'`, a script the agent wrote) is
 stopped only by its instructions. Neither agent may start OpenCode
-subagents (the `task` tool is denied at both levels).
+subagents or use OpenCode's skill tool.
+
+A resume always runs at the read level, whatever the level of the first
+attempt; for agy that, too, is an instruction only.
 
 Hard rules:
 
@@ -58,221 +105,521 @@ Hard rules:
 - Edit level runs one CLI at a time, across all three. Two agents editing
   one working tree collide.
 
-Platform: every command below is bash. On Windows it runs in Git Bash,
-the shell Claude Code uses there; none of the three CLIs needs WSL.
-Coreutils `timeout` and `jq` must be on PATH, and on Windows
-`command -v timeout` must resolve to Git Bash's copy, not
-`C:\Windows\System32\timeout.exe`, which is a different program. The
-`.time` files come from bash's own `time` keyword, so no GNU `time` is
-needed. The two OpenCode agent files list POSIX commands (`ls`, `cat`,
-`grep`, ...), so on Windows OpenCode's bash tool has to run Git Bash;
-set `OPENCODE_GIT_BASH_PATH` when OpenCode does not find it.
+## What each CLI is given
+
+The five reviewers do not start equal. "Loaded" below means that the CLI
+puts the item in front of the model without the prompt asking for it.
+
+| | Codex | agy | OpenCode |
+|---|---|---|---|
+| Owner's global `~/.claude/CLAUDE.md` | no | no sign of it | not loaded (`OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`) |
+| Project `CLAUDE.md` | no | not checked | not loaded |
+| Project `AGENTS.md` | loaded (seen in an older session) | not checked | the first one found of `AGENTS.md` and `CONTEXT.md`, OpenCode's own instruction files, which the switches do not touch (the order is a reading of the 1.19.0 binary, not rechecked) |
+| Skills | kept out by `-c skills.include_instructions=false`: asked for its skills on 2026-11-15, Codex named none with it and 33 without it | `--disable-slash-commands`, which its help describes as turning off slash command and skill expansion in print mode; what agy loads from the superpowers plugin in its config directory was not established | the skill tool is denied, so OpenCode does not offer it (`OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` as well); that skill descriptions do not reach the model rests on the model's own account |
+| Plugins | its own | not checked | none (`--pure`) |
+
+The runner passes all of these on every attempt, first, resume and
+continue, from `scripts/ext-run.conf` and the agent files. The owner's
+CLI configuration is not edited: the switches are environment variables
+and flags of the run.
+
+What stays unequal:
+
+- Codex and OpenCode load a project's `AGENTS.md` by themselves; a
+  project's `CLAUDE.md` reaches a reviewer only when the prompt names it.
+  So the prompt names the project's instruction files by path for every
+  reviewer, whatever each CLI also loads.
+- Codex's skills are kept out by a configuration override that one probe
+  showed working. Whether the tools of its plugins are still offered was
+  not checked.
+- agy's `--disable-slash-commands` rests on one short run on
+  `gemini-3.8-flash-low`, because the default model was over its quota on
+  2026-11-15. A run on the default model with the flag, and a resume
+  with it, were not seen to answer.
 
 ## Steps
 
-1. **Choose the CLIs.** The ones the user named: `codex`, `agy`, an
-   OpenCode alias (`deepseek`, `kimi`, `qwen`) or a full OpenCode model
-   id. "All" or "everyone" means all five. When the user names none, ask
-   which to run, as a numbered list (1 codex, 2 agy, 3 deepseek, 4 kimi,
-   5 qwen, 6 all), and wait for the answer.
-2. **Create a run directory** in the session's scratchpad:
-   `<scratchpad>/YYYY-MM-DD-HHMM-<slug>/` (24-hour local time). Below,
-   `<run>` is its absolute path. At the edit level each run gets its own
-   run directory, with the CLI name or alias in the slug. Each OpenCode
-   run's files use its alias as the prefix (`<run>/deepseek.ndjson`); a
-   full model id becomes the prefix with `/` replaced by `-`.
-3. **Write `<run>/prompt.md`**, one copy in each edit-level run directory.
-   The CLI knows nothing about this session, so the prompt stands alone:
+Command lines below begin with the runner's path. `<name>` stands for
+any CLI: `codex`, `agy`, an alias or a full OpenCode model id. A line
+that holds for one CLI only names it: `codex`, `agy`, or `qwen` for any
+OpenCode alias or full model id. `<run>` is the run directory's absolute
+path, `<dir>` an absolute directory, `<dur>` a duration in `timeout`'s
+syntax (a number greater than zero, then `s`, `m`, `h` or `d` if wanted),
+`<id>` a model id and `<value>` a reasoning effort.
 
-   ```
-   # Task
-   <the goal, in the user's terms>
+### 1. Choose the CLIs
 
-   # Where to look
-   <absolute project path; files, directories or a git range>
+The ones the user named: `codex`, `agy`, an OpenCode alias (`deepseek`,
+`kimi`, `qwen`) or a full OpenCode model id. "All" or "everyone" means
+all five. When the user names none, ask which to run, as a numbered list
+(1 codex, 2 agy, 3 deepseek, 4 kimi, 5 qwen, 6 all), and wait for the
+answer.
 
-   # What to return
-   <the shape of the answer: findings with file and line, a decision, a summary of changes>
-   ```
+### 2. Create the run directory
 
-   Name files by path, never paste their contents or a diff. At the read
-   level, end the prompt with the line
-   `Do not modify any files and do not run experiments.`
+Create it under `~/.cache/external-agents/<YYYY-MM-DD-HHMM>-<slug>/`
+(24-hour local time), on disk, because the session scratchpad is on a
+tmpfs that a reboot empties; a reboot on 2026-11-14 took a running
+review's trace with it. Below, `<run>` is its absolute path. Read-level
+runs of several CLIs share one run directory and one `prompt.md`; each
+writes its files under its own prefix, `<p>` below: `codex`, `agy`, the
+alias, or a full model id with every `/` replaced by `-`. At the edit
+level each run
+gets a run directory of its own, with the CLI name or alias in the slug.
+The skill never deletes a run directory; the owner does.
 
-   agy gets its own copy, `<run>/agy-prompt.md`, which adds the shell
-   commands its settings allow. In headless mode agy ends the whole run
-   with no answer at the first command outside that list, so it has to
-   know the list up front:
+### 3. Build a bundle when the material calls for one
 
-   ```
-   { cat <run>/prompt.md; printf '\n# Shell commands\nYou may run only these shell commands (matched by word prefix):\n'; jq -r '.permissions.allow[]' ~/.gemini/antigravity-cli/settings.json | sed 's/^/- /'; printf '\nAny other shell command is denied and ends this run with no answer. When a command would have settled a question, say which command and what you expected instead of running it.\n'; } > <run>/agy-prompt.md
-   ```
-4. **Edit level only:** before each edit-level run, save the starting
-   state with `git status --short -uall > <run>/before.txt` and
-   `git diff HEAD > <run>/before.diff`. One snapshot per run: when both
-   CLIs edit, each run gets its own run directory and its own snapshot.
-   When the project directory is not a git repository, say so in the
-   report and skip the snapshot.
-5. **Start each CLI as its own background shell call**, from the project
-   directory. Before each Codex run, at either level, run
-   `timeout 1m codex sandbox true 2> <run>/probe.err` from the project
-   directory. On exit 0 the run proceeds. On exit 127, do not start Codex
-   and report it as missing (the 127 row of the step 6 table). On any
-   other non-zero exit, do not start Codex and report the sandbox
-   prerequisite (see Prerequisite) together with the contents of
-   `<run>/probe.err`. Read level:
+A bundle is a directory inside the run directory, `<run>/bundle` for
+example, that holds copies of everything the task needs: the material
+under review, the files it is checked against, and the evidence. Make it
+a git work tree of its own (`git init`, nothing committed) and start the
+runs from it, so that the bundle is the project boundary wherever the
+run directory lies. One bundle serves all five reviewers, which also puts
+them on the same files.
 
-   ```
-   TIMEFORMAT=%R; { time timeout 30m codex exec --skip-git-repo-check -s read-only - < <run>/prompt.md > <run>/codex.out 2> <run>/codex.err; } 2> <run>/codex.time
-   ```
+Use one when the material lives in the dotfiles work tree (its top is the
+home directory, so an OpenCode run started anywhere in it is refused) or
+inside a protected directory (see step 6), when one file is needed from a
+directory that must not be opened as a whole, and for agy when a path
+falls outside its file-reading rules. Worked example: a review of this
+skill. Its directory lies in the dotfiles work tree, so the session
+copies `SKILL.md`, `scripts/`, `prompts/`, the design and the rule file
+it is checked against into `<run>/bundle`, runs `git init` there, and
+starts every reviewer from `<run>/bundle`.
 
-   ```
-   TIMEFORMAT=%R; { time timeout 30m agy -p "$(cat <run>/agy-prompt.md)" --output-format stream-json < /dev/null > <run>/agy.ndjson 2> <run>/agy.err; } 2> <run>/agy.time; jq -r 'select(.event=="result") | .result.response // ""' <run>/agy.ndjson > <run>/agy.out
-   ```
+Rules for building it:
 
-   agy answers in stream-json mode so its trace is on disk: one JSON
-   object per line in `agy.ndjson`. The `result` event holds `response`,
-   `status`, `usage`, `duration_seconds`, `num_turns`, `conversation_id`
-   and, after a denial, `denied_actions`; the `step_update` events hold
-   every tool call, including each shell command as
-   `tool_info.parameters.CommandLine`. The `jq` step puts the answer
-   alone into `agy.out`, so the rest of this skill reads `agy.out` like
-   `codex.out`. When `jq` fails (a line that is not JSON), `agy.out` may
-   be empty: read `agy.ndjson` by hand and `agy.err` for the reason. The
-   `.time` file holds the wall time in seconds; the braces keep the
-   CLI's exit status as the call's exit status.
+- copy files and directories following symbolic links, so that no link
+  leads out of the bundle;
+- never copy a credential file, and never a whole protected directory;
+- never copy a `.git` directory or file, which would lead back to the
+  original repository. A review of a git range or of uncommitted changes
+  gets the diff written into the bundle as a file, beside the full text
+  of the files it touches;
+- the prompt names the copies, says that they are copies and where each
+  came from, and says that paths inside the material which point at the
+  originals need not be opened;
+- findings come back with paths into the bundle; map them to the
+  originals before relaying them.
 
-   OpenCode, read level, one call per alias (all may run at once), with
-   `<alias>` and `<model>` from the alias table and `<skill>` this skill's
-   directory:
+A bundle is a snapshot, not isolation. A reviewer cannot see what changed
+after the copy. Codex and agy can still open the originals by their
+paths, and agy writes files of its own outside the working directory. The
+bundle decides what OpenCode is granted and what every reviewer is
+pointed at, nothing more. An edit-level task is never run from a bundle.
 
-   ```
-   TIMEFORMAT=%R; { time OPENCODE_CONFIG_CONTENT="$(cat <skill>/opencode/read-agent.json)" timeout 30m opencode run --agent ext-read --model <model> --format json "$(cat <run>/prompt.md)" < /dev/null > <run>/<alias>.ndjson 2> <run>/<alias>.err; } 2> <run>/<alias>.time; rc=$?; jq -r 'select(.type=="text") | .part.text' <run>/<alias>.ndjson > <run>/<alias>.out; (exit $rc)
-   ```
+### 4. Write `<run>/prompt.md`
 
-   OpenCode gets the plain `<run>/prompt.md`: its injected agent carries
-   the allow list in its own system prompt, so no agy-style copy is
-   needed. The prompt is an argv argument, as for agy. `--format json`
-   writes one JSON object per line to `<alias>.ndjson`, each with `type`,
-   `sessionID` and `part`: `tool_use` events carry the tool, its input
-   (`state.input.command` for bash) and `state.status` (`completed` or
-   `error`), `text` events carry the answer, `step_finish` events carry
-   `tokens` and `cost` for one model turn, and an `error` event means the
-   run failed. The `jq` step puts the answer alone into `<alias>.out`.
-   The line saves OpenCode's exit status before `jq` and ends with it, so
-   the shell call's exit is OpenCode's (or 124 from `timeout`, 127 for a
-   missing binary) and step 6 classifies by it.
+One copy in each edit-level run directory. The CLI knows nothing about
+this session, so the prompt stands alone:
 
-   Edit level: for Codex, replace `-s read-only` with `-s workspace-write`;
-   for agy, add `--mode accept-edits` after the prompt argument; for
-   OpenCode, use `<skill>/opencode/edit-agent.json` and `--agent ext-edit`.
+```
+# Task
+<the goal, in the user's terms>
 
-   Add `--model <name>` (Codex, agy) or `-c model_reasoning_effort="<value>"`
-   (Codex) only when the user names a value; otherwise those two CLIs use
-   their own configuration. OpenCode always gets `--model` from the alias
-   table or the user's full id, and `--variant <value>` only when the user
-   names a reasoning effort. agy has no separate effort flag for this
-   purpose: its model ids carry the effort (`gemini-3.1-pro-high`,
-   `gemini-3.8-flash-low`; `agy models` lists them), and `--effort`
-   conflicts with such an id, so never pass it.
-6. **When a run ends, read its `.out` file** and classify the outcome:
+# Context
+<what the CLI cannot get from the files, or "Nothing to add.">
 
-   | Exit | stdout | Meaning | Report |
-   |---|---|---|---|
-   | 0 | an answer | success | the answer |
-   | 0 | a refusal or an error text | the task needed more than the level allows | the text, and that the edit level or an allow-rule is needed |
-   | 0 | empty or whitespace only | the CLI was denied an action (agy does this) | what it tried, the denied actions, and the last lines of `.err` verbatim, including where it says an allow-rule goes and the rule's shape |
+# Where to look
+<the project directory or the bundle; the files, directories or git range to read>
+<the project's instruction files that bear on the task, by path>
+Outside the project:
+<one absolute directory per line: exactly the list passed with --allow-dir>
 
-   For agy, "what it tried" is the list of shell commands from the trace,
-   and on a denial the last one is the command that was refused:
+# What to return
+<the shape of the answer: findings with file and line, a decision, a summary of changes>
+Write your complete answer as your final message, after your last tool call. Text written before a tool call is treated as working notes.
+```
 
-   ```
-   jq -r 'select(.event=="step_update") | .step_update | select(.tool_name=="run_command" and .state=="ACTIVE") | .tool_info.parameters.CommandLine' <run>/agy.ndjson
-   jq -c 'select(.event=="result") | .result.denied_actions' <run>/agy.ndjson
-   ```
+- `# Context` holds what the CLI cannot get from the files: what the
+  thing is for, constraints that live outside the repository, and what
+  was tried or ruled out and why, each with the place it is recorded
+  when it is recorded. It never holds the session's own verdict on the
+  material ("the plan looks sound"), because a reviewer handed a
+  conclusion tends to return it. When there is nothing to add, it says
+  so.
+- `# Where to look` lists outside-project directories in a group of
+  their own, and the session passes exactly that group to the runner as
+  `--allow-dir` (step 6). It names by path the project's instruction
+  files that bear on the task (`CLAUDE.md`, `AGENTS.md`, a rules
+  directory, the capability specs), for every reviewer. The owner's
+  global instruction files address an interactive session, not a
+  reviewer: they are listed only when they are the material under
+  review, and then marked as material to review, not as instructions to
+  follow.
+- Name files by path; never paste their contents or a diff into the
+  prompt (a diff goes into a bundle as a file).
+- `# What to return` ends with the closing instruction shown above, word
+  for word: OpenCode's answer is the text of its final step, and earlier
+  text is kept apart.
+- A shape the user asked for takes precedence over any template.
+- For a review (a plan, a spec, a design, a diff, code), read
+  `prompts/review.md` and add its parts. No sentence of a review prompt
+  tells the reviewer not to question, argue with or reverse a decision.
 
-   For OpenCode, a denial does not end the run: the model gets the rule
-   text as a tool error and usually still answers. So an answer with one
-   or more denied tool calls is reported as the answer plus the denied
-   calls, verbatim, and the note that the edit level is needed if the
-   task required them; an empty `<alias>.out` means the model stopped
-   after a denial without answering. A missing or rejected key and an
-   unknown model id end the run with an `error` event and a non-zero
-   exit (the "other" row). When the event's message is the generic
-   `Unexpected server error` and the trace has no `tool_use` event (the
-   run failed before any tool ran), re-run once with
-   `--print-logs --log-level ERROR` before `--agent` and quote the reason
-   from `<alias>.err`. After a `tool_use` event, report the generic
-   message and the last lines of `<alias>.err` instead and let the user
-   decide, because a re-run would repeat the task. Denied calls and the
-   error:
+### 5. The read-level line
 
-   ```
-   jq -r 'select(.type=="tool_use") | .part | select(.state.status=="error") | "\(.tool): \(.state.input.command // .state.input.filePath // "?") -> \((.state.error // .state.output // "")[0:200])"' <run>/<alias>.ndjson
-   jq -r 'select(.type=="error") | .error.name + ": " + .error.data.message' <run>/<alias>.ndjson
-   ```
-   | 124 | any | timed out after 30 minutes | that it timed out, plus any partial output |
-   | 127 | empty | the CLI is not installed or not on PATH | which CLI is missing |
-   | other | any | the CLI failed | the last lines of `.err` verbatim |
+At the read level the prompt's last line is this one, after the closing
+instruction:
 
-7. **Report.** One section per run, under the CLI name, or for OpenCode
-   under the alias or the full model id. The first line of
-   each section is this template, every field filled in, on every run
-   including failed ones. A section without it is incomplete:
+```
+Do not modify any files and do not run experiments.
+```
 
-   ```
-   Codex: <model>, effort <effort>. <tokens> tokens, <wall> s. Session <id> (codex exec resume <id>).
-   agy: <model> (<--model id | configured default>, requested, not reported). <total> tokens (<in> in, <out> out, <thinking> thinking), <duration> s, <turns> turn(s). Conversation <id> (agy --conversation <id>).
-   <alias>: <model id> via opencode (requested, not reported). <total> tokens (<in> in, <out> out, <reasoning> reasoning, <cached> cached), $<cost>, <wall> s, <steps> step(s). Session <id> (opencode run -s <id>).
-   ```
+For agy this line is all that stands between a read-level run and a
+write. It is never left out of a read-level prompt.
 
-   Where each value comes from:
+### 6. Start the runs
 
-   | Field | Codex | agy | OpenCode |
-   |---|---|---|---|
-   | model, effort | `grep -m1 '^model: ' <run>/codex.err` and `grep -m1 '^reasoning effort: ' <run>/codex.err` | the `--model` id when one was passed, otherwise `jq -r .model ~/.gemini/antigravity-cli/settings.json`; the effort is part of the name | the `--model` id that was passed |
-   | tokens | the last line of `codex.err` when the line before it is `tokens used` | `jq -c 'select(.event=="result") | .result.usage' <run>/agy.ndjson` | the sums below over every `step_finish` event |
-   | cost | not reported, omit | not reported, omit | the `cost` sum below; the three aliases always report 0, written as `$0 (plan)` |
-   | time | `<run>/codex.time` (wall) | `duration_seconds` from the result event; `<run>/agy.time` when it is missing | `<run>/<alias>.time` (wall) |
-   | turns | not reported, omit | `num_turns` from the result event | the count of `step_finish` events, reported as steps |
-   | handle | `grep -m1 '^session id: ' <run>/codex.err` | `conversation_id` from the result event | `sessionID` from any event |
+Start one invocation per CLI, each as its own background shell call, so
+that the session is notified as each run ends. Start a `run` from the
+project directory, or from the bundle. Read level, any CLI:
 
-   OpenCode sums over turns, and the handle:
+```
+~/.claude/skills/app-external-agents/scripts/ext-run run --cli <name> --run-dir <run>
+```
 
-   ```
-   jq -s '[.[] | select(.type=="step_finish") | .part] | {steps: length, total: (map(.tokens.total)|add), input: (map(.tokens.input)|add), output: (map(.tokens.output)|add), reasoning: (map(.tokens.reasoning)|add), cached: (map(.tokens.cache.read)|add), cost: (map(.cost)|add)}' <run>/<alias>.ndjson
-   jq -r '.sessionID' <run>/<alias>.ndjson | head -1
-   ```
+With outside directories, one `--allow-dir` for each directory listed
+under "Outside the project" in the prompt, the same list for every CLI
+of the run:
 
-   A value the files do not contain is written as `unknown`, never left
-   out. Filled example:
+```
+~/.claude/skills/app-external-agents/scripts/ext-run run --cli <name> --run-dir <run> --allow-dir <dir>
+```
 
-   ```
-   Codex: gpt-6-astra, effort max. 8,834 tokens, 16 s. Session 01a0f65b-... (codex exec resume <id>).
-   agy: Gemini 3.1 Pro (High) (configured default, requested, not reported). 12,779 tokens (12,534 in, 245 out, 243 thinking), 5.8 s, 1 turn. Conversation d529e0b1-... (agy --conversation <id>).
-   qwen: alibaba-token-plan/qwen3.8-max via opencode (requested, not reported). 18,353 tokens (10,669 in, 112 out, 148 reasoning, 7,424 cached), $0 (plan), 8.5 s, 1 step. Session ses_f07e4e09... (opencode run -s <id>).
-   ```
+Edit level, one CLI at a time, each in a run directory of its own and
+never from a bundle:
 
-   When more than one answered, compare them all: where they agree, where
-   they differ, and your own position on each point.
-   Read the code before agreeing with a claim
-   about it, because an answer from another model is a claim, not
-   evidence. In a git repository, after each edit-level run, show
-   `git status --short -uall` and compare it with that run's
-   `<run>/before.txt`: mark which entries are new, flag every path present
-   in both as possibly touched by the agent and mixed with earlier changes
-   (for tracked paths, their earlier diff is in `<run>/before.diff`;
-   untracked paths have no saved content, and in a repository without a
-   commit `before.diff` stays empty), and summarize the diff.
+```
+~/.claude/skills/app-external-agents/scripts/ext-run run --cli <name> --run-dir <run> --level edit
+```
+
+The first attempt's limit is 90 minutes and the resume's 30 minutes.
+Set others only when the user asks:
+
+```
+~/.claude/skills/app-external-agents/scripts/ext-run run --cli <name> --run-dir <run> --limit <dur> --resume-limit <dur>
+```
+
+A model and a reasoning effort are passed only when the user names a
+value; otherwise Codex and agy use their own configuration. Codex takes
+both:
+
+```
+~/.claude/skills/app-external-agents/scripts/ext-run run --cli codex --run-dir <run> --model <id> --effort <value>
+```
+
+agy takes a model only. Its model ids carry the effort
+(`gemini-3.1-pro-high`, `gemini-3.8-flash-low`; `agy models` lists them),
+and the runner refuses `--effort` for agy:
+
+```
+~/.claude/skills/app-external-agents/scripts/ext-run run --cli agy --run-dir <run> --model <id>
+```
+
+An OpenCode alias or full model id names the model itself, so the runner
+refuses `--model` with it; an effort the user names is passed as
+OpenCode's `--variant`:
+
+```
+~/.claude/skills/app-external-agents/scripts/ext-run run --cli qwen --run-dir <run> --effort <value>
+```
+
+Options combine on one line, within the refusals below; the lines above
+show each on its own.
+
+Outside directories. They must be absolute directories: a single file
+cannot be granted, so name the directory that holds it, or copy the file
+into a bundle. OpenCode is granted them for reading at the read level
+only; an edit-level OpenCode run given one is refused before it starts.
+For OpenCode the runner also refuses the root and every directory
+directly under it (`/tmp`, `/etc`, `/home`), `/var/tmp`, the home
+directory or an ancestor of it, a canonical name that holds `*` or `?`
+(pattern characters in OpenCode's rules), and any directory that
+is, lies inside or contains a protected directory. Protected are the
+settings and credential directories of the three CLIs (`~/.codex`,
+`~/.gemini`, `~/.config/opencode`, `~/.local/share/opencode`,
+`~/.opencode`), the Claude config directories (`~/.claude` and its
+numbered copies such as `~/.claude2`), and the owner's key stores
+(`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.secrets`, `~/.config/gh`). Where
+`CODEX_HOME`, `XDG_CONFIG_HOME` or `XDG_DATA_HOME` moves one of them, the
+moved location is protected as well as the default one, and so is
+`GH_CONFIG_DIR` when it is set. For agy the runner names in its prompt
+copy, by their real paths, those of the directories that its
+file-reading tool cannot open, to be read with shell commands. Codex
+reads anywhere and ignores them. Never
+pass a protected directory as `--allow-dir` to any CLI: the runner
+refuses one for OpenCode only, and for agy and Codex nothing but the
+session enforces it. Material that lives inside a protected directory, a
+skill under `~/.claude/skills` for example, goes through a bundle.
+
+The project boundary. An OpenCode run is also refused when its project
+boundary (the top of the git work tree that holds the working directory,
+or the directory itself outside a work tree) is the home directory or an
+ancestor of it, or is, contains or lies inside a protected directory,
+because the credential directories would then be part of the project.
+The refusal names the remedy: a bundle. Codex and agy are not refused;
+they already read anywhere, on the owner's own subscriptions.
+
+Start OpenCode runs a few seconds apart. Two started within a second once
+failed with `database is locked`; whether the gap prevents it is not
+established.
+
+agy's prompt copy. For agy the runner writes `<run>/agy-prompt.md` once:
+`prompt.md` followed by the shell commands agy's settings allow, the
+directories where its file-reading tool works, and the instruction to use
+`cat`, `head` or `grep` for every other path. In a headless run agy ends
+the whole run with no answer at the first refused command or file read,
+so it has to know the lists up front. The runner reads agy's settings
+and never changes them.
+
+Stopping a run. Send the runner the termination signal (TERM); its
+process id is in `<run>/<p>.lock/pid` while it runs. An interrupt (INT)
+is ignored by a runner that a shell started in the background, because
+such a command starts with the interrupt ignored. The runner passes the
+signal to the CLI's process group and records the outcome. A signal that
+arrives before or while the CLI runs ends the run as `cancelled`. One
+that arrives after the CLI has exited leaves that attempt's verdict
+standing: a run
+whose CLI answered ends `answered` and keeps its answer, and a run whose
+attempt failed ends under that failure; a resume that would have
+followed is not started, and the run then ends `cancelled`. A kill signal
+or a power loss cannot be caught: the status file then still says
+`running`, and the report says that the run did not finish.
+
+### 7. When a run ends
+
+Read the summary line, the only line the runner prints on standard
+output:
+
+```
+<p>: <outcome> (<message>); status: <path of the status file, or none>
+```
+
+The message and its parentheses are left out when there is nothing to
+say, and the line begins with `ext-run` when the CLI name was not valid.
+Open the status file only when the line names one, and report from it
+(see "Report"). When the line ends `status: none`, no status file on disk
+is this invocation's record (see "Outcomes"). The runner's other
+messages are on standard error.
+
+Files in the run directory, under the prefix `<p>`:
+
+- `<p>.status`: the status object, one JSON object; `<p>.status.tmp` is
+  the temporary name it is written through.
+- `<p>.out`: the final answer, present when an attempt answered;
+  `<p>.out.tmp` is the temporary name it is published through.
+- `<p>.<phase><n>.stdout`, `.stderr`, `.time` and `.exit`: one attempt's
+  raw output (for agy and OpenCode the standard output is the JSON
+  trace), wall seconds and exit status. The phase is `first`, `resume`
+  or `continue`, and `<n>` counts from 1 within a phase, so `qwen.first1`
+  and `qwen.resume1`. No attempt file is overwritten.
+- `<p>.<phase><n>.earlier.txt` (OpenCode): the text that attempt wrote
+  in steps before its final one, absent when there is none.
+- `<p>.<phase><n>.config.json` (OpenCode): the config injected into that
+  attempt.
+- `codex.probe.err`: the standard error of the last Codex sandbox probe.
+- `agy-prompt.md`: agy's prompt copy.
+- `before.txt` and `before.diff`: the before snapshot, written by an
+  edit-level run and by every agy run, in a git work tree.
+- `<p>.lock/`: the claim on the prefix, present while the runner runs.
+
+The claim. Each invocation claims its prefix in the run directory before
+it writes anything: it makes `<p>.lock` and then creates `<p>.lock/pid`
+exclusively, and the invocation that creates the pid file holds the
+claim. A second invocation with the same prefix, a second continue of one
+run included, is refused. A run also refuses to start when files of its
+prefix already exist.
+
+## Outcomes
+
+Every invocation ends in exactly one outcome. The summary line names it,
+the runner exits with its number, and the status file records it with
+the phase in which it was decided (`preflight`, `first`, `resume` or
+`continue`). Two outcomes carry an answer: `answered`, from the first
+attempt (or a continue of it), and `answered_after_resume`, from the one
+resume that follows an attempt which reached its limit or ended empty
+(or from a continue of that resume). Five end a run in which the CLI ran
+and gave no answer: `limit`, the time limit was reached without an
+answer (in the resume, when one ran); `empty`, the CLI ended normally
+with no answer (in the resume, when one ran); `denied`, agy ended
+because an action was
+denied; `usage_limit`, the provider refused further work until a stated
+time; `cli_failure`, the CLI exited with an error not named here. Three
+concern the trace and the session: `trace_unreadable`, the CLI's output
+could not be parsed; `no_handle`, a resume or a continue was due and the
+attempt that created the session left no session handle;
+`handle_conflict`, that attempt's files held more than one handle, or a
+later attempt reported another handle than the one it was passed. Six
+are decided around the CLI: `prerequisite_failed`, something the runner
+needs is missing or failed (a helper program, bash 5, its settings file,
+the Codex sandbox probe, git); `unsupported_version`, the OpenCode
+version guard refused; `cancelled`, a signal stopped the runner before or
+while the CLI ran, or before a resume; `runner_failure`, the runner could
+not write one of its own files or could not confirm that the CLI's
+processes had ended, or exited in a way nobody planned; `usage_error`,
+bad input (an argument, a refused outside directory or project boundary,
+a claimed prefix, files of the prefix that already exist, a saved record
+that a continue cannot continue, a prompt changed before a start-again);
+`missing_cli`, the CLI is not on PATH. The runner prints the same list
+with `outcomes`:
+
+```
+~/.claude/skills/app-external-agents/scripts/ext-run outcomes
+```
+
+| Outcome | Exit | What to report |
+|---|---|---|
+| `answered` | 0 | the answer from `<p>.out`, with the report's first line |
+| `answered_after_resume` | 0 | the answer, that it came from the resume, the resume's reason (`resume_reason`: `limit` or `empty`) and both wall times |
+| `limit` | 10 | that the limit was reached without an answer (the message names which limit), the attempts' wall times, and any earlier text |
+| `empty` | 11 | that the CLI ended without an answer, also after the resume, and any earlier text |
+| `denied` | 12 | the denied actions from `denied`, and the last lines of the attempt's standard error verbatim, including where agy says an allow-rule goes; for a refused file read, the rule shape agy's message gives. The skill never adds the rule: the owner decides, and a bundle is the way that needs none |
+| `usage_limit` | 13 | the message, the reset time (`reset_at`) and the continue command. `continue` waits for the owner's word: the runner never waits for a reset, and the session continues only when the owner says so. Before continuing an edit-level run whose status says `fresh_start: true`, compare the working tree with the before snapshot |
+| `cli_failure` | 14 | the message, which carries the CLI's own error, and the last lines of the attempt's standard error verbatim. After an OpenCode start-up failure nothing is started again by itself: a read-level run may be started again under a new prefix (the full model id in place of the alias, or a new run directory); before an edit-level run is started again, compare the working tree with the before snapshot. A missing or rejected key ends here too: point the user to "Prerequisite" |
+| `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
+| `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
+| `handle_conflict` | 17 | the handles the message names; nothing further is resumed |
+| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, the settings file, git that did not answer or cannot be run, or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
+| `unsupported_version` | 19 | the OpenCode version found and the tested one |
+| `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
+| `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below |
+| `usage_error` | 64 | the fault the message names. A refused outside directory or project boundary needs a bundle; a claimed prefix comes with the runner's verdict on the claim's owner and, when that owner is not running or unknown, the command that removes the claim, which the owner decides on |
+| `missing_cli` | 127 | which CLI is not on PATH |
+
+A summary line that ends `status: none`. A `runner_failure` that no
+status file records, and every outcome of an invocation that ended
+before it owned a status file, end that way: then the report comes from
+the summary line and standard error, and no status file on disk is this
+invocation's record. Such a `runner_failure` puts the status object, as
+far as it is known, on the last line of standard error as one line of
+JSON; a status file of this prefix that still says `running` was left by
+this invocation and is not its record either. A `continue` that ended in
+its checks of the saved record or in its preflight, before its attempt
+(a refused record, a failed or cancelled preflight), writes nothing: the
+saved status stays as it was and still says `usage_limit`,
+so the run can still be continued. When such a continue ends
+`runner_failure`, its JSON line on standard error carries the earlier
+run's fields under outcome `runner_failure` and phase `preflight`; that
+line describes this invocation, not the saved record.
+
+The continue. It repeats the phase that the usage limit cut off. A cut
+off first attempt is continued in the same session at its original
+level, with the continue text and the full first-attempt limit, and may
+be followed by the one resume. A cut off resume is continued at the read
+level with the same write-now text and the resume limit, and no further
+resume. When the limit refused the first attempt before its first model
+turn (`fresh_start` is true), there is no session to continue, so the
+continue starts the first attempt again with the original prompt, which
+must not have changed since (`prompt_sha256`). A continue takes the
+working directory, level, limits, outside directories, model and effort
+from the status file, so it can be started from anywhere:
+
+```
+~/.claude/skills/app-external-agents/scripts/ext-run continue --cli <name> --run-dir <run>
+```
+
+A continue that ends in a usage limit again can be continued again.
+
+## Report
+
+One section per run, under the CLI name, or for OpenCode under the alias
+or the full model id. The first line of each section is this template,
+every field filled in from the status file, on every run including
+failed ones; a value the status file does not hold is written `unknown`.
+A section without it is incomplete:
+
+```
+Codex: <model>, effort <effort>. <tokens> tokens, <wall> s. Session <handle> (ext-run continue --cli codex --run-dir <run>).
+agy: <model>. <total> tokens (<input> in, <output> out, <thinking> thinking), <wall> s, <turns> turn(s). Conversation <handle> (ext-run continue --cli agy --run-dir <run>).
+<name>: <model> via opencode <version>. <total> tokens (<input> in, <output> out, <reasoning> reasoning, <cached> cached), $<cost>, <wall> s, <steps> step(s). Session <handle> (ext-run continue --cli <name> --run-dir <run>).
+```
+
+The continue command stands in the parentheses in place of the CLI's
+bare command, which would run without the runner's follow-up texts,
+limits, classification and status file; it is written only when the
+outcome is `usage_limit`, the one outcome a continue accepts, and
+otherwise left out with its parentheses.
+
+| Field | Codex | agy | OpenCode |
+|---|---|---|---|
+| model | `reported.model`; else `requested.model` followed by "(requested, not reported)" | `reported.model`, which agy reports only when `--model` was passed; else `requested.model` followed by "(requested, not reported)"; without `--model`, `configured_model` followed by "(configured default, not reported)" | `oc_model` followed by "(requested, not reported)" |
+| effort | `reported.effort`; else `requested.effort` followed by "(requested, not reported)" | none: the model id carries it | `requested.effort` as "variant <value>", only when it was named |
+| tokens | `tokens.reported`, one value per attempt as Codex printed it, never added up, because whether Codex counts across a resume is not established | `tokens`: `total`, `input`, `output`, `thinking` and `turns`, from the last result event (agy reports a conversation's running total) | `tokens`: `total`, `input`, `output`, `reasoning`, `cached`, `cost` and `steps`, summed over the attempts; the three aliases always report cost 0, written `$0 (plan)` |
+| wall | `attempts[].wall`, one value per attempt with its phase when there is more than one | the same | the same |
+| handle | `handle` | the same | the same |
+| version | none | none | `versions.preflight`, followed by "untested" when `version_untested` is true |
+
+After the first line, as they apply:
+
+- the outcome and its message (`outcome`, `message`), as the
+  "Outcomes" table says;
+- when a resume ran, its reason (`resume_reason`) and both wall times;
+- an OpenCode version other than the tested one: the versions in
+  `versions` (`preflight` and `later`) and that it is untested;
+- earlier text, per attempt (`attempts[].earlier_text`, a file in the
+  run directory, and `earlier_text_bytes`): say that it exists and where.
+  Read it before relaying the answer, because a model may have written
+  findings in a step before its final one;
+- denied calls, verbatim from `denied` (the attempt, the tool, its input
+  and the error), and that the edit level or an outside directory is
+  needed if the task required them;
+- skipped trace lines (`attempts[].skipped_lines` above 0): lines of the
+  trace that did not begin with `{`, such as a warning, which the runner
+  skipped;
+- for agy and for edit-level runs, in a git repository: show
+  `git status --short -uall` and compare it with that run's
+  `<run>/before.txt`. Mark which entries are new, flag every path present
+  in both as possibly touched by the agent and mixed with earlier
+  changes (for tracked paths the earlier diff is in `<run>/before.diff`;
+  untracked paths have no saved content, and in a repository without a
+  commit `before.diff` stays empty), and summarize the diff. An unchanged
+  status does not show that nothing was written: a change to a file that
+  was already changed or untracked, to an ignored file, or outside the
+  repository does not show in it. When the status message says there was
+  no git repository, say that there is no snapshot;
+- paths into a bundle, mapped back to the originals.
+
+When more than one answered, compare them all: where they agree, where
+they differ, and your own position on each point. List every decision a
+reviewer would reopen, with how many reviewers reopened it and your own
+position after reading the code or document; put each one to the owner,
+and dismiss none because it had been decided. Read the code before
+agreeing with a claim about it, because an answer from another model is a
+claim, not evidence, and check a reviewer's statement about evidence
+against the evidence before repeating it.
+
+## Platform
+
+The runner and every command here are bash. The runner needs bash 5 or
+later (its clock is `EPOCHREALTIME`) and `jq`, `timeout` (with `-k`),
+`setsid`, `realpath`, `ps` and `sha256sum` on PATH; when bash is older or
+a program is missing, it ends `prerequisite_failed` and names what is
+missing. `timeout` and `realpath` may be GNU's or the Rust coreutils
+(uutils). git is asked for OpenCode's project boundary and the before
+snapshot; a git that cannot be run, or that does not answer within the
+preflight limit of one minute, is `prerequisite_failed` as well. The
+runner was built and tested on Linux. macOS ships bash 3.2 and no
+`setsid`, so it needs bash 5, coreutils and util-linux installed. On
+Windows the runner would run in Git Bash, where the `timeout` on PATH
+must be Git Bash's copy, not `C:\Windows\System32\timeout.exe`, which is
+a different program. Neither macOS nor Git Bash on Windows was checked.
+The two OpenCode agent files list POSIX commands (`ls`, `cat`, `grep`,
+...), so on Windows OpenCode's bash tool has to run Git Bash; set
+`OPENCODE_GIT_BASH_PATH` when OpenCode does not find it.
 
 ## Prerequisite
 
-Codex runs model commands in a platform sandbox, and step 5 checks it
-with `timeout 1m codex sandbox true` before each Codex run. Exit 127
-means Codex itself is missing and is reported as such. On any other
-non-zero exit, Codex is not started, the user is pointed to this
-section, and the probe's stderr from `<run>/probe.err` is quoted with
-it. What the sandbox needs:
+Codex runs model commands in a platform sandbox. Before a Codex run
+starts, and before a continue of one, the runner probes it (Codex's
+`sandbox` subcommand, running `true`) under the preflight limit. A
+missing Codex is found by the runner's own lookup on PATH and ends
+`missing_cli`; it is never read off the probe's exit status. When the
+probe fails, Codex is not started and the run ends `prerequisite_failed`
+with the probe's exit status and last line; its output is in
+`<run>/codex.probe.err`. Point the user to this section and quote that
+file. What the sandbox needs:
 
 - macOS: nothing; Codex uses the built-in Seatbelt framework.
 - Windows, native: Codex uses the Windows sandbox. Its preferred
@@ -287,12 +634,13 @@ it. What the sandbox needs:
   installed into `/etc/apparmor.d` and loaded, as the Codex sandbox
   documentation describes.
 
-OpenCode needs no sandbox and no probe; a missing binary is exit 127 from
-the run command. The three aliases need two subscriptions, each entered
-once with `opencode auth login`: the Alibaba Model Studio Token Plan
-(provider "Alibaba Token Plan", key `ALIBABA_TOKEN_PLAN_API_KEY`) for
-`deepseek` and `qwen`, and a Kimi membership (provider "Kimi For Coding
-(kimi.ai)", key `KIMI_API_KEY`) on the lowest tier whose benefits list
-the 1M-context `k3` for `kimi`. A run without its key fails with an
-`error` event; report it and point the user to this section. Never
-enter, read or print a key.
+OpenCode needs no sandbox; the runner checks its version instead and
+refuses a major version other than the tested one
+(`unsupported_version`). The three aliases need two subscriptions, each
+entered once with `opencode auth login`: the Alibaba Model Studio Token
+Plan (provider "Alibaba Token Plan", key `ALIBABA_TOKEN_PLAN_API_KEY`)
+for `deepseek` and `qwen`, and a Kimi membership (provider "Kimi For
+Coding (kimi.ai)", key `KIMI_API_KEY`) on the lowest tier whose benefits
+list the 1M-context `k3` for `kimi`. A run without its key ends
+`cli_failure` with OpenCode's own error; report it and point the user to
+this section. Never enter, read or print a key.
