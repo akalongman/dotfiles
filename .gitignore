@@ -180,6 +180,10 @@ __pycache__/
 .config/systemd/user/*
 !.config/systemd/user/tmux-reap.service
 !.config/systemd/user/tmux-reap.timer
+# fontconfig: only the user rules in conf.d (reject rules, scan-time fixes).
+!.config/fontconfig
+.config/fontconfig/*
+!.config/fontconfig/conf.d
 
 # htop writes a temp file next to htoprc on exit; never track it.
 .config/htop/*.tmp.*
