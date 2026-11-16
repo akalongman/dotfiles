@@ -93,7 +93,7 @@ clean_env() { # drops what could point git or the runner at the owner's setup
         GIT_CEILING_DIRECTORIES XDG_CONFIG_HOME XDG_DATA_HOME CODEX_HOME OPENCODE_CONFIG_CONTENT \
         OPENCODE_DISABLE_CLAUDE_CODE_PROMPT OPENCODE_DISABLE_CLAUDE_CODE_SKILLS \
         EXT_RUN_GRACE EXT_RUN_KILL_WAIT EXT_RUN_PREFLIGHT_LIMIT EXT_RUN_POLL EXT_RUN_START_WAIT \
-        EXT_PATH EXT_CWD PRE_LIMIT
+        EXT_PATH EXT_CWD EXT_RUNNER PRE_LIMIT
     if ! vars="$(git rev-parse --local-env-vars)"; then
         printf 'ext-run.test: git rev-parse --local-env-vars failed\n' >&2
         exit 2
@@ -265,7 +265,7 @@ check_fakes() { # stops the suite unless the three names resolve to the fakes on
 }
 
 new_case() { # name
-    unset EXT_PATH EXT_CWD PRE_LIMIT
+    unset EXT_PATH EXT_CWD EXT_RUNNER PRE_LIMIT
     EXT_VARS=()
     BGN=0 BG=''
     BG_PID=() BG_PREFIX=()
@@ -373,12 +373,12 @@ ext_env() { # path: the runner's environment, exported in the current (sub)shell
     for kv in "${EXT_VARS[@]}"; do export "${kv?}"; done
 }
 
-ext() { # args...: runs the case's runner in the foreground; sets rc, OUT, ERR and PREFIX
+ext() { # args...: runs the case's runner (EXT_RUNNER, as a path from EXT_CWD, when set) in the foreground; sets rc, OUT, ERR and PREFIX
     local path="${EXT_PATH:-$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels}"
     check_path "$path"
     ext_prefix "$@"
     OUT="$({ cd "${EXT_CWD:-$WORK}" && ext_env "$path" &&
-        exec "$BIN_ROOT/utils/timeout" -k 2s 60s "$CASE/skill/scripts/ext-run" "$@"; } \
+        exec "$BIN_ROOT/utils/timeout" -k 2s 60s "${EXT_RUNNER:-$CASE/skill/scripts/ext-run}" "$@"; } \
         < /dev/null 2> "$CASE/ext.err")"
     rc=$?
     ERR="$(< "$CASE/ext.err")"
@@ -704,15 +704,16 @@ fi
 # run has its own root and sentinel log, and its teardown turns a reached sentinel into status 3.
 
 # clean_env drops the overrides a caller could have left in the environment
-# shellcheck disable=SC2034  # the three are read by clean_env's caller check below
+# shellcheck disable=SC2034  # the four are read by clean_env's caller check below
 (
     EXT_PATH=/x
     EXT_CWD=/y
+    EXT_RUNNER=/z
     PRE_LIMIT=9
     clean_env
-    [ -z "${EXT_PATH:-}${EXT_CWD:-}${PRE_LIMIT:-}" ]
+    [ -z "${EXT_PATH:-}${EXT_CWD:-}${EXT_RUNNER:-}${PRE_LIMIT:-}" ]
 )
-assert_eq "$?" 0 "clean_env unsets EXT_PATH, EXT_CWD and PRE_LIMIT"
+assert_eq "$?" 0 "clean_env unsets EXT_PATH, EXT_CWD, EXT_RUNNER and PRE_LIMIT"
 
 # ext refuses a PATH on which a CLI name resolves outside the fakes
 new_case path-guard
@@ -1809,6 +1810,396 @@ assert_eq "$(st .resume_reason)" empty "oc-ask-refused-resume: resume_reason"
 assert_eq "$(st '.denied | length')" 1 "oc-ask-refused-resume: the refused call is recorded"
 assert_eq "$(st '.denied[0].attempt')" first1 "oc-ask-refused-resume: in the first attempt"
 assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" ONLY "oc-ask-refused-resume: the answer"
+
+# ---------------------------------------------------------------------------
+# The usage limit and the continue action.
+
+ul_msg() { # time: Codex's usage-limit error line as saved, stating that time
+    # shellcheck disable=SC1112  # the typographic apostrophe of Codex's message
+    printf '%s\n' "ERROR: You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at $1."
+}
+
+ul_work() { # uuid time: a Codex standard error that a usage limit ended after work
+    local l
+    l="$(ul_msg "$2")"
+    codex_err "$1" "$l" "$l" 'tokens used' '131,586'
+}
+
+ul_door() { # uuid time: the same when the limit refused the run before its first model turn
+    local l
+    l="$(ul_msg "$2")"
+    codex_err "$1" "$l" "$l"
+}
+
+rewrite_status() { # prefix filter: applies the jq filter to the case's saved status of that prefix
+    local f="$RUN/$1.status" t
+    if t="$(jq -c "$2" "$f")" && [ -n "$t" ] && printf '%s\n' "$t" > "$f"; then return 0; fi
+    _fail "rewrite_status: cannot apply $2 to $f"
+    return 1
+}
+
+fake_ul() { # prefix [filter]: the saved status of a run that answered, made the record a usage limit after work leaves
+    rewrite_status "$1" '.outcome = "usage_limit" | .phase = "first" | .cut_off_phase = "first" | .fresh_start = false
+        | .answer = null | .reset_at = "2:40 PM" | .attempts[-1].verdict = "usage_limit" | .attempts[-1].rule = 5
+        | '"${2:-.}" && rm -f "$RUN/$1.out"
+}
+
+ul_first_run() { # the first row of ul-first: a Codex run at the edit level that a usage limit cut off after work
+    play codex 1 --exit 1 --stderr "$(ul_work U1 '2:40 PM')"
+    ext run --cli codex --run-dir "$RUN" --level edit --limit 40s --resume-limit 7s --model m1
+    keep "$RUN/codex.first1.stderr"
+}
+
+new_case ul-first
+ul_first_run
+assert_eq "$rc" 13 "ul-first: rc"
+assert_eq "$(st .cut_off_phase)" first "ul-first: cut_off_phase"
+assert_eq "$(st .reset_at)" "2:40 PM" "ul-first: reset_at"
+assert_eq "$(st .fresh_start)" false "ul-first: fresh_start"
+assert_eq "$(st .handle)" U1 "ul-first: handle"
+assert_eq "$(ncalls codex)" 1 "ul-first: one call"
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+EXT_CWD="$CASE" ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "ul-first continue: rc"
+assert_eq "$(st .outcome)" answered "ul-first continue: outcome"
+assert_eq "$(st .phase)" continue "ul-first continue: phase"
+assert_eq "$(argv codex 2)" \
+    '["exec","resume","U1","--skip-git-repo-check","-m","m1","-c","sandbox_mode=\"workspace-write\"","--codex-x","-"]' \
+    "ul-first continue: argv, the same session at the recorded level and model"
+assert_eq "$(callf codex 2 stdin)" "$CONTINUE_TEXT" "ul-first continue: the continue text"
+assert_eq "$(callf codex 2 cwd)" "$WORK" "ul-first continue: the recorded directory, not the caller's"
+assert_contains "$(callf codex 2 parent)" ' -k 1s 40s ' "ul-first continue: the first-attempt limit"
+assert_file "$RUN/codex.continue1.stdout" "ul-first continue: codex.continue1.stdout"
+unchanged "$RUN/codex.first1.stderr" "ul-first continue"
+assert_eq "$(st .limit)" 40s "ul-first continue: limit"
+assert_eq "$(st .resume_limit)" 7s "ul-first continue: resume_limit"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" DONE "ul-first continue: the answer"
+
+new_case ul-door
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 13 "ul-door: rc"
+assert_eq "$(st .fresh_start)" true "ul-door: fresh_start"
+assert_eq "$(st .cut_off_phase)" first "ul-door: cut_off_phase"
+assert_eq "$(st .reset_at)" "6:58 PM" "ul-door: reset_at"
+play codex 2 --stdout DONE --stderr "$(codex_err U2)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "ul-door continue: rc"
+assert_eq "$(st .outcome)" answered "ul-door continue: outcome"
+assert_eq "$(argv codex 2)" '["exec","--skip-git-repo-check","-s","workspace-write","--codex-x","-"]' \
+    "ul-door continue: argv, the first-attempt form"
+assert_eq "$(callf codex 2 stdin)" PROMPT "ul-door continue: the original prompt"
+assert_eq "$(st .handle)" U2 "ul-door continue: the new session's handle"
+assert_eq "$(st .handle_source)" continue1 "ul-door continue: handle_source"
+assert_eq "$(st '.attempts[1].fresh')" true "ul-door continue: the attempt started afresh"
+assert_eq "$(st '.attempts[0].fresh')" false "ul-door continue: the first attempt did not"
+assert_eq "$(st .fresh_start)" false "ul-door continue: fresh_start"
+assert_file "$RUN/codex.continue1.stdout" "ul-door continue: codex.continue1.stdout"
+
+new_case ul-door-twice
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+play codex 2 --exit 1 --stderr "$(ul_door U2 '6:58 PM')"
+play codex 3 --stdout OK --stderr "$(codex_err U3)"
+ext run --cli codex --run-dir "$RUN"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "ul-door-twice: rc after the first continue"
+assert_eq "$(st .fresh_start)" true "ul-door-twice: fresh_start after the first continue"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$(argv codex 3)" '["exec","--skip-git-repo-check","-s","read-only","--codex-x","-"]' \
+    "ul-door-twice: argv, the first-attempt form again"
+assert_eq "$rc" 0 "ul-door-twice: rc"
+assert_eq "$(st .handle)" U3 "ul-door-twice: handle"
+assert_eq "$(st .handle_source)" continue2 "ul-door-twice: handle_source"
+assert_file "$RUN/codex.continue2.stdout" "ul-door-twice: codex.continue2.stdout"
+
+# A session that had worked is not started again when a later attempt of it
+# is refused at the door.
+new_case continue-at-the-door
+ul_first_run
+play codex 2 --exit 1 --stderr "$(ul_door U1 '7:10 PM')"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "continue-at-the-door: rc"
+assert_eq "$(st .cut_off_phase)" first "continue-at-the-door: cut_off_phase"
+assert_eq "$(st .fresh_start)" false "continue-at-the-door: fresh_start"
+assert_eq "$(st .reset_at)" "7:10 PM" "continue-at-the-door: reset_at"
+assert_eq "$(st .handle_source)" first1 "continue-at-the-door: handle_source"
+
+new_case ul-no-reset-time
+# shellcheck disable=SC1112  # the typographic apostrophe of Codex's message
+play codex 1 --exit 1 --stderr "$(codex_err U1 'ERROR: You’ve hit your usage limit.')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "ul-no-reset-time: rc"
+assert_eq "$(st .reset_at)" null "ul-no-reset-time: no time stated, none recorded"
+
+new_case fresh-then-empty
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+ext run --cli codex --run-dir "$RUN"
+play codex 2 --stdout '' --stderr "$(codex_err U2)"
+play codex 3 --stdout OK --stderr "$(codex_err U2)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "fresh-then-empty: rc"
+assert_eq "$(st .outcome)" answered_after_resume "fresh-then-empty: outcome"
+assert_begins "$(argv codex 3)" '["exec","resume","U2",' "fresh-then-empty: the resume gets the new handle"
+assert_eq "$(st .handle)" U2 "fresh-then-empty: handle"
+assert_file "$RUN/codex.resume1.stdout" "fresh-then-empty: codex.resume1.stdout"
+assert_eq "$(ncalls codex)" 3 "fresh-then-empty: three calls"
+
+new_case fresh-then-limit
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+ext run --cli codex --run-dir "$RUN" --limit 1s --resume-limit 20s
+play codex 2 --sleep 5 --stderr "$(codex_err U2)"
+play codex 3 --stdout LATE --stderr "$(codex_err U2)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "fresh-then-limit: rc"
+assert_eq "$(st .outcome)" answered_after_resume "fresh-then-limit: outcome"
+assert_begins "$(argv codex 3)" '["exec","resume","U2",' "fresh-then-limit: the resume gets the new handle"
+assert_eq "$(callf codex 3 stdin)" "$LIMIT_TEXT" "fresh-then-limit: the limit text"
+assert_contains "$(callf codex 2 parent)" ' -k 1s 1s ' "fresh-then-limit: the fresh attempt under the first-attempt limit"
+assert_contains "$(callf codex 3 parent)" ' -k 1s 20s ' "fresh-then-limit: the resume under the resume limit"
+
+new_case fresh-then-no-handle
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+ext run --cli codex --run-dir "$RUN"
+play codex 2 --stdout '' --stderr 'no header'
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 16 "fresh-then-no-handle: rc"
+assert_eq "$(st .outcome)" no_handle "fresh-then-no-handle: outcome"
+assert_eq "$(ncalls codex)" 2 "fresh-then-no-handle: the discarded U1 is not used"
+
+new_case ul-resume-twice
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --exit 1 --stderr "$(ul_work U1 '2:40 PM')"
+ext run --cli codex --run-dir "$RUN" --level edit --limit 40s --resume-limit 7s
+assert_eq "$rc" 13 "ul-resume-twice: rc"
+assert_eq "$(st .cut_off_phase)" resume "ul-resume-twice: cut_off_phase"
+play codex 3 --exit 1 --stderr "$(ul_door U1 '3:00 PM')"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "ul-resume-twice: rc after the first continue"
+assert_eq "$(st .cut_off_phase)" resume "ul-resume-twice: cut_off_phase after the first continue"
+assert_eq "$(st .fresh_start)" false "ul-resume-twice: only a first attempt can start again"
+assert_eq "$(st .reset_at)" "3:00 PM" "ul-resume-twice: the new reset time"
+assert_contains "$(argv codex 3)" 'sandbox_mode=\"read-only\"' "ul-resume-twice: the first continue at the read level"
+assert_eq "$(callf codex 3 stdin)" "$EMPTY_TEXT $AFTER_EDIT" "ul-resume-twice: the resume's text again"
+assert_contains "$(callf codex 3 parent)" ' -k 1s 7s ' "ul-resume-twice: under the resume limit"
+play codex 4 --stdout OK --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "ul-resume-twice: rc after the second continue"
+assert_eq "$(st .outcome)" answered_after_resume "ul-resume-twice: outcome"
+assert_contains "$(argv codex 4)" 'sandbox_mode=\"read-only\"' "ul-resume-twice: the second continue at the read level"
+assert_file "$RUN/codex.continue2.stdout" "ul-resume-twice: codex.continue2.stdout"
+assert_eq "$(ncalls codex)" 4 "ul-resume-twice: four calls"
+
+new_case continue-then-resume
+play codex 1 --exit 1 --stderr "$(ul_work U1 '2:40 PM')"
+play codex 2 --stdout '' --stderr "$(codex_err U1)"
+play codex 3 --stdout OK --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-then-resume: rc"
+assert_eq "$(st .outcome)" answered_after_resume "continue-then-resume: outcome"
+assert_eq "$(ncalls codex)" 3 "continue-then-resume: three calls"
+assert_file "$RUN/codex.resume1.stdout" "continue-then-resume: codex.resume1.stdout"
+assert_eq "$(st .resume_used)" true "continue-then-resume: resume_used"
+
+new_case continue-oc
+play qwen 1 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN"
+mkdir "$CASE/out"
+fake_ul qwen ".oc_model=\"zz/qq\" | .allow_dirs=[\"$CASE/out\"]"
+play zz-qq 1 --stdout "$(t_oc_only S)"
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-oc: rc"
+assert_begins "$(argv zz-qq 1)" '["run","--pure","-s","S","--agent","ext-read","--model","zz/qq"' \
+    "continue-oc: argv, the recorded model and not the alias resolved again"
+assert_eq "$(argv zz-qq 1 | jq -r '.[-1]')" "$CONTINUE_TEXT" "continue-oc: the continue text last"
+assert_eq "$(callf zz-qq 1 env.json | jq -c '[.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT, .OPENCODE_DISABLE_CLAUDE_CODE_SKILLS]')" \
+    '["1","1"]' "continue-oc: the two switches"
+assert_file "$RUN/qwen.continue1.stdout" "continue-oc: qwen.continue1.stdout"
+
+new_case continue-answered
+answering codex 1
+ext run --cli codex --run-dir "$RUN"
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-answered: rc"
+assert_contains "$ERR" "this one is answered" "continue-answered: message"
+unchanged "$RUN/codex.status" "continue-answered"
+assert_ends "$OUT" "status: none" "continue-answered: no status named"
+
+new_case continue-other-outcomes
+ext outcomes
+others=()
+while IFS=$'\t' read -r o _; do
+    case "$o" in usage_limit | usage_error) ;; *) others+=("$o") ;; esac
+done <<< "$OUT"
+assert_eq "${#others[@]}" 14 "continue-other-outcomes: fourteen other outcomes"
+for o in "${others[@]}"; do
+    new_case "continue-other-$o"
+    printf '{"outcome":"%s"}\n' "$o" > "$RUN/codex.status"
+    ext continue --cli codex --run-dir "$RUN"
+    assert_eq "$rc" 64 "continue-other-outcomes $o: rc"
+    assert_contains "$ERR" "this one is $o" "continue-other-outcomes $o: message"
+done
+
+new_case continue-running
+echo '{"outcome":"running"}' > "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-running: rc"
+assert_contains "$ERR" "this one is running" "continue-running: message"
+
+new_case continue-stale-lock
+echo '{"outcome":"running"}' > "$RUN/codex.status"
+mkdir "$RUN/codex.lock"
+dead_pid > "$RUN/codex.lock/pid"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-stale-lock: rc"
+assert_contains "$ERR" "rm -r --" "continue-stale-lock: the removal command"
+assert_contains "$ERR" "is not running" "continue-stale-lock: the owner is gone"
+
+new_case continue-no-status
+rm "$RUN/prompt.md"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-no-status: rc"
+assert_contains "$ERR" "no status file" "continue-no-status: message"
+
+new_case continue-thin-status
+echo '{"outcome":"usage_limit"}' > "$RUN/codex.status"
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-thin-status: rc"
+assert_contains "$ERR" "incomplete: name" "continue-thin-status: the first missing field named"
+unchanged "$RUN/codex.status" "continue-thin-status"
+assert_eq "$(ncalls codex)" 0 "continue-thin-status: no call"
+
+new_case continue-other-name
+play a-b-c 1 --stdout "$(t_oc_only S)"
+ext run --cli a/b-c --run-dir "$RUN"
+fake_ul a-b-c
+keep "$RUN/a-b-c.status"
+ext continue --cli a-b/c --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-other-name: rc"
+assert_contains "$ERR" "a/b-c" "continue-other-name: the name the record was written for"
+unchanged "$RUN/a-b-c.status" "continue-other-name"
+
+new_case continue-cwd-gone
+ul_first_run
+keep "$RUN/codex.status"
+rm -rf "$WORK"
+EXT_CWD="$CASE" ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-cwd-gone: rc"
+assert_contains "$ERR" "working directory" "continue-cwd-gone: the directory named"
+assert_contains "$ERR" "does not exist" "continue-cwd-gone: the fault named"
+unchanged "$RUN/codex.status" "continue-cwd-gone"
+
+new_case continue-relative-run-dir
+ul_first_run
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+EXT_CWD="$CASE" ext continue --cli codex --run-dir run
+assert_eq "$rc" 0 "continue-relative-run-dir: rc"
+assert_file "$RUN/codex.continue1.stdout" "continue-relative-run-dir: the run directory taken from the caller's directory"
+assert_nofile "$WORK/run" "continue-relative-run-dir: and not from the recorded one"
+assert_ends "$OUT" "status: $RUN/codex.status" "continue-relative-run-dir: the absolute status path"
+
+# The runner started by a relative path from a directory that is not the
+# recorded one still finds its own files once it has changed directory.
+new_case continue-relative-runner
+play qwen 1 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN"
+fake_ul qwen
+play qwen 2 --stdout "$(t_oc_only S)"
+EXT_CWD="$CASE/skill" EXT_RUNNER=scripts/ext-run ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-relative-runner: rc"
+assert_eq "$(agent_env_is qwen 2 read-agent.json)" true "continue-relative-runner: the agent file was found"
+assert_eq "$(callf qwen 2 cwd)" "$WORK" "continue-relative-runner: in the recorded directory"
+assert_file "$RUN/qwen.continue1.stdout" "continue-relative-runner: qwen.continue1.stdout"
+
+new_case continue-foreign-prefix
+ul_first_run
+rewrite_status codex '.prefix = "agy"'
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-foreign-prefix: rc"
+assert_contains "$ERR" "does not match" "continue-foreign-prefix: message"
+unchanged "$RUN/codex.status" "continue-foreign-prefix"
+
+new_case continue-bad-nested
+ul_first_run
+rewrite_status codex '.requested = {}'
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-bad-nested: rc"
+assert_contains "$ERR" "incomplete: requested" "continue-bad-nested: the field named"
+unchanged "$RUN/codex.status" "continue-bad-nested"
+
+new_case continue-contradiction
+ul_first_run
+cp "$RUN/codex.status" "$CASE/saved.status"
+for f in '.fresh_start = true | .cut_off_phase = "resume" | .resume_reason = "empty" | .resume_used = true' \
+    '.cut_off_phase = "resume" | .resume_reason = "empty"'; do
+    cp "$CASE/saved.status" "$RUN/codex.status"
+    rewrite_status codex "$f"
+    keep "$RUN/codex.status"
+    ext continue --cli codex --run-dir "$RUN"
+    assert_eq "$rc" 64 "continue-contradiction $f: rc"
+    assert_contains "$ERR" "contradicts itself" "continue-contradiction $f: message"
+    unchanged "$RUN/codex.status" "continue-contradiction $f"
+done
+assert_eq "$(ncalls codex)" 1 "continue-contradiction: no call after the run"
+
+new_case continue-files-in-the-way
+ul_first_run
+: > "$RUN/codex.continue1.stdout"
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-files-in-the-way: rc"
+assert_contains "$ERR" "already exist" "continue-files-in-the-way: message"
+unchanged "$RUN/codex.status" "continue-files-in-the-way"
+assert_eq "$(ncalls codex)" 1 "continue-files-in-the-way: no call after the run"
+
+new_case fresh-prompt-changed
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+ext run --cli codex --run-dir "$RUN"
+echo more >> "$RUN/prompt.md"
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "fresh-prompt-changed: rc"
+assert_contains "$ERR" "prompt.md changed" "fresh-prompt-changed: message"
+unchanged "$RUN/codex.status" "fresh-prompt-changed"
+assert_eq "$(ncalls codex)" 1 "fresh-prompt-changed: no call after the run"
+
+new_case continue-extra-option
+ul_first_run
+ext continue --cli codex --run-dir "$RUN" --level read
+assert_eq "$rc" 64 "continue-extra-option: rc"
+assert_contains "$ERR" "continue takes only" "continue-extra-option: message"
+
+new_case continue-no-handle
+l="$(ul_msg '2:40 PM')"
+play codex 1 --exit 1 --stderr "$(printf '%s\n' 'no header' "$l" "$l" 'tokens used' 9)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "continue-no-handle: the run's rc"
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 16 "continue-no-handle: rc"
+assert_ends "$OUT" "status: none" "continue-no-handle: no status named"
+unchanged "$RUN/codex.status" "continue-no-handle"
+assert_eq "$(ncalls codex)" 1 "continue-no-handle: no call after the run"
+
+new_case continue-preflight-keeps
+ul_first_run
+keep "$RUN/codex.status"
+echo 1 > "$SCN/codex.sandbox.exit"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "continue-preflight-keeps: rc"
+assert_contains "$OUT" prerequisite_failed "continue-preflight-keeps: outcome"
+assert_ends "$OUT" "status: none" "continue-preflight-keeps: no status named"
+unchanged "$RUN/codex.status" "continue-preflight-keeps"
+assert_eq "$(ncalls codex)" 1 "continue-preflight-keeps: no call after the run"
+rm "$SCN/codex.sandbox.exit"
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-preflight-keeps: rc of the continue after the fix"
+assert_file "$RUN/codex.continue1.stdout" "continue-preflight-keeps: codex.continue1.stdout"
 
 # ---------------------------------------------------------------------------
 # Step 7: the end of the suite.

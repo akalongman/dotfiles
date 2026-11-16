@@ -93,7 +93,16 @@ GID=''                        # the group read from the gid file
 C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false       # the last command run_cmd ran
 A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false # the last attempt
 A_ANSWER='' A_REASON='' A_HANDLE_SEEN='' A_LIMIT=''
+A_PHASE='' A_ID=''            # the last attempt's phase and id (<phase><n>)
+A_AT_DOOR=false               # rule 5 matched in its second place: the limit refused the attempt before its first model turn
 IN_RESUME=0                   # 1 while the attempt is the resume: an answer is then answered_after_resume
+# A continue: what the saved record says it repeats.
+CUT_OFF=''                    # the phase that was cut off, first or resume
+FRESH=0                       # 1 when the continue starts the first attempt again
+RESUME_REASON=''              # the recorded resume_reason, for a continue of the resume
+RESUME_USED=''                # the recorded resume_used, true or false
+CONT_N=0                      # the number of this invocation's continue attempt
+SIZE=0 SUM=''                 # what byte_size and file_sum found
 EARLIER='' EARLIER_BYTES=null # OpenCode: the last attempt's earlier-text file and its size
 RULE='' VERDICT=''
 NOW=0 US=0 TAIL=() LAST=''
@@ -103,6 +112,15 @@ case "${BASH_SOURCE[0]}" in
     */*) SELF_DIR="${BASH_SOURCE[0]%/*}" ;;
     *) SELF_DIR=. ;;
 esac
+# An absolute physical path, taken before anything is sourced or the
+# directory changes, so that a continue still finds the settings, the agent
+# files and the follow-up texts in the recorded working directory. Empty when
+# the directory cannot be entered; check_ground then stops.
+if SELF_DIR="$(cd -P -- "$SELF_DIR" 2>/dev/null && pwd -P && printf x)"; then
+    SELF_DIR="${SELF_DIR%$'\n'x}"
+else
+    SELF_DIR=''
+fi
 
 progress_clear() { # removes the progress line, when one is drawn
     if [ "$PROGRESS_SHOWN" = 1 ]; then
@@ -500,7 +518,7 @@ parse_args() {
             *) end_as usage_error "unknown option: $opt" ;;
         esac
         if [ "$ACTION" = continue ] && [ "$opt" != --cli ] && [ "$opt" != --run-dir ]; then
-            end_as usage_error "continue accepts --cli and --run-dir only, not $opt"
+            end_as usage_error "continue takes only --cli and --run-dir, not $opt"
         fi
         if [ $# -lt 2 ] || [ -z "$2" ]; then end_as usage_error "$opt needs a value"; fi
         if [ "$opt" != --allow-dir ]; then
@@ -541,6 +559,9 @@ check_ground() {
     if [ "${BASH_VERSINFO[0]}" -lt 5 ]; then
         end_as prerequisite_failed "bash 5 or later is needed, this is bash $BASH_VERSION"
     fi
+    if [ -z "$SELF_DIR" ]; then
+        end_as prerequisite_failed "cannot enter the runner's own directory to find ext-run.conf: ${BASH_SOURCE[0]}"
+    fi
     if [ ! -f "$conf" ] || [ ! -r "$conf" ]; then
         end_as prerequisite_failed "the settings file is missing or unreadable: $conf"
     fi
@@ -580,11 +601,27 @@ check_knobs() { # the test knobs: three durations and two plain numbers of secon
 # ---------------------------------------------------------------------------
 # run: steps 3 to 7.
 
-validate_run() { # step 3, without writing
-    local prompt size
+take_run_dir() { # the run directory is a directory; RUN_DIR becomes its canonical absolute path
     [ -d "$RUN_ARG" ] || end_as usage_error "the run directory is not a directory: $RUN_ARG"
     canonical "$RUN_ARG" || end_as usage_error "cannot resolve the run directory: $RUN_ARG"
     RUN_DIR="$CANON"
+}
+
+byte_size() { # file: sets SIZE to its size in bytes; 1 when it cannot be read
+    SIZE="$(wc -c 2>/dev/null < "$1")"
+    SIZE="${SIZE//[[:space:]]/}"
+    case "$SIZE" in '' | *[!0-9]*) return 1 ;; esac
+}
+
+file_sum() { # file: sets SUM to its SHA-256; 1 when it cannot be read
+    SUM="$(sha256sum 2>/dev/null < "$1")"
+    SUM="${SUM%% *}"
+    [[ $SUM =~ ^[0-9a-f]{64}$ ]]
+}
+
+validate_run() { # step 3, without writing
+    local prompt
+    take_run_dir
     CWD="$(pwd -P && printf x)" || end_as usage_error "cannot read the working directory"
     CWD="${CWD%$'\n'x}"
     prompt="$RUN_DIR/prompt.md"
@@ -595,11 +632,9 @@ validate_run() { # step 3, without writing
     # agy and OpenCode take the prompt as one argument, and Linux refuses a
     # single argument of 131072 bytes or more. Codex reads it on standard input.
     if [ "$KIND" != codex ]; then
-        size="$(wc -c 2>/dev/null < "$prompt")"
-        size="${size//[[:space:]]/}"
-        case "$size" in '' | *[!0-9]*) end_as usage_error "cannot read the size of prompt.md: $prompt" ;; esac
-        if [ "$size" -ge 131072 ]; then
-            end_as usage_error "prompt.md is $size bytes; $KIND takes the prompt as one argument, which must be smaller than 131072 bytes"
+        byte_size "$prompt" || end_as usage_error "cannot read the size of prompt.md: $prompt"
+        if [ "$SIZE" -ge 131072 ]; then
+            end_as usage_error "prompt.md is $SIZE bytes; $KIND takes the prompt as one argument, which must be smaller than 131072 bytes"
         fi
     fi
     PROMPT_FILE="$prompt"
@@ -657,12 +692,9 @@ check_leftovers() { # step 5, under the claim
 }
 
 take_prompt_sum() { # step 7: prompt_sha256 of the file the first attempt is given
-    local s
-    s="$(sha256sum 2>/dev/null < "$PROMPT_FILE")"
-    s="${s%% *}"
-    [[ $s =~ ^[0-9a-f]{64}$ ]] || end_as runner_failure "cannot take the checksum of $PROMPT_FILE"
+    file_sum "$PROMPT_FILE" || end_as runner_failure "cannot take the checksum of $PROMPT_FILE"
     # shellcheck disable=SC2016  # a jq variable
-    st_update '.prompt_sha256 = $s' --arg s "$s"
+    st_update '.prompt_sha256 = $s' --arg s "$SUM"
 }
 
 # ---------------------------------------------------------------------------
@@ -708,7 +740,7 @@ codex_ul_line() { # line: Codex's usage-limit error (its apostrophe is typograph
     [[ $1 == ERROR:* && $1 == *'hit your usage limit'* ]]
 }
 
-codex_usage_limit() { # stderr-file: true when its end is Codex's usage-limit error; sets A_REASON to that line
+codex_usage_limit() { # stderr-file: true when its end is Codex's usage-limit error; sets A_REASON to that line and A_AT_DOOR
     local n
     tail_lines "$1"
     n="${#TAIL[@]}"
@@ -717,11 +749,11 @@ codex_usage_limit() { # stderr-file: true when its end is Codex's usage-limit er
     # Anywhere else it may be the echo of a file the run read.
     if [ "$n" -ge 3 ] && [ "${TAIL[n - 2]}" = 'tokens used' ] && [[ ${TAIL[n - 1]} =~ ^[0-9][0-9,]*$ ]] &&
         codex_ul_line "${TAIL[n - 3]}"; then
-        A_REASON="${TAIL[n - 3]//[[:cntrl:]]/ }"
+        A_REASON="${TAIL[n - 3]//[[:cntrl:]]/ }" A_AT_DOOR=false
         return 0
     fi
     if [ "$n" -ge 1 ] && codex_ul_line "${TAIL[n - 1]}"; then
-        A_REASON="${TAIL[n - 1]//[[:cntrl:]]/ }"
+        A_REASON="${TAIL[n - 1]//[[:cntrl:]]/ }" A_AT_DOOR=true
         return 0
     fi
     return 1
@@ -1004,7 +1036,7 @@ attempt_poll() { # POLL_HOOK of an attempt: redraws the progress line when stand
 
 run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; sets the A_ variables
     local base="$RUN_DIR/$PREFIX.$1$2"
-    A_LIMIT="$3"
+    A_LIMIT="$3" A_PHASE="$1" A_ID="$1$2"
     PROGRESS_TTY=0
     if [ -t 2 ]; then PROGRESS_TTY=1; fi
     now_us
@@ -1068,7 +1100,7 @@ usage_limit_seen() { # attempt-base: the attempt ended in its CLI's usage-limit 
 
 classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules that matches
     local base="$RUN_DIR/$PREFIX.$1$2" h
-    RULE='' VERDICT='' A_REASON='' A_ANSWER=''
+    RULE='' VERDICT='' A_REASON='' A_ANSWER='' A_AT_DOOR=false
     if [ "$A_SIGNALLED" = true ]; then
         RULE=1 VERDICT=cancelled
         return
@@ -1152,8 +1184,9 @@ write_earlier() { # phase n: OpenCode's text from the attempt's earlier steps to
     EARLIER="$name" EARLIER_BYTES="$b"
 }
 
-record_attempt() { # phase n: appends the classified attempt to the status object; sets A_HANDLE_SEEN
-    local base="$RUN_DIR/$PREFIX.$1$2" h count=0 tok skipped=null den='[]'
+record_attempt() { # phase n [fresh]: appends the classified attempt to the status object; sets A_HANDLE_SEEN
+    local base="$RUN_DIR/$PREFIX.$1$2" h count=0 tok skipped=null den='[]' fresh=false
+    if [ "${3:-}" = fresh ]; then fresh=true; fi
     EARLIER='' EARLIER_BYTES=null
     if [ "$KIND" != codex ]; then
         load_trace "$base"
@@ -1177,7 +1210,7 @@ record_attempt() { # phase n: appends the classified attempt to the status objec
     # conversation's running total, so the last attempt that has tokens holds
     # it; OpenCode's are summed field by field.
     # shellcheck disable=SC2016  # jq variables
-    st_update '.attempts += [{phase: $ph, n: $n, fresh: false, pgid: $pgid, exit: $exit, wall: $wall,
+    st_update '.attempts += [{phase: $ph, n: $n, fresh: $fresh, pgid: $pgid, exit: $exit, wall: $wall,
             deadline_expired: $dl, signalled: $sig, rule: $rule, verdict: $verdict,
             handle_seen: (if $hs == "" then null else $hs end), tokens: $tok,
             skipped_lines: $skipped, earlier_text: (if $et == "" then null else $et end),
@@ -1189,7 +1222,7 @@ record_attempt() { # phase n: appends the classified attempt to the status objec
                 else reduce .[] as $t ({}; reduce ($t | keys_unsorted[]) as $k (.; .[$k] += $t[$k])) end)
           end
         | .denied += ($den | map({attempt: ($ph + ($n | tostring))} + .))' \
-        --arg ph "$1" --argjson n "$2" --argjson pgid "$A_PGID" --argjson exit "$A_EXIT" \
+        --arg ph "$1" --argjson n "$2" --argjson fresh "$fresh" --argjson pgid "$A_PGID" --argjson exit "$A_EXIT" \
         --argjson wall "$A_WALL" --argjson dl "$A_DEADLINE" --argjson sig "$A_SIGNALLED" \
         --argjson rule "$RULE" --arg verdict "$VERDICT" --arg hs "$A_HANDLE_SEEN" --argjson tok "$tok" \
         --argjson skipped "$skipped" --arg et "$EARLIER" --argjson eb "$EARLIER_BYTES" --argjson den "$den"
@@ -1256,6 +1289,23 @@ do_resume() { # limit|empty: the one resume of the session, always at the read l
     record_attempt resume 1
 }
 
+record_cut_off() { # the usage-limit fields after the attempt just classified: reset_at, cut_off_phase, fresh_start
+    local at=''
+    # The time the message states: the text after "try again at " up to the final full stop.
+    case "$A_REASON" in *'try again at '*) at="${A_REASON##*try again at }" ;; esac
+    at="${at%.*}"
+    [[ $at == *[![:space:]]* ]] || at=''
+    # A continue repeats the phase that was cut off, so its own cut-off phase
+    # is the recorded one. The first attempt can be started again only when
+    # the limit refused it at the door, and only the attempt that created the
+    # session (handle_source: first1, or a continue that started afresh) is that.
+    # shellcheck disable=SC2016  # jq variables
+    st_update '.reset_at = (if $at == "" then null else $at end)
+        | .cut_off_phase = (if $ph == "continue" then .cut_off_phase else $ph end)
+        | .fresh_start = (.cut_off_phase == "first" and $door and $id == .handle_source)' \
+        --arg at "$at" --arg ph "$A_PHASE" --argjson door "$A_AT_DOOR" --arg id "$A_ID"
+}
+
 end_with_verdict() { # ends the run under the verdict of the attempt just classified
     case "$VERDICT" in
         answered)
@@ -1269,7 +1319,10 @@ end_with_verdict() { # ends the run under the verdict of the attempt just classi
             end_as limit "the time limit of $A_LIMIT was reached without an answer"
             ;;
         empty) end_as empty "$KIND ended without an answer" ;;
-        usage_limit) end_as usage_limit "${A_REASON#ERROR: }" ;;
+        usage_limit)
+            record_cut_off
+            end_as usage_limit "${A_REASON#ERROR: }"
+            ;;
         cli_failure)
             # Rule 8 is the exit status; rules 6, 7 and 10 name what the trace said.
             if [ "$RULE" = 8 ]; then end_as cli_failure "$KIND exited with status $A_EXIT${A_REASON:+: $A_REASON}"; fi
@@ -1309,6 +1362,188 @@ do_run() {
     end_with_verdict
 }
 
+# ---------------------------------------------------------------------------
+# continue: steps 3 to 8.
+
+# The checks of a saved record, in the plan's order: prints the first fault as
+# one line for the message, nothing when the record can be continued. dur is
+# the duration syntax that valid_duration checks.
+# shellcheck disable=SC2016  # jq variables
+JQ_RECORD='
+def str: type == "string";
+def bool: type == "boolean";
+def named: . == null or str;
+def shown: if str then gsub("[[:cntrl:]]"; " ") else tojson end;
+def dur: str and test("^([0-9]+(\\.[0-9]*)?|\\.[0-9]+)[smhd]?$") and (sub("[smhd]$"; "") | test("[1-9]"));
+def whole: type == "number" and . >= 1 and . == floor;
+def attempts_ok: type == "array" and length > 0
+    and all(.[]; type == "object" and (.phase | IN("first", "resume", "continue")) and (.n | whole))
+    and (map([.phase, .n]) | length == (unique | length));
+def source_ok: .handle_source as $h | .attempts as $a
+    | $h == "first1"
+      or (($h | str and test("^continue[1-9][0-9]*$"))
+          and ($a | type == "array" and any(.[]; type == "object" and .phase == "continue"
+              and .fresh == true and .n == ($h[8:] | tonumber))));
+def incomplete($f): "the status file \($file) is incomplete: \($f) is missing or ill formed";
+def contradicts($t): "the status file \($file) contradicts itself: \($t)";
+if .outcome != "usage_limit" then "only a usage limit can be continued; this one is \(.outcome | shown)"
+elif (.name | str | not) then incomplete("name")
+elif .name != $name then "the status file \($file) was written for --cli \(.name | shown), not \($name)"
+elif (.kind | str | not) then incomplete("kind")
+elif .kind != $kind then
+    "the status file \($file) does not match --cli \($name): its kind is \(.kind | shown), not \($kind)"
+elif (.prefix | str | not) then incomplete("prefix")
+elif .prefix != $prefix then
+    "the status file \($file) does not match --cli \($name): its prefix is \(.prefix | shown), not \($prefix)"
+elif (.level | IN("read", "edit") | not) then incomplete("level")
+elif (.cwd | str and startswith("/") | not) then incomplete("cwd")
+elif (.limit | dur | not) then incomplete("limit")
+elif (.resume_limit | dur | not) then incomplete("resume_limit")
+elif (.cut_off_phase | IN("first", "resume") | not) then incomplete("cut_off_phase")
+elif (.fresh_start | bool | not) then incomplete("fresh_start")
+elif (.resume_used | bool | not) then incomplete("resume_used")
+elif .cut_off_phase == "resume" and (.resume_reason | IN("limit", "empty") | not) then incomplete("resume_reason")
+elif (source_ok | not) then incomplete("handle_source")
+elif (.allow_dirs | type == "array" and all(.[]; str) | not) then incomplete("allow_dirs")
+elif (.requested | type == "object" and has("model") and has("effort") and (.model | named) and (.effort | named)
+    | not) then incomplete("requested")
+elif (.prompt_sha256 | str | not) then incomplete("prompt_sha256")
+elif $kind == "opencode" and (.oc_model | str and . != "" | not) then incomplete("oc_model")
+elif (.attempts | attempts_ok | not) then incomplete("attempts")
+elif .fresh_start and .cut_off_phase != "first" then
+    contradicts("fresh_start is true while cut_off_phase is \(.cut_off_phase)")
+elif .cut_off_phase == "resume" and (.resume_used | not) then
+    contradicts("cut_off_phase is resume while resume_used is false")
+else empty end
+'
+
+check_prompt_kept() { # sha256: the prompt a continue that starts afresh gives is still the file the first attempt was given
+    local p="$RUN_DIR/prompt.md"
+    if [ "$KIND" = agy ]; then p="$RUN_DIR/agy-prompt.md"; fi
+    if [ ! -f "$p" ] || [ ! -s "$p" ] || [ ! -r "$p" ]; then
+        end_as usage_error "$p changed since the run started: it is missing, empty or unreadable"
+    fi
+    # agy and OpenCode take the prompt as one argument; Codex reads it on standard input.
+    if [ "$KIND" != codex ]; then
+        byte_size "$p" || end_as usage_error "$p changed since the run started: its size cannot be read"
+        if [ "$SIZE" -ge 131072 ]; then
+            end_as usage_error "$p changed since the run started: it is $SIZE bytes; $KIND takes the prompt as one argument, which must be smaller than 131072 bytes"
+        fi
+    fi
+    file_sum "$p" || end_as usage_error "$p changed since the run started: its checksum cannot be taken"
+    if [ "$SUM" != "$1" ]; then
+        end_as usage_error "$p changed since the run started: its SHA-256 is not the one the status file records"
+    fi
+    PROMPT_FILE="$p"
+}
+
+load_record() { # step 5 of a continue: reads, validates and adopts the saved status; a fault leaves the file as it was
+    local sf="$RUN_DIR/$PREFIX.status" rec fault v=() found=()
+    STATUS_FILE="$sf"
+    if [ ! -e "$sf" ] && [ ! -L "$sf" ]; then end_as usage_error "there is no status file to continue: $sf"; fi
+    if [ ! -f "$sf" ] || [ ! -r "$sf" ]; then end_as usage_error "the status file is not a readable file: $sf"; fi
+    rec="$(jq -c -s 'if length == 1 and (.[0] | type) == "object" then .[0] else error("not one object") end' \
+        "$sf" 2>/dev/null)" && [ -n "$rec" ] || end_as usage_error "the status file does not parse as one JSON object: $sf"
+    fault="$(jq -r --arg file "$sf" --arg name "$NAME" --arg kind "$KIND" --arg prefix "$PREFIX" "$JQ_RECORD" \
+        <<< "$rec" 2>/dev/null)" || end_as runner_failure "cannot check the status file $sf"
+    if [ -n "$fault" ]; then end_as usage_error "$fault"; fi
+    # The record stays in memory: require_handle reads handle_source there,
+    # and this invocation's attempts are appended to it.
+    ST="$rec"
+    # One value per field, each ended by a NUL, so that any path survives;
+    # the allowed directories come last, after their count.
+    mapfile -d '' -t v < <(jq --raw-output0 '.level, .cwd, .limit, .resume_limit,
+        (.requested.model // ""), (.requested.effort // ""), (.oc_model // ""), .cut_off_phase,
+        (.resume_reason // ""), .resume_used, .fresh_start, .prompt_sha256,
+        ([.attempts[] | select(.phase == "continue") | .n] | (max // 0) + 1), (.allow_dirs | length),
+        .allow_dirs[]' <<< "$ST" 2>/dev/null)
+    if [ "${#v[@]}" -lt 14 ] || [[ ! ${v[12]} =~ ^[1-9][0-9]*$ ]] || [[ ! ${v[13]} =~ ^[0-9]+$ ]] ||
+        [ "${#v[@]}" != $((14 + v[13])) ]; then
+        end_as runner_failure "cannot read the fields of the status file $sf"
+    fi
+    # name, kind and prefix stay the ones derived from --cli, which the record matches.
+    LEVEL="${v[0]}" CWD="${v[1]}" LIMIT="${v[2]}" RESUME_LIMIT="${v[3]}" MODEL="${v[4]}" EFFORT="${v[5]}"
+    if [ "$KIND" = opencode ]; then OC_MODEL="${v[6]}"; fi
+    CUT_OFF="${v[7]}" RESUME_REASON="${v[8]}" RESUME_USED="${v[9]}" CONT_N="${v[12]}"
+    ALLOW_DIRS=("${v[@]:14}")
+    # The checks above allow fresh_start only with the first phase cut off.
+    FRESH=0
+    if [ "${v[10]}" = true ]; then FRESH=1; fi
+    [ -e "$CWD" ] || end_as usage_error "the recorded working directory does not exist: $CWD"
+    [ -d "$CWD" ] || end_as usage_error "the recorded working directory is not a directory: $CWD"
+    # No attempt file is ever overwritten: this continue's attempt, and the
+    # one resume while it is still unused.
+    shopt -s nullglob
+    found=("$RUN_DIR/$PREFIX.continue$CONT_N".*)
+    if [ "$RESUME_USED" = false ]; then found+=("$RUN_DIR/$PREFIX.resume1".*); fi
+    shopt -u nullglob
+    if [ "${#found[@]}" -gt 0 ]; then
+        end_as usage_error "files of the attempts this continue would write already exist in $RUN_DIR: ${found[*]##*/}" \
+            "Move them aside, or remove them if no run needs them."
+    fi
+    if [ "$FRESH" = 1 ]; then check_prompt_kept "${v[11]}"; fi
+    cd -- "$CWD" 2>/dev/null || end_as usage_error "cannot change to the recorded working directory: $CWD"
+}
+
+do_continue() {
+    local text after=()
+    take_run_dir
+    claim
+    load_record
+    # Step 6: preflight. Until step 7 nothing touches the saved status, so a
+    # failure here leaves it as it was and the run can be continued again.
+    PROGRAM="$(type -P "$KIND")"
+    [ -n "$PROGRAM" ] || end_as missing_cli "$KIND is not on PATH"
+    if [ "$KIND" = codex ]; then codex_probe; fi
+    if [ "$FRESH" = 1 ]; then
+        # The limit refused the first attempt before its first model turn, so
+        # no session saw the task: the first attempt again, a new session.
+        build_first_argv
+    else
+        require_handle
+        if [ "$CUT_OFF" = first ]; then
+            text="$(followup_text continue)" ||
+                end_as prerequisite_failed "cannot read the follow-up text for continue in $SELF_DIR/../prompts/followup.md"
+            build_later_argv "$LEVEL" "$text"
+        else
+            if [ "$LEVEL" = edit ]; then after=(after-edit); fi
+            text="$(followup_text "$RESUME_REASON" "${after[@]}")" ||
+                end_as prerequisite_failed "cannot read the follow-up text for $RESUME_REASON in $SELF_DIR/../prompts/followup.md"
+            build_later_argv read "$text"
+        fi
+    fi
+    # Step 7: the status file is this invocation's from here on.
+    PHASE="continue"
+    if [ "$FRESH" = 1 ]; then
+        # shellcheck disable=SC2016  # a jq variable
+        st_update '.handle_source = $id | .handle = null | .reported = null | .fresh_start = false' \
+            --arg id "continue$CONT_N"
+    fi
+    OWNS_STATUS=1
+    write_status
+    # Step 8.
+    if [ "$CUT_OFF" = resume ]; then
+        # The resume again: the same text at the read level under the resume
+        # limit, and no further resume.
+        IN_RESUME=1
+        run_attempt continue "$CONT_N" "$RESUME_LIMIT"
+        classify continue "$CONT_N"
+        record_attempt continue "$CONT_N"
+        end_with_verdict
+    fi
+    run_attempt continue "$CONT_N" "$LIMIT"
+    classify continue "$CONT_N"
+    if [ "$FRESH" = 1 ]; then
+        record_attempt continue "$CONT_N" fresh
+        take_session continue "$CONT_N"
+    else
+        record_attempt continue "$CONT_N"
+    fi
+    # Like a first attempt: the one resume when it ended without an answer.
+    if resume_due; then do_resume "$VERDICT"; fi
+    end_with_verdict
+}
+
 main() {
     local i
     if [ "$#" = 1 ] && [ "$1" = outcomes ]; then
@@ -1320,7 +1555,7 @@ main() {
     check_ground
     case "$ACTION" in
         run) do_run ;;
-        continue) end_as runner_failure "not implemented" ;;
+        continue) do_continue ;;
     esac
 }
 
