@@ -90,7 +90,7 @@ teardown() { # the suite's one EXIT trap; runs whatever failed
 clean_env() { # drops what could point git or the runner at the owner's setup
     local v vars
     unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_TEMPLATE_DIR \
-        GIT_CEILING_DIRECTORIES XDG_CONFIG_HOME XDG_DATA_HOME CODEX_HOME OPENCODE_CONFIG_CONTENT \
+        GIT_CEILING_DIRECTORIES XDG_CONFIG_HOME XDG_DATA_HOME CODEX_HOME GH_CONFIG_DIR OPENCODE_CONFIG_CONTENT \
         OPENCODE_DISABLE_CLAUDE_CODE_PROMPT OPENCODE_DISABLE_CLAUDE_CODE_SKILLS \
         EXT_RUN_GRACE EXT_RUN_KILL_WAIT EXT_RUN_PREFLIGHT_LIMIT EXT_RUN_POLL EXT_RUN_START_WAIT \
         EXT_PATH EXT_CWD EXT_RUNNER PRE_LIMIT
@@ -2414,6 +2414,36 @@ assert_contains "$ERR" "--local-env-vars" "boundary-git-fails: the message names
 assert_eq "$(ncalls qwen)" 0 "boundary-git-fails: no call"
 assert_nofile "$RUN/qwen.status" "boundary-git-fails: no status"
 
+# A git that cannot be run, or that lists what is not a variable name, is a
+# missing prerequisite, and the message names git.
+new_case git-cannot-run
+mk_tool "$CASE/nogit/git" <<< 'exit 127'
+EXT_PATH="$CASE/nogit:$CASE/bin:$BIN_ROOT/utils"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 18 "git-cannot-run: rc"
+assert_contains "$ERR" "git cannot be run" "git-cannot-run: git named"
+assert_contains "$ERR" "status 127" "git-cannot-run: the status named"
+assert_eq "$(ncalls qwen)" 0 "git-cannot-run: no call"
+assert_nofile "$RUN/qwen.status" "git-cannot-run: no status"
+
+new_case git-vars-not-names
+mk_tool "$CASE/oddgit/git" <<'EOF'
+if [ "$*" = 'rev-parse --local-env-vars' ]; then
+    echo 'not a name'
+    exit 0
+fi
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+EXT_PATH="$CASE/oddgit:$CASE/bin:$BIN_ROOT/utils"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 18 "git-vars-not-names: rc"
+assert_contains "$ERR" "git rev-parse --local-env-vars" "git-vars-not-names: git named"
+assert_contains "$ERR" "not a name" "git-vars-not-names: what it printed"
+assert_eq "$(ncalls qwen)" 0 "git-vars-not-names: no call"
+assert_nofile "$RUN/qwen.status" "git-vars-not-names: no status"
+
 # git fails although a .git lies above the directory (here a .git file git
 # cannot read): the boundary is unknown, and the directory is not taken for it.
 new_case boundary-unknown
@@ -2487,6 +2517,28 @@ mkdir "$CASE/cfg-real"
 ln -s "$CASE/cfg-real" "$CASE/cfg-link"
 EXT_VARS=("XDG_CONFIG_HOME=$CASE/cfg-link")
 refused protected "$CASE/cfg-real"
+
+# A location a variable moves is protected beside the default one, which may
+# still hold credentials; GH_CONFIG_DIR moves gh's.
+new_case refuse-xdg-config-default-gh
+mkdir -p "$HOME/.config/gh"
+EXT_VARS=("XDG_CONFIG_HOME=$CASE/xcfg")
+refused protected "$HOME/.config/gh"
+
+new_case refuse-gh-config-dir
+mkdir -p "$CASE/ghc/sub"
+EXT_VARS=("GH_CONFIG_DIR=$CASE/ghc")
+refused protected "$CASE/ghc/sub"
+
+new_case refuse-codex-home-default
+mkdir -p "$HOME/.codex"
+EXT_VARS=("CODEX_HOME=$CASE/chome")
+refused protected "$HOME/.codex"
+
+new_case refuse-xdg-data-default
+mkdir -p "$HOME/.local/share/opencode"
+EXT_VARS=("XDG_DATA_HOME=$CASE/xdg")
+refused protected "$HOME/.local/share/opencode"
 
 new_case refuse-edit-level
 mkdir "$CASE/out"
