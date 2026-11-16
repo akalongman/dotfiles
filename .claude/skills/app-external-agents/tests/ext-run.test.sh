@@ -634,6 +634,40 @@ mk_tool() { # path: an executable bash script whose body is standard input
     mkdir -p "${1%/*}" && { printf '#!%s\n' "$BIN_ROOT/utils/bash" && cat; } > "$1" && chmod +x "$1"
 }
 
+mk_ghost_ps() { # dir: a ps there that also shows, with -A, a live process in every group a lock's gid file of the case's run names
+    mk_tool "$1/ps" <<'EOF'
+"$BIN_ROOT/utils/ps" "$@"
+st=$?
+if [ "${1:-}" = -A ]; then
+    for f in "$CASE"/run/*.lock/gid; do
+        if [ -f "$f" ]; then printf ' %s S\n' "$(cat "$f")"; fi
+    done
+fi
+exit "$st"
+EOF
+}
+
+agent_env_is() { # key k agent-file: true when that invocation's environment held the agent file unchanged and the two switches
+    jq -n --rawfile c "$CASE/skill/opencode/$3" --slurpfile e "$CALLS/$1.$2/env.json" \
+        '$e[0] == {OPENCODE_CONFIG_CONTENT: $c, OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
+            OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1"}' 2>/dev/null
+}
+
+section() { # name: the lines of prompts/followup.md after "## <name>" up to the next "## " line, blank lines at either end dropped
+    local l on=0 got=()
+    while IFS= read -r l || [ -n "$l" ]; do
+        if [ "$on" = 1 ]; then
+            case "$l" in '## '*) break ;; esac
+            got+=("$l")
+        elif [ "$l" = "## $1" ]; then
+            on=1
+        fi
+    done < "$SKILL/prompts/followup.md"
+    while [ "${#got[@]}" -gt 0 ] && [[ ${got[0]} =~ ^[[:space:]]*$ ]]; do got=("${got[@]:1}"); done
+    while [ "${#got[@]}" -gt 0 ] && [[ ${got[-1]} =~ ^[[:space:]]*$ ]]; do unset 'got[-1]'; done
+    if [ "${#got[@]}" -gt 0 ]; then printf '%s\n' "${got[@]}"; fi
+}
+
 took_under() { # start seconds msg: less than that many seconds passed since start (an $EPOCHREALTIME)
     local s="${1//[!0-9]/}" e="${EPOCHREALTIME//[!0-9]/}"
     e=$(((e - s) / 1000000))
@@ -647,6 +681,14 @@ has_cr() { # text: yes when it holds a carriage return
 # Codex's usage-limit message has a typographic apostrophe, as here.
 # shellcheck disable=SC1112
 ul_line='ERROR: You’ve hit your usage limit. Upgrade to Pro, or try again at 2:40 PM.'
+
+# The follow-up texts, as the runner must send them.
+LIMIT_TEXT="$(section limit)"
+EMPTY_TEXT="$(section empty)"
+# shellcheck disable=SC2034  # read by name in the check below
+CONTINUE_TEXT="$(section continue)"
+AFTER_EDIT="$(section after-edit)"
+for x in LIMIT_TEXT EMPTY_TEXT CONTINUE_TEXT AFTER_EDIT; do assert_ne "${!x}" "" "the follow-up text $x is not empty"; done
 
 # ---------------------------------------------------------------------------
 # The frame's own cases.
@@ -1102,16 +1144,7 @@ assert_nofile "$CALLS/sandbox.started" "start-no-gid: the command never ran"
 assert_nofile "$RUN/codex.lock" "start-no-gid: no lock"
 
 new_case survivor-probe
-mk_tool "$CASE/ghost/ps" <<'EOF'
-"$BIN_ROOT/utils/ps" "$@"
-st=$?
-if [ "${1:-}" = -A ]; then
-    for f in "$CASE"/run/*.lock/gid; do
-        if [ -f "$f" ]; then printf ' %s S\n' "$(cat "$f")"; fi
-    done
-fi
-exit "$st"
-EOF
+mk_ghost_ps "$CASE/ghost"
 EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
 t0="$EPOCHREALTIME"
 ext run --cli codex --run-dir "$RUN"
@@ -1387,9 +1420,7 @@ assert_eq "$(callf qwen 1 stdin)" "" "oc-argv: nothing on standard input"
 assert_eq "$(st .oc_model)" alibaba-token-plan/qwen3.8-max "oc-argv: oc_model"
 assert_eq "$(st .requested.model)" null "oc-argv: requested model"
 assert_eq "$(st .name)" qwen "oc-argv: name"
-assert_eq "$(jq -n --rawfile c "$CASE/skill/opencode/read-agent.json" --slurpfile e "$CALLS/qwen.1/env.json" \
-    '$e[0] == {OPENCODE_CONFIG_CONTENT: $c, OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
-        OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1"}' 2>/dev/null)" true "oc-argv: the read agent and the two switches"
+assert_eq "$(agent_env_is qwen 1 read-agent.json)" true "oc-argv: the read agent and the two switches"
 
 new_case oc-effort
 play qwen 1 --stdout "$(t_oc_only S)"
@@ -1513,6 +1544,271 @@ play agy 1 --stdout "$(agy_init C; agy_result C SUCCESS '' null 9 4 3 2; agy_res
 ext run --cli agy --run-dir "$RUN"
 assert_eq "$(stj .tokens)" '{"duration_seconds":1.5,"input":9,"output":6,"thinking":5,"total":20,"turns":1}' \
     "agy-last-result: the last result's tokens"
+
+# ---------------------------------------------------------------------------
+# The resume: one later attempt of the same session after an attempt that
+# ended without an answer.
+
+CODEX_RESUME_READ='["exec","resume","U1","--skip-git-repo-check","-c","sandbox_mode=\"read-only\"","--codex-x","-"]'
+
+new_case resume-limit
+play codex 1 --sleep 5 --stderr "$(codex_err U1)"
+play codex 2 --stdout LATE --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --limit 1s --resume-limit 20s
+assert_eq "$rc" 0 "resume-limit: rc"
+assert_eq "$(st .outcome)" answered_after_resume "resume-limit: outcome"
+assert_eq "$(st .phase)" resume "resume-limit: phase"
+assert_eq "$(st .resume_reason)" limit "resume-limit: resume_reason"
+assert_eq "$(st .resume_used)" true "resume-limit: resume_used"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" LATE "resume-limit: the answer is the resume's"
+assert_eq "$(argv codex 2)" "$CODEX_RESUME_READ" "resume-limit: argv"
+assert_eq "$(callf codex 2 stdin)" "$LIMIT_TEXT" "resume-limit: the limit text on standard input"
+assert_contains "$(callf codex 1 parent)" ' -k 1s 1s ' "resume-limit: the first attempt under the limit"
+assert_contains "$(callf codex 2 parent)" ' -k 1s 20s ' "resume-limit: the resume under the resume limit"
+assert_eq "$(st '.attempts | length')" 2 "resume-limit: two attempts"
+assert_eq "$(st '.attempts[1].phase')" resume "resume-limit: the second attempt's phase"
+assert_eq "$(st '.tokens.reported | length')" 2 "resume-limit: one token entry per attempt"
+for x in stdout stderr time exit; do
+    assert_file "$RUN/codex.first1.$x" "resume-limit: codex.first1.$x"
+    assert_file "$RUN/codex.resume1.$x" "resume-limit: codex.resume1.$x"
+done
+
+new_case resume-empty-edit
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --stdout OK --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit --model m1 --effort low
+assert_eq "$(callf codex 2 stdin)" "$EMPTY_TEXT $AFTER_EDIT" "resume-empty-edit: the empty text and the after-edit sentence"
+assert_eq "$(argv codex 2)" \
+    '["exec","resume","U1","--skip-git-repo-check","-m","m1","-c","model_reasoning_effort=low","-c","sandbox_mode=\"read-only\"","--codex-x","-"]' \
+    "resume-empty-edit: argv, read-only and the named model and effort"
+assert_contains "$(callf codex 2 parent)" ' -k 1s 30m ' "resume-empty-edit: the default resume limit"
+
+new_case resume-not-named
+play codex 1 --sleep 5 --stderr "$(codex_err U1)"
+play codex 2 --stdout LATE --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --limit 1s --resume-limit 20s
+assert_eq "$(ncalls codex)" 2 "resume-not-named: two calls"
+assert_eq "$(st .reported.model)" gpt-6-astra "resume-not-named: the model the header reported"
+assert_eq "$(argv codex 2)" "$CODEX_RESUME_READ" "resume-not-named: no -m for a model the user did not name"
+
+new_case child-before-resume
+play codex 1 --stdout '' --child 300 --stderr "$(codex_err U1)"
+play codex 2 --stdout OK --stderr "$(codex_err U1)"
+t0="$EPOCHREALTIME"
+ext run --cli codex --run-dir "$RUN" --level edit
+took_under "$t0" 15 "child-before-resume: the run took less than 15 s"
+assert_eq "$rc" 0 "child-before-resume: rc"
+assert_eq "$(ncalls codex)" 2 "child-before-resume: two calls"
+assert_eq "$(callf codex 2 prior_alive)" 0 "child-before-resume: no process of the first attempt is alive"
+
+new_case survivor-no-resume
+mk_ghost_ps "$CASE/ghost"
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --stdout "$(t_agy_empty C)"
+play agy 2 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 21 "survivor-no-resume: rc"
+assert_contains "$(st .message)" "could not stop" "survivor-no-resume: message"
+assert_eq "$(ncalls agy)" 1 "survivor-no-resume: no resume while a process of the attempt is reported alive"
+
+new_case resume-fails
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --exit 3 --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 14 "resume-fails: rc"
+assert_eq "$(st .outcome)" cli_failure "resume-fails: outcome"
+assert_eq "$(st .phase)" resume "resume-fails: phase"
+assert_eq "$(ncalls codex)" 2 "resume-fails: two calls"
+assert_nofile "$RUN/codex.out" "resume-fails: no answer file"
+
+new_case resume-empty-again
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --stdout '' --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 11 "resume-empty-again: rc"
+assert_eq "$(st .outcome)" empty "resume-empty-again: outcome"
+assert_eq "$(st .phase)" resume "resume-empty-again: phase"
+assert_eq "$(ncalls codex)" 2 "resume-empty-again: no second resume"
+
+new_case resume-limit-again
+play codex 1 --sleep 5 --stderr "$(codex_err U1)"
+play codex 2 --sleep 5 --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --limit 1s --resume-limit 1s
+assert_eq "$rc" 10 "resume-limit-again: rc"
+assert_eq "$(st .outcome)" limit "resume-limit-again: outcome"
+assert_eq "$(st .phase)" resume "resume-limit-again: phase"
+assert_eq "$(ncalls codex)" 2 "resume-limit-again: no second resume"
+assert_contains "$(st .message)" "resume limit of 1s" "resume-limit-again: the message names the resume limit"
+
+new_case resume-usage-limit
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --exit 1 --stderr "$(codex_err U1 "$ul_line" "$ul_line" 'tokens used' '131,586')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "resume-usage-limit: rc"
+assert_eq "$(st .outcome)" usage_limit "resume-usage-limit: outcome"
+assert_eq "$(st .phase)" resume "resume-usage-limit: phase"
+assert_eq "$(ncalls codex)" 2 "resume-usage-limit: two calls"
+
+new_case resume-unreadable
+play qwen 1 --stdout "$(t_oc_empty_final S)"
+play qwen 2 --stdout "$(oc_start S; oc_text S X)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 15 "resume-unreadable: rc"
+assert_eq "$(st .phase)" resume "resume-unreadable: phase"
+
+new_case no-handle
+play codex 1 --stdout '' --stderr 'no header'
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 16 "no-handle: rc"
+assert_eq "$(st .outcome)" no_handle "no-handle: outcome"
+assert_eq "$(ncalls codex)" 1 "no-handle: no resume"
+
+new_case two-handles
+play agy 1 --stdout "$(agy_init C; agy_cmd D ls; agy_result C SUCCESS '')"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 17 "two-handles: rc"
+assert_eq "$(st .outcome)" handle_conflict "two-handles: outcome"
+assert_eq "$(ncalls agy)" 1 "two-handles: no resume"
+
+new_case one-handle-repeated
+play agy 1 --stdout "$(agy_init C; agy_cmd C ls; agy_result C SUCCESS '')"
+play agy 2 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "one-handle-repeated: rc"
+assert_eq "$(st .handle)" C "one-handle-repeated: handle"
+
+new_case wrong-handle
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --sleep 5 --stderr "$(codex_err U2)"
+ext run --cli codex --run-dir "$RUN" --resume-limit 1s
+assert_eq "$rc" 17 "wrong-handle: rc"
+assert_eq "$(st .outcome)" handle_conflict "wrong-handle: outcome"
+assert_eq "$(st '.attempts[1].rule')" 2 "wrong-handle: rule 2, before the deadline"
+assert_eq "$(st .handle)" U1 "wrong-handle: the handle is still the first attempt's"
+
+new_case wrong-handle-ul
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+# shellcheck disable=SC1112  # the typographic apostrophe of Codex's message
+play codex 2 --exit 1 --stderr "$(codex_err U2 'ERROR: You’ve hit your usage limit. try again at 2:40 PM.')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 17 "wrong-handle-ul: rc"
+assert_eq "$(st .outcome)" handle_conflict "wrong-handle-ul: outcome"
+assert_eq "$(st '.attempts[1].rule')" 2 "wrong-handle-ul: the handle check comes before the usage limit"
+
+new_case later-no-handle
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --stdout OK --stderr 'no header'
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "later-no-handle: rc (no handle in a later attempt's files is no conflict)"
+
+new_case agy-resume
+play agy 1 --stdout "$(t_agy_empty C)"
+play agy 2 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN" --model gm
+assert_eq "$(argv agy 2)" "$(jq -cn --arg t "$EMPTY_TEXT" \
+    '["--conversation", "C", "-p", $t, "--output-format", "stream-json", "--model", "gm", "--agy-x"]')" \
+    "agy-resume: argv"
+
+new_case agy-edit-resume
+play agy 1 --stdout "$(t_agy_empty C)"
+play agy 2 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN" --model gm --level edit
+assert_eq "$(ncalls agy)" 2 "agy-edit-resume: two calls"
+assert_contains "$(argv agy 1)" '"--mode","accept-edits"' "agy-edit-resume: the first attempt at the edit level"
+assert_eq "$(argv agy 2)" "$(jq -cn --arg t "$EMPTY_TEXT $AFTER_EDIT" \
+    '["--conversation", "C", "-p", $t, "--output-format", "stream-json", "--model", "gm", "--agy-x"]')" \
+    "agy-edit-resume: argv, the after-edit sentence and no --mode"
+
+new_case agy-resume-tokens
+play agy 1 --stdout "$(agy_init C; agy_result C SUCCESS '' null 100 60 30 10)"
+play agy 2 --stdout "$(agy_init C; agy_result C SUCCESS ANSWER null 130 80 35 15)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st '.attempts[0].tokens.total')" 100 "agy-resume-tokens: the first attempt's total"
+assert_eq "$(st '.attempts[1].tokens.total')" 130 "agy-resume-tokens: the resume's total"
+assert_eq "$(stj .tokens)" '{"duration_seconds":1.5,"input":80,"output":35,"thinking":15,"total":130,"turns":1}' \
+    "agy-resume-tokens: the run's are the last attempt's, not a sum"
+
+new_case agy-denied-no-resume
+play agy 1 --stdout "$(t_agy_denied C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(ncalls agy)" 1 "agy-denied-no-resume: one call"
+assert_eq "$(st .outcome)" denied "agy-denied-no-resume: outcome"
+
+new_case agy-denied-at-deadline
+play agy 1 --stdout-early "$(t_agy_denied C)" --sleep 5
+play agy 2 --stdout "$(t_agy_answer C LATE)"
+ext run --cli agy --run-dir "$RUN" --limit 1s
+assert_eq "$(st '.attempts[0].rule')" 3 "agy-denied-at-deadline: rule 3, the deadline before the denial"
+assert_eq "$(st '.attempts[0].verdict')" limit "agy-denied-at-deadline: verdict"
+assert_eq "$(st '.attempts[0].denied | length')" 1 "agy-denied-at-deadline: the denial is recorded"
+assert_eq "$rc" 0 "agy-denied-at-deadline: rc"
+assert_eq "$(st .outcome)" answered_after_resume "agy-denied-at-deadline: outcome"
+
+new_case agy-denied-in-resume
+play agy 1 --stdout "$(t_agy_empty C)"
+play agy 2 --stdout "$(t_agy_denied C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 12 "agy-denied-in-resume: rc"
+assert_eq "$(st .outcome)" denied "agy-denied-in-resume: outcome"
+assert_eq "$(st .phase)" resume "agy-denied-in-resume: phase"
+assert_eq "$(ncalls agy)" 2 "agy-denied-in-resume: two calls"
+
+new_case oc-resume
+play qwen 1 --stdout "$(t_oc_empty_final S)"
+play qwen 2 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN" --effort high
+assert_eq "$(argv qwen 2)" "$(jq -cn --arg t "$EMPTY_TEXT" '["run", "--pure", "-s", "S", "--agent", "ext-read",
+    "--model", "alibaba-token-plan/qwen3.8-max", "--variant", "high", "--format", "json", $t]')" "oc-resume: argv"
+assert_eq "$(agent_env_is qwen 2 read-agent.json)" true "oc-resume: the read agent and the two switches"
+assert_eq "$(cat "$RUN/qwen.first1.earlier.txt" 2>/dev/null)" NOTE "oc-resume: the first attempt's note is kept"
+assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" ONLY "oc-resume: the answer"
+assert_eq "$(stj .tokens)" '{"cached":3,"cost":1.5,"input":12,"output":9,"reasoning":6,"steps":3,"total":30}' \
+    "oc-resume: the run's tokens are the sums over both attempts"
+
+new_case oc-edit-resume
+play qwen 1 --stdout "$(t_oc_empty_final S)"
+play qwen 2 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN" --effort high --level edit
+assert_contains "$(argv qwen 1)" '"--agent","ext-edit"' "oc-edit-resume: the first attempt with the edit agent"
+assert_contains "$(argv qwen 2)" '"--agent","ext-read"' "oc-edit-resume: the resume with the read agent"
+assert_eq "$(agent_env_is qwen 1 edit-agent.json)" true "oc-edit-resume: the first attempt's environment"
+assert_eq "$(agent_env_is qwen 2 read-agent.json)" true "oc-edit-resume: the resume's environment is the read agent's"
+
+new_case oc-denied-empty
+play qwen 1 --stdout "$(
+    oc_start S
+    oc_read S /x error "$RULE_TEXT"
+    oc_read S /y error "$RULE_TEXT"
+    oc_finish S tool-calls
+    oc_start S
+    oc_finish S stop
+)"
+play qwen 2 --stdout "$(
+    oc_start S
+    oc_read S /z error "$RULE_TEXT"
+    oc_finish S tool-calls
+    oc_start S
+    oc_text S A
+    oc_finish S stop
+)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-denied-empty: rc"
+assert_eq "$(st '.denied | length')" 3 "oc-denied-empty: the denials of both attempts"
+assert_eq "$(st '.denied[2].attempt')" resume1 "oc-denied-empty: the resume's denial"
+
+new_case oc-ask-refused-resume
+play qwen 1 --stdout "$(oc_start S; oc_bash S 'echo x' error 'x ASK-REFUSED y'; oc_finish S tool-calls)"
+play qwen 2 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-ask-refused-resume: rc"
+assert_eq "$(st .outcome)" answered_after_resume "oc-ask-refused-resume: outcome"
+assert_eq "$(st .phase)" resume "oc-ask-refused-resume: phase"
+assert_eq "$(st '.attempts[0].rule')" 12 "oc-ask-refused-resume: rule"
+assert_eq "$(st '.attempts[0].verdict')" empty "oc-ask-refused-resume: verdict"
+assert_eq "$(st .resume_reason)" empty "oc-ask-refused-resume: resume_reason"
+assert_eq "$(st '.denied | length')" 1 "oc-ask-refused-resume: the refused call is recorded"
+assert_eq "$(st '.denied[0].attempt')" first1 "oc-ask-refused-resume: in the first attempt"
+assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" ONLY "oc-ask-refused-resume: the answer"
 
 # ---------------------------------------------------------------------------
 # Step 7: the end of the suite.

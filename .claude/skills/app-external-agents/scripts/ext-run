@@ -92,7 +92,8 @@ T_LAST='' T_REASON='' T_ERROR_SEEN=false T_ERROR='' T_ASK_REFUSED=false # OpenCo
 GID=''                        # the group read from the gid file
 C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false       # the last command run_cmd ran
 A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false # the last attempt
-A_ANSWER='' A_REASON='' A_HANDLE_SEEN=''
+A_ANSWER='' A_REASON='' A_HANDLE_SEEN='' A_LIMIT=''
+IN_RESUME=0                   # 1 while the attempt is the resume: an answer is then answered_after_resume
 EARLIER='' EARLIER_BYTES=null # OpenCode: the last attempt's earlier-text file and its size
 RULE='' VERDICT=''
 NOW=0 US=0 TAIL=() LAST=''
@@ -931,9 +932,12 @@ build_first_argv() { # fills ARGV, ARGV_ENV and STDIN_FILE for the first attempt
     esac
 }
 
-build_later_argv() { # read|edit text: fills ARGV and STDIN_FILE for a resume or a continue, per "Argument vectors"
+build_later_argv() { # read|edit text: fills ARGV, ARGV_ENV and STDIN_FILE for a resume or a continue of HANDLE, per "Argument vectors"
     local sandbox=read-only
     if [ "$1" = edit ]; then sandbox=workspace-write; fi
+    # Set on every call, so that no attempt runs with an earlier one's environment.
+    ARGV_ENV=()
+    STDIN_FILE=/dev/null
     case "$KIND" in
         codex)
             ARGV=(exec resume "$HANDLE" --skip-git-repo-check)
@@ -943,8 +947,43 @@ build_later_argv() { # read|edit text: fills ARGV and STDIN_FILE for a resume or
             STDIN_FILE="$LOCK/text"
             { printf '%s\n' "$2" > "$STDIN_FILE"; } 2>/dev/null || end_as runner_failure "cannot write $STDIN_FILE"
             ;;
-        *) end_as runner_failure "not implemented" ;;
+        agy)
+            ARGV=(--conversation "$HANDLE" -p "$2" --output-format stream-json)
+            if [ "$1" = edit ]; then ARGV+=(--mode accept-edits); fi
+            if [ -n "$MODEL" ]; then ARGV+=(--model "$MODEL"); fi
+            ARGV+=("${AGY_EXTRA_ARGS[@]}")
+            ;;
+        opencode)
+            oc_agent_env "$1"
+            ARGV=(run --pure -s "$HANDLE" --agent "$OC_AGENT" --model "$OC_MODEL")
+            if [ -n "$EFFORT" ]; then ARGV+=(--variant "$EFFORT"); fi
+            ARGV+=(--format json "$2")
+            ;;
     esac
+}
+
+followup_section() { # name: the lines of prompts/followup.md after "## <name>" up to the next "## " line, blank lines at either end dropped; 1 when there is no such line
+    LC_ALL=C awk -v h="## $1" '
+        on && /^## / { exit }
+        on { l[++n] = $0; next }
+        $0 == h { on = 1 }
+        END {
+            if (!on) exit 1
+            for (i = 1; i <= n && l[i] ~ /^[ \t\r]*$/; i++);
+            for (j = n; j >= i && l[j] ~ /^[ \t\r]*$/; j--);
+            for (k = i; k <= j; k++) print l[k]
+        }' "$SELF_DIR/../prompts/followup.md" 2>/dev/null
+}
+
+followup_text() { # limit|empty|continue [after-edit]: prints that text, the after-edit sentence after one space when asked; 1 when a text is missing or empty
+    local t a
+    t="$(followup_section "$1")" && [ -n "$t" ] || return 1
+    if [ $# -ge 2 ]; then
+        [ "$2" = after-edit ] || return 1
+        a="$(followup_section after-edit)" && [ -n "$a" ] || return 1
+        t+=" $a"
+    fi
+    printf '%s\n' "$t"
 }
 
 attempt_poll() { # POLL_HOOK of an attempt: redraws the progress line when standard error is a terminal
@@ -965,6 +1004,7 @@ attempt_poll() { # POLL_HOOK of an attempt: redraws the progress line when stand
 
 run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; sets the A_ variables
     local base="$RUN_DIR/$PREFIX.$1$2"
+    A_LIMIT="$3"
     PROGRESS_TTY=0
     if [ -t 2 ]; then PROGRESS_TTY=1; fi
     now_us
@@ -1174,14 +1214,60 @@ take_session() { # phase n: the handle and what the CLI reported, from the attem
     st_update '.reported = $r' --argjson r "$r"
 }
 
+require_handle() { # sets HANDLE from the files of the attempt handle_source names: exactly one, or the run ends as no_handle or handle_conflict
+    local src base hs=() all
+    src="$(jq -r '.handle_source | strings' <<< "$ST" 2>/dev/null)"
+    [[ $src =~ ^(first|continue)[1-9][0-9]*$ ]] ||
+        end_as runner_failure "the status names no attempt that created the session (handle_source: ${src:-none})"
+    base="$RUN_DIR/$PREFIX.$src"
+    # The trace is loaded here, in this shell, so that the subshell below finds it.
+    if [ "$KIND" != codex ]; then load_trace "$base"; fi
+    mapfile -t hs < <(attempt_handles "$base")
+    case "${#hs[@]}" in
+        0) end_as no_handle "the files of attempt $src hold no session handle" ;;
+        1) HANDLE="${hs[0]}" ;;
+        *)
+            printf -v all '%s, ' "${hs[@]}"
+            end_as handle_conflict "the files of attempt $src hold more than one session handle: ${all%, }"
+            ;;
+    esac
+}
+
+resume_due() { # the attempt just classified ended without an answer, and the one resume is still unused
+    case "$VERDICT" in limit | empty) ;; *) return 1 ;; esac
+    [ "$(jq -r .resume_used <<< "$ST" 2>/dev/null)" = false ]
+}
+
+do_resume() { # limit|empty: the one resume of the session, always at the read level, under the resume limit
+    local text after=()
+    # Whatever ends the run from here on was decided in the resume, the
+    # handle check included.
+    PHASE=resume
+    require_handle
+    if [ "$LEVEL" = edit ]; then after=(after-edit); fi
+    text="$(followup_text "$1" "${after[@]}")" ||
+        end_as prerequisite_failed "cannot read the follow-up text for $1 in $SELF_DIR/../prompts/followup.md"
+    build_later_argv read "$text"
+    # shellcheck disable=SC2016  # a jq variable
+    st_update '.resume_reason = $r | .resume_used = true' --arg r "$1"
+    IN_RESUME=1
+    run_attempt resume 1 "$RESUME_LIMIT"
+    classify resume 1
+    record_attempt resume 1
+}
+
 end_with_verdict() { # ends the run under the verdict of the attempt just classified
     case "$VERDICT" in
         answered)
             HAS_ANSWER=1
             ANSWER_TEXT="$A_ANSWER"
+            if [ "$IN_RESUME" = 1 ]; then end_as answered_after_resume ''; fi
             end_as answered ''
             ;;
-        limit) end_as limit "the time limit of $LIMIT was reached without an answer" ;;
+        limit)
+            if [ "$IN_RESUME" = 1 ]; then end_as limit "the resume limit of $A_LIMIT was reached without an answer"; fi
+            end_as limit "the time limit of $A_LIMIT was reached without an answer"
+            ;;
         empty) end_as empty "$KIND ended without an answer" ;;
         usage_limit) end_as usage_limit "${A_REASON#ERROR: }" ;;
         cli_failure)
@@ -1217,6 +1303,9 @@ do_run() {
     classify first 1
     record_attempt first 1
     take_session first 1
+    # stop_group has run for the attempt inside run_cmd; had a process
+    # outlived it, the run would have ended there and no resume would start.
+    if resume_due; then do_resume "$VERDICT"; fi
     end_with_verdict
 }
 
