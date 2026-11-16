@@ -91,6 +91,7 @@ clean_env() { # drops what could point git or the runner at the owner's setup
     local v vars
     unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_TEMPLATE_DIR \
         GIT_CEILING_DIRECTORIES XDG_CONFIG_HOME XDG_DATA_HOME CODEX_HOME OPENCODE_CONFIG_CONTENT \
+        OPENCODE_DISABLE_CLAUDE_CODE_PROMPT OPENCODE_DISABLE_CLAUDE_CODE_SKILLS \
         EXT_RUN_GRACE EXT_RUN_KILL_WAIT EXT_RUN_PREFLIGHT_LIMIT EXT_RUN_POLL EXT_RUN_START_WAIT \
         EXT_PATH EXT_CWD PRE_LIMIT
     if ! vars="$(git rev-parse --local-env-vars)"; then
@@ -531,6 +532,102 @@ codex_err() { # uuid [last lines...]: a Codex standard error in the saved shape
         'OpenAI Codex v0.167.2' '--------' "workdir: $WORK" 'model: gpt-6-astra' 'provider: openai' \
         'approval: never' 'sandbox: read-only' 'reasoning effort: max' 'reasoning summaries: none' \
         "session id: $u" '--------' user PROMPT "$@"
+}
+
+# OpenCode's error text for a call a permission rule denied, and agy's denied
+# actions, in the saved shapes.
+RULE_TEXT='The user has specified a rule which prevents you from using this specific tool call.'
+DENIED_JSON='[{"action":"read_file","display_name":"ReadFile"}]'
+
+# One agy trace line each, in the shapes of the saved traces.
+agy_init() { # cid [model]: the first event; agy writes the model only when --model was passed
+    if [ $# -ge 2 ]; then
+        jq -cn --arg c "$1" --arg m "$2" '{event: "init", conversation_id: $c, init: {model: $m}}'
+    else
+        jq -cn --arg c "$1" '{event: "init", conversation_id: $c}'
+    fi
+}
+
+agy_cmd() { # cid command: a shell command step
+    jq -cn --arg c "$1" --arg cmd "$2" '{event: "step_update", step_update: {conversation_id: $c,
+        tool_name: "run_command", state: "ACTIVE", tool_info: {parameters: {CommandLine: $cmd}}}}'
+}
+
+agy_result() { # cid status response [denied-json [total input output thinking]]: the result event
+    jq -cn --arg c "$1" --arg s "$2" --arg r "$3" --argjson d "${4:-null}" --argjson t "${5:-9}" \
+        --argjson i "${6:-4}" --argjson o "${7:-3}" --argjson th "${8:-2}" '{event: "result",
+        result: {conversation_id: $c, status: $s, response: $r, denied_actions: $d, num_turns: 1,
+            duration_seconds: 1.5,
+            usage: {input_tokens: $i, output_tokens: $o, thinking_tokens: $th, total_tokens: $t}}}'
+}
+
+# One OpenCode trace line each, in the shapes of the saved traces.
+oc_start() { # sid
+    jq -cn --arg s "$1" '{type: "step_start", sessionID: $s, part: {}}'
+}
+
+oc_tool() { # tool input-key sid value [completed|error] [error text]: a tool_use event; error is null when no text is given
+    jq -cn --arg tool "$1" --arg k "$2" --arg s "$3" --arg v "$4" --arg st "${5:-completed}" \
+        --arg e "${6-}" --argjson has "$#" '{type: "tool_use", sessionID: $s, part: {tool: $tool,
+        state: {status: $st, input: {($k): $v}, error: (if $has >= 6 then $e else null end)}}}'
+}
+
+oc_bash() { oc_tool bash command "$@"; } # sid command [completed|error] [error text]
+oc_read() { oc_tool read filePath "$@"; } # sid path [completed|error] [error text]
+
+oc_text() { # sid text
+    jq -cn --arg s "$1" --arg t "$2" '{type: "text", sessionID: $s, part: {text: $t}}'
+}
+
+oc_finish() { # sid reason [total input output reasoning cached cost]
+    jq -cn --arg s "$1" --arg r "$2" --argjson t "${3:-10}" --argjson i "${4:-4}" --argjson o "${5:-3}" \
+        --argjson rs "${6:-2}" --argjson cr "${7:-1}" --argjson c "${8:-0.5}" '{type: "step_finish",
+        sessionID: $s, part: {reason: $r,
+            tokens: {total: $t, input: $i, output: $o, reasoning: $rs, cache: {read: $cr, write: 0}}, cost: $c}}'
+}
+
+oc_error() { # sid name message
+    jq -cn --arg s "$1" --arg n "$2" --arg m "$3" '{type: "error", sessionID: $s, error: {name: $n, data: {message: $m}}}'
+}
+
+# Whole traces, used by name in later cases.
+t_oc_only() { # sid [text]: one step that writes the text (ONLY by default) and stops
+    oc_start "$1"
+    oc_text "$1" "${2-ONLY}"
+    oc_finish "$1" stop
+}
+
+t_oc_empty_final() { # sid: a note in a tool-calling step, then a final step without text
+    oc_start "$1"
+    oc_bash "$1" ls
+    oc_text "$1" NOTE
+    oc_finish "$1" tool-calls
+    oc_start "$1"
+    oc_finish "$1" stop
+}
+
+t_agy_answer() { # cid [text]: a command, then a result that answers with the text (ANSWER by default)
+    agy_init "$1"
+    agy_cmd "$1" ls
+    agy_result "$1" SUCCESS "${2-ANSWER}"
+}
+
+t_agy_empty() { # cid
+    agy_init "$1"
+    agy_result "$1" SUCCESS ''
+}
+
+t_agy_denied() { # cid: an empty response with a denied action
+    agy_init "$1"
+    agy_result "$1" SUCCESS '' "$DENIED_JSON"
+}
+
+answering() { # key k: an answering scenario for whatever kind the key is
+    case "$1" in
+        codex) play codex "$2" --stdout A --stderr "$(codex_err U1)" ;;
+        agy) play agy "$2" --stdout "$(t_agy_answer C A)" ;;
+        *) play "$1" "$2" --stdout "$(t_oc_only S A)" ;;
+    esac
 }
 
 mk_tool() { # path: an executable bash script whose body is standard input
@@ -1107,6 +1204,315 @@ ext run --cli codex --run-dir "$RUN"
 assert_eq "$rc" 0 "big-prompt-codex: rc"
 x="$(callf codex 1 stdin | wc -c)"
 assert_eq "${x//[[:space:]]/}" 200000 "big-prompt-codex: the whole prompt on standard input"
+
+# ---------------------------------------------------------------------------
+# OpenCode traces: steps, answers, damaged lines, denied calls, tokens.
+
+new_case oc-boundary
+play qwen 1 --stdout "$(
+    oc_start S
+    oc_bash S ls
+    oc_text S NOTE
+    oc_finish S tool-calls
+    oc_start S
+    oc_text S ANSWER
+    oc_finish S stop
+)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" answered "oc-boundary: outcome"
+assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" ANSWER "oc-boundary: the answer is the final step's text"
+assert_eq "$(cat "$RUN/qwen.first1.earlier.txt" 2>/dev/null)" NOTE "oc-boundary: the earlier step's text"
+assert_eq "$(st '.attempts[0].earlier_text')" qwen.first1.earlier.txt "oc-boundary: earlier_text"
+assert_eq "$(st '.attempts[0].earlier_text_bytes')" 4 "oc-boundary: earlier_text_bytes"
+assert_eq "$(st .handle)" S "oc-boundary: handle"
+
+new_case oc-empty-final
+play qwen 1 --stdout "$(t_oc_empty_final S)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st '.attempts[0].verdict')" empty "oc-empty-final: verdict"
+assert_eq "$(st '.attempts[0].rule')" 12 "oc-empty-final: rule"
+assert_eq "$(cat "$RUN/qwen.first1.earlier.txt" 2>/dev/null)" NOTE "oc-empty-final: the note is kept"
+
+new_case oc-only-text
+play qwen 1 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" answered "oc-only-text: outcome"
+assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" ONLY "oc-only-text: the answer"
+assert_nofile "$RUN/qwen.first1.earlier.txt" "oc-only-text: no earlier text file"
+assert_eq "$(st '.attempts[0].earlier_text')" null "oc-only-text: earlier_text"
+
+new_case oc-length
+play qwen 1 --stdout "$(oc_start S; oc_text S CUT; oc_finish S length)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" cli_failure "oc-length: outcome"
+assert_eq "$(st '.attempts[0].rule')" 10 "oc-length: rule"
+assert_nofile "$RUN/qwen.out" "oc-length: no answer file"
+
+new_case oc-no-finish
+play qwen 1 --stdout "$(oc_start S; oc_text S X)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" trace_unreadable "oc-no-finish: outcome"
+assert_eq "$(st '.attempts[0].rule')" 9 "oc-no-finish: rule"
+
+new_case oc-unfinished-step
+play qwen 1 --stdout "$(t_oc_only S; oc_start S; oc_text S MORE)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" trace_unreadable "oc-unfinished-step: outcome"
+assert_eq "$(st '.attempts[0].rule')" 9 "oc-unfinished-step: rule"
+assert_nofile "$RUN/qwen.out" "oc-unfinished-step: no answer file"
+
+for x in 0 1; do
+    name=oc-error-event
+    if [ "$x" = 1 ]; then name=oc-error-nonzero; fi
+    new_case "$name"
+    play qwen 1 --exit "$x" --stdout "$(oc_start S; oc_text S X; oc_error S APIError boom)"
+    ext run --cli qwen --run-dir "$RUN"
+    assert_eq "$(st .outcome)" cli_failure "$name: outcome"
+    assert_eq "$(st '.attempts[0].rule')" 6 "$name: rule"
+    assert_contains "$(st .message)" boom "$name: message"
+done
+
+new_case oc-warning-line
+play qwen 1 --stdout "$(oc_start S; printf 'warning: not json\n'; oc_text S A; oc_finish S stop)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" answered "oc-warning-line: outcome"
+assert_eq "$(st '.attempts[0].skipped_lines')" 1 "oc-warning-line: skipped_lines"
+
+new_case oc-damaged-tail
+play qwen 1 --stdout "$(t_oc_only S; printf '{"type":"error","sess\n')"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" trace_unreadable "oc-damaged-tail: outcome"
+assert_eq "$(st '.attempts[0].rule')" 9 "oc-damaged-tail: rule"
+assert_nofile "$RUN/qwen.out" "oc-damaged-tail: no answer file"
+
+new_case oc-damaged-nonzero
+play qwen 1 --exit 1 --stdout "$(t_oc_only S; printf '{"type":"error","sess\n')"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" cli_failure "oc-damaged-nonzero: outcome"
+assert_eq "$(st '.attempts[0].rule')" 8 "oc-damaged-nonzero: rule"
+
+new_case oc-damaged-error
+play qwen 1 --stdout "$(oc_start S; oc_error S APIError boom; printf '{"type":"te\n')"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" trace_unreadable "oc-damaged-error: outcome"
+assert_eq "$(st '.attempts[0].rule')" 9 "oc-damaged-error: rule 9, not rule 6"
+
+new_case oc-garbage
+play qwen 1 --stdout "$(printf 'garbage\n')"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" trace_unreadable "oc-garbage: outcome"
+assert_eq "$(st '.attempts[0].rule')" 9 "oc-garbage: rule"
+assert_eq "$(st '.attempts[0].skipped_lines')" 1 "oc-garbage: skipped_lines"
+
+new_case oc-startup-failure
+play qwen 1 --exit 1 --stderr 'database is locked'
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 14 "oc-startup-failure: rc"
+assert_eq "$(st .outcome)" cli_failure "oc-startup-failure: outcome"
+assert_eq "$(st '.attempts[0].rule')" 8 "oc-startup-failure: rule"
+assert_eq "$(ncalls qwen)" 1 "oc-startup-failure: one call"
+assert_contains "$(st .message)" 'database is locked' "oc-startup-failure: message"
+
+oc_denied_trace() { # the trace of oc-denied: denied by rule, asked and refused, failed otherwise, denied by rule
+    oc_start S
+    oc_read S /x error "$RULE_TEXT"
+    oc_read S /y error 'x ASK-REFUSED y'
+    oc_read S /z error 'ENOENT: no such file'
+    oc_bash S 'cat /w' error "$RULE_TEXT"
+    oc_finish S tool-calls
+    oc_start S
+    oc_text S A
+    oc_finish S stop
+}
+
+new_case oc-denied
+play qwen 1 --stdout "$(oc_denied_trace)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" answered "oc-denied: outcome"
+assert_eq "$(st '.denied | length')" 3 "oc-denied: three denied calls"
+assert_eq "$(st '.attempts[0].denied | length')" 3 "oc-denied: the attempt's list"
+assert_eq "$(stj '.denied[0]')" \
+    "$(jq -cnS --arg e "$RULE_TEXT" '{attempt: "first1", error: $e, input: "/x", tool: "read"}')" "oc-denied: the first"
+assert_eq "$(st '.denied[2].input')" 'cat /w' "oc-denied: a command's input"
+
+new_case oc-no-ask-text
+conf_set "OC_ASK_REJECT_TEXT=''"
+play qwen 1 --stdout "$(oc_denied_trace)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st '.denied | length')" 2 "oc-no-ask-text: only the rule's denials"
+
+new_case oc-ask-refused
+play qwen 1 --stdout "$(oc_start S; oc_bash S 'echo x' error 'x ASK-REFUSED y'; oc_finish S tool-calls)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st '.attempts[0].verdict')" empty "oc-ask-refused: verdict"
+assert_eq "$(st '.attempts[0].rule')" 12 "oc-ask-refused: rule 12, not rule 10"
+assert_eq "$(st '.denied | length')" 1 "oc-ask-refused: the refused call is recorded"
+
+new_case oc-ask-refused-no-text
+conf_set "OC_ASK_REJECT_TEXT=''"
+play qwen 1 --stdout "$(oc_start S; oc_bash S 'echo x' error 'x ASK-REFUSED y'; oc_finish S tool-calls)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" cli_failure "oc-ask-refused-no-text: outcome"
+assert_eq "$(st '.attempts[0].rule')" 10 "oc-ask-refused-no-text: rule"
+assert_eq "$(st '.denied | length')" 0 "oc-ask-refused-no-text: nothing denied"
+
+new_case oc-rule-denied-last
+play qwen 1 --stdout "$(oc_start S; oc_bash S 'cat /w' error "$RULE_TEXT"; oc_finish S tool-calls)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(st .outcome)" cli_failure "oc-rule-denied-last: outcome"
+assert_eq "$(st '.attempts[0].rule')" 10 "oc-rule-denied-last: the rule's text does not widen rule 10"
+assert_eq "$(st '.denied | length')" 1 "oc-rule-denied-last: the denied call is recorded"
+
+new_case oc-tokens
+play qwen 1 --stdout "$(
+    oc_start S
+    oc_bash S ls
+    oc_finish S tool-calls 10 4 3 2 1 0.5
+    oc_start S
+    oc_text S A
+    oc_finish S stop 25 11 7 5 2 0.25
+)"
+ext run --cli qwen --run-dir "$RUN"
+x='{"cached":3,"cost":0.75,"input":15,"output":10,"reasoning":7,"steps":2,"total":35}'
+assert_eq "$(stj '.attempts[0].tokens')" "$x" "oc-tokens: the attempt's sums"
+assert_eq "$(stj .tokens)" "$x" "oc-tokens: the run's"
+
+new_case oc-argv
+play qwen 1 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$(argv qwen 1)" \
+    '["run","--pure","--agent","ext-read","--model","alibaba-token-plan/qwen3.8-max","--format","json","PROMPT"]' \
+    "oc-argv: argv"
+assert_eq "$(callf qwen 1 stdin)" "" "oc-argv: nothing on standard input"
+assert_eq "$(st .oc_model)" alibaba-token-plan/qwen3.8-max "oc-argv: oc_model"
+assert_eq "$(st .requested.model)" null "oc-argv: requested model"
+assert_eq "$(st .name)" qwen "oc-argv: name"
+assert_eq "$(jq -n --rawfile c "$CASE/skill/opencode/read-agent.json" --slurpfile e "$CALLS/qwen.1/env.json" \
+    '$e[0] == {OPENCODE_CONFIG_CONTENT: $c, OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
+        OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1"}' 2>/dev/null)" true "oc-argv: the read agent and the two switches"
+
+new_case oc-effort
+play qwen 1 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN" --effort high
+assert_contains "$(argv qwen 1)" '"--variant","high","--format"' "oc-effort: the variant before --format"
+assert_eq "$(st .requested.effort)" high "oc-effort: requested effort"
+
+new_case oc-full-id
+play a-b 1 --stdout "$(t_oc_only S)"
+ext run --cli a/b --run-dir "$RUN"
+assert_eq "$PREFIX" a-b "oc-full-id: prefix"
+assert_file "$RUN/a-b.out" "oc-full-id: the answer file"
+assert_contains "$(argv a-b 1)" '"--model","a/b"' "oc-full-id: the model id as given"
+assert_eq "$(st .oc_model)" a/b "oc-full-id: oc_model"
+assert_eq "$(st .name)" a/b "oc-full-id: name"
+
+# ---------------------------------------------------------------------------
+# agy traces: the result event, denied actions, damaged lines, tokens.
+
+new_case agy-answer
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-answer: rc"
+assert_eq "$(st .outcome)" answered "agy-answer: outcome"
+assert_eq "$(cat "$RUN/agy.out" 2>/dev/null)" ANSWER "agy-answer: the answer"
+assert_eq "$(st .handle)" C "agy-answer: handle"
+assert_eq "$(stj .tokens)" '{"duration_seconds":1.5,"input":4,"output":3,"thinking":2,"total":9,"turns":1}' \
+    "agy-answer: tokens"
+assert_eq "$(argv agy 1)" \
+    "$(jq -cn --rawfile p "$RUN/agy-prompt.md" '["-p", $p, "--output-format", "stream-json", "--agy-x"]' 2>/dev/null)" \
+    "agy-answer: argv"
+assert_eq "$(callf agy 1 stdin)" "" "agy-answer: nothing on standard input"
+assert_eq "$(st .configured_model)" "Fixture Default" "agy-answer: configured_model"
+assert_eq "$(st .reported.model)" null "agy-answer: reported model"
+assert_eq "$(st .prompt_sha256)" "$(sum "$RUN/agy-prompt.md" 2>/dev/null)" "agy-answer: prompt_sha256"
+assert_eq "$(callf agy 1 env.json)" \
+    '{"OPENCODE_CONFIG_CONTENT":null,"OPENCODE_DISABLE_CLAUDE_CODE_PROMPT":null,"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS":null}' \
+    "agy-answer: OpenCode's variables stay with OpenCode"
+
+new_case agy-no-extra
+conf_set 'AGY_EXTRA_ARGS=()'
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(argv agy 1 | jq length)" 4 "agy-no-extra: four arguments"
+
+new_case agy-model
+play agy 1 --stdout "$(agy_init C gemini-3.1-pro-high; agy_result C SUCCESS A)"
+ext run --cli agy --run-dir "$RUN" --model gemini-3.1-pro-high --level edit
+assert_ends "$(argv agy 1)" ',"--mode","accept-edits","--model","gemini-3.1-pro-high","--agy-x"]' "agy-model: argv"
+assert_eq "$(st .reported.model)" gemini-3.1-pro-high "agy-model: reported model"
+assert_eq "$(st .requested.model)" gemini-3.1-pro-high "agy-model: requested model"
+
+new_case agy-denied-empty
+play agy 1 --stdout "$(t_agy_denied C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 12 "agy-denied-empty: rc"
+assert_eq "$(st .outcome)" denied "agy-denied-empty: outcome"
+assert_eq "$(st '.attempts[0].rule')" 4 "agy-denied-empty: rule"
+assert_eq "$(st '.denied[0].tool')" read_file "agy-denied-empty: the denied action"
+assert_eq "$(ncalls agy)" 1 "agy-denied-empty: one call"
+
+new_case agy-denied-text
+play agy 1 --stdout "$(agy_init C; agy_result C SUCCESS note "$DENIED_JSON")"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st .outcome)" denied "agy-denied-text: outcome"
+assert_nofile "$RUN/agy.out" "agy-denied-text: no answer file"
+
+new_case agy-denied-nonzero
+play agy 1 --exit 1 --stdout "$(t_agy_denied C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st .outcome)" denied "agy-denied-nonzero: outcome"
+assert_eq "$(st '.attempts[0].rule')" 4 "agy-denied-nonzero: rule 4, not rule 8"
+
+new_case agy-denied-error
+play agy 1 --stdout "$(agy_init C; agy_result C ERROR '' "$DENIED_JSON")"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st .outcome)" denied "agy-denied-error: outcome"
+assert_eq "$(st '.attempts[0].rule')" 4 "agy-denied-error: rule 4, not rule 7"
+
+for x in 0 1; do
+    name=agy-error
+    if [ "$x" = 1 ]; then name=agy-error-nonzero; fi
+    new_case "$name"
+    play agy 1 --exit "$x" --stdout "$(agy_init C; agy_result C ERROR '')"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$(st .outcome)" cli_failure "$name: outcome"
+    assert_eq "$(st '.attempts[0].rule')" 7 "$name: rule"
+done
+
+new_case agy-damaged-denied
+play agy 1 --stdout "$(t_agy_denied C; printf '{"event":"resu\n')"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st .outcome)" trace_unreadable "agy-damaged-denied: outcome"
+assert_eq "$(st '.attempts[0].rule')" 9 "agy-damaged-denied: rule 9, not rule 4"
+
+new_case agy-damaged-error
+play agy 1 --stdout "$(agy_init C; agy_result C ERROR ''; printf '{"event":"resu\n')"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st .outcome)" trace_unreadable "agy-damaged-error: outcome"
+assert_eq "$(st '.attempts[0].rule')" 9 "agy-damaged-error: rule 9, not rule 7"
+
+new_case agy-no-result
+play agy 1 --stdout "$(agy_init C; agy_cmd C ls)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st .outcome)" trace_unreadable "agy-no-result: outcome"
+assert_eq "$(st '.attempts[0].rule')" 9 "agy-no-result: rule"
+
+new_case agy-empty
+play agy 1 --stdout "$(t_agy_empty C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st '.attempts[0].verdict')" empty "agy-empty: verdict"
+assert_eq "$(st '.attempts[0].rule')" 12 "agy-empty: rule"
+
+new_case agy-whitespace
+play agy 1 --stdout "$(agy_init C; agy_result C SUCCESS $' \n')"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(st '.attempts[0].verdict')" empty "agy-whitespace: verdict"
+
+new_case agy-last-result
+play agy 1 --stdout "$(agy_init C; agy_result C SUCCESS '' null 9 4 3 2; agy_result C SUCCESS ANSWER null 20 9 6 5)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$(stj .tokens)" '{"duration_seconds":1.5,"input":9,"output":6,"thinking":5,"total":20,"turns":1}' \
+    "agy-last-result: the last result's tokens"
 
 # ---------------------------------------------------------------------------
 # Step 7: the end of the suite.

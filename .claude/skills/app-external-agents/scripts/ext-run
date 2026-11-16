@@ -56,6 +56,11 @@ HAS_ANSWER=0 ANSWER_TEXT=''
     AGY_EXTRA_ARGS=() CODEX_EXTRA_ARGS=() CODEX_WRITE_REFUSED=no
 }
 
+# The start of OpenCode's error for a call that a permission rule denied; the
+# message goes on with the rules. An asked and refused permission has its own
+# text, OC_ASK_REJECT_TEXT.
+OC_RULE_TEXT='The user has specified a rule which prevents you from using this specific tool call'
+
 # Test knobs, with their defaults.
 EXT_RUN_GRACE="${EXT_RUN_GRACE:-10s}"                   # timeout's kill grace; stop_group's wait after TERM
 EXT_RUN_KILL_WAIT="${EXT_RUN_KILL_WAIT:-5s}"            # stop_group's wait after KILL
@@ -75,11 +80,20 @@ shift; exec "$@"'
 
 # Commands and attempts.
 ARGV=() STDIN_FILE=/dev/null  # the next attempt's arguments and standard input
+ARGV_ENV=()                   # NAME=VALUE pairs for the next attempt's environment alone
+CMD_ENV=()                    # the same for the command run_cmd starts; run_attempt sets and clears it
+OC_AGENT=''                   # the OpenCode agent of the next attempt
 PROMPT_FILE=''                # the file the first attempt is given
+TEXT=''                       # what read_text read
+# An agy or OpenCode trace as read_trace and trace_facts left it, for the attempt TRACE_OF.
+TRACE_OF='' T_EVENTS='' T_SKIPPED=0 T_DAMAGED=false
+T_RESULT=false T_STATUS='' T_DENIED_N=0 T_DENIED_TOOLS=''          # agy
+T_LAST='' T_REASON='' T_ERROR_SEEN=false T_ERROR='' T_ASK_REFUSED=false # OpenCode
 GID=''                        # the group read from the gid file
 C_EXIT='' C_WALL='' C_WALL_US=0 C_PGID='' C_SIGNALLED=false       # the last command run_cmd ran
 A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false # the last attempt
 A_ANSWER='' A_REASON='' A_HANDLE_SEEN=''
+EARLIER='' EARLIER_BYTES=null # OpenCode: the last attempt's earlier-text file and its size
 RULE='' VERDICT=''
 NOW=0 US=0 TAIL=() LAST=''
 PROGRESS_TTY=0 PROGRESS_SHOWN=0 PROGRESS_T0=0 PROGRESS_LABEL='' PROGRESS_LIMIT=''
@@ -359,8 +373,12 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     now_us
     t0="$NOW"
     end=$((t0 + START_WAIT_US))
-    setsid -w "$BASH" -c "$START_LINE" ext-run "$gidf" timeout -k "$EXT_RUN_GRACE" "$limit" "$@" \
-        < "$in" > "$out" 2> "$err" &
+    # CMD_ENV is exported in the started job alone, so the variables reach this
+    # command and none of the runner's own.
+    {
+        if [ "${#CMD_ENV[@]}" -gt 0 ]; then export -- "${CMD_ENV[@]}"; fi
+        exec setsid -w "$BASH" -c "$START_LINE" ext-run "$gidf" timeout -k "$EXT_RUN_GRACE" "$limit" "$@"
+    } < "$in" > "$out" 2> "$err" &
     ACTIVE_JOB=$!
     # The command records its group before it may become the CLI.
     until read_gid; do
@@ -724,10 +742,167 @@ codex_probe() { # step 7: codex sandbox true, in a group of its own under the pr
 }
 
 # ---------------------------------------------------------------------------
+# agy and OpenCode: their traces, one JSON event per line of standard output.
+
+read_text() { # file: sets TEXT to its content, trailing newlines included; 1 when it cannot be read
+    local t
+    t="$(cat -- "$1" 2>/dev/null && printf x)" || return 1
+    TEXT="${t%x}"
+}
+
+read_trace() { # file: sets T_EVENTS (a file of the parsed events, one per line), T_SKIPPED and T_DAMAGED
+    local lines="$LOCK/trace.lines" counts
+    T_EVENTS="$LOCK/trace.events" T_SKIPPED=0 T_DAMAGED=false
+    if [ ! -f "$1" ] || [ ! -r "$1" ]; then end_as runner_failure "cannot read the trace $1"; fi
+    # A blank line is ignored; a line whose first non-blank character is not
+    # "{" (a warning a CLI printed) is skipped and counted; a line that begins
+    # with "{" and does not parse is a damaged event.
+    { jq -cR 'if test("^\\s*$") then empty
+              elif test("^\\s*\\{") then (try fromjson catch "damaged")
+              else "skipped" end' < "$1" > "$lines" &&
+        jq -c 'objects' "$lines" > "$T_EVENTS"; } 2>/dev/null ||
+        end_as runner_failure "cannot read the trace $1 into $T_EVENTS"
+    counts="$(jq -rn '[inputs | strings] | "\(map(select(. == "skipped")) | length) \(any(.[]; . == "damaged"))"' \
+        "$lines" 2>/dev/null)" || end_as runner_failure "cannot count the lines of the trace $1"
+    read -r T_SKIPPED T_DAMAGED <<< "$counts"
+}
+
+# jq definitions the trace readers share; each works on the slurped events.
+# g() reads a path and gives null where an event has another shape.
+# shellcheck disable=SC2016  # jq variables
+JQ_TRACE='
+def g(f): try f catch null;
+def text1: (if type == "string" then . elif . == null then "" else tojson end) | gsub("[[:cntrl:]]"; " ");
+def num: if type == "number" then . else 0 end;
+def distinct: reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end);
+
+def agy_result: map(select(.event == "result")) | last;
+def agy_handles: [.[] | g(.conversation_id), g(.result.conversation_id), g(.step_update.conversation_id)
+    | select(type == "string" and . != "")] | distinct | .[];
+def agy_answer: agy_result | g(.result.response) | if type == "string" then . elif . == null then "" else tojson end;
+def agy_denied: agy_result | g(.result.denied_actions) | (if type == "array" then . else [] end)
+    | map({tool: (g(.action) | text1), input: tojson, error: ""});
+def agy_tokens: agy_result | if . == null then null else g(.result) as $x
+    | {total: ($x | g(.usage.total_tokens)), input: ($x | g(.usage.input_tokens)),
+       output: ($x | g(.usage.output_tokens)), thinking: ($x | g(.usage.thinking_tokens)),
+       turns: ($x | g(.num_turns)), duration_seconds: ($x | g(.duration_seconds))} end;
+def agy_reported: {model: (first | g(.init.model) | if type == "string" and . != "" then . else null end), effort: null};
+
+def oc_handles: [.[] | g(.sessionID) | select(type == "string" and . != "")] | distinct | .[];
+def oc_bound: . as $e
+    | [range(0; length) | select($e[.].type == "step_finish" and ($e[.] | g(.part.reason)) == "tool-calls")] | last;
+def oc_texts: . as $e
+    | [range(0; length) | select($e[.].type == "text") | {i: ., t: ($e[.] | g(.part.text))}
+        | select((.t | type) == "string" and .t != "")];
+def oc_answer: oc_bound as $b | oc_texts | map(select($b == null or .i > $b) | .t) | join("\n");
+def oc_earlier: oc_bound as $b | oc_texts | map(select($b != null and .i < $b) | .t) | join("\n");
+def oc_denied($rule; $ask): [.[] | select(.type == "tool_use") | g(.part) | select(type == "object")
+    | select(g(.state.status) == "error")
+    | g(.state.error) as $x
+    | select(($x | type) == "string" and (($x | contains($rule)) or ($ask != "" and ($x | contains($ask)))))
+    | g(.state.input) as $i
+    | {tool: (g(.tool) | text1),
+       input: (if ($i | g(.command) | type) == "string" then $i.command
+               elif ($i | g(.filePath) | type) == "string" then $i.filePath
+               else $i | tojson end),
+       error: $x}];
+def oc_tokens: [.[] | select(.type == "step_finish") | g(.part)]
+    | {total: (map(g(.tokens.total) | num) | add // 0), input: (map(g(.tokens.input) | num) | add // 0),
+       output: (map(g(.tokens.output) | num) | add // 0), reasoning: (map(g(.tokens.reasoning) | num) | add // 0),
+       cached: (map(g(.tokens.cache.read) | num) | add // 0), cost: (map(g(.cost) | num) | add // 0),
+       steps: length};
+'
+
+# Each of these takes the events file.
+agy_handles() { jq -r -s "$JQ_TRACE agy_handles" "$1"; }   # the distinct handles, one per line
+agy_answer() { jq -j -s "$JQ_TRACE agy_answer" "$1"; }     # the last result's response
+agy_tokens() { jq -c -s "$JQ_TRACE agy_tokens" "$1"; }     # the last result's numbers, null without one
+agy_denied() { jq -c -s "$JQ_TRACE agy_denied" "$1"; }     # the last result's denied actions as [{tool, input, error}]
+agy_reported() { jq -c -s "$JQ_TRACE agy_reported" "$1"; } # {model, effort} of the first event
+oc_handles() { jq -r -s "$JQ_TRACE oc_handles" "$1"; }     # the distinct handles, one per line
+oc_answer() { jq -j -s "$JQ_TRACE oc_answer" "$1"; }       # the text after the last tool-calling step
+oc_earlier() { jq -j -s "$JQ_TRACE oc_earlier" "$1"; }     # the text before it
+oc_tokens() { jq -c -s "$JQ_TRACE oc_tokens" "$1"; }       # the sums over the step_finish events
+oc_denied() { # events: the calls a permission denied, as [{tool, input, error}]
+    jq -c -s --arg rule "$OC_RULE_TEXT" --arg ask "$OC_ASK_REJECT_TEXT" "$JQ_TRACE"' oc_denied($rule; $ask)' "$1"
+}
+
+trace_facts() { # sets the T_ facts the classification rules read from T_EVENTS
+    local out f=()
+    # Each program prints one fact per line and then a line ".", so that an
+    # empty last fact survives the command substitution.
+    case "$KIND" in
+        agy)
+            # shellcheck disable=SC2016  # jq variables
+            out="$(jq -r -s "$JQ_TRACE"' agy_result as $r | ($r != null), ($r | g(.result.status) | text1),
+                (agy_denied | length), (agy_denied | map(.tool) | join(", ") | text1), "."' "$T_EVENTS" 2>/dev/null)" &&
+                mapfile -t f <<< "$out" && [ "${#f[@]}" = 5 ] && [ "${f[4]}" = . ] ||
+                end_as runner_failure "cannot read the events in $T_EVENTS"
+            T_RESULT="${f[0]}" T_STATUS="${f[1]}" T_DENIED_N="${f[2]}" T_DENIED_TOOLS="${f[3]}"
+            ;;
+        opencode)
+            # The last step is the events after the step_finish before the last
+            # one; an asked and refused permission in it ends a run with reason
+            # tool-calls, and such a run is not a failure (it gets the resume).
+            # shellcheck disable=SC2016  # jq variables
+            out="$(jq -r -s --arg ask "$OC_ASK_REJECT_TEXT" "$JQ_TRACE"' . as $e | length as $n
+                | [range(0; $n) | select($e[.].type == "step_finish")] as $f | ($f | length) as $k
+                | (if $k > 0 then $e[$f[$k - 1]] | g(.part.reason) else null end) as $reason
+                | (if $k > 0 then $e[(if $k > 1 then $f[$k - 2] + 1 else 0 end):$f[$k - 1]] else [] end) as $step
+                | (map(select(.type == "error")) | first) as $err
+                | (if $n > 0 then $e[$n - 1].type else null end | text1),
+                  ($reason | text1),
+                  ($err != null),
+                  ($err | g(.error) | (if type == "object" then [g(.name), g(.data.message)]
+                      | map(select(type == "string" and . != "")) | join(": ") else . end) | text1 | .[0:300]),
+                  ($reason == "tool-calls" and $ask != "" and any($step[]; .type == "tool_use"
+                      and g(.part.state.status) == "error"
+                      and (g(.part.state.error) | type == "string" and contains($ask)))),
+                  "."' "$T_EVENTS" 2>/dev/null)" &&
+                mapfile -t f <<< "$out" && [ "${#f[@]}" = 6 ] && [ "${f[5]}" = . ] ||
+                end_as runner_failure "cannot read the events in $T_EVENTS"
+            T_LAST="${f[0]}" T_REASON="${f[1]}" T_ERROR_SEEN="${f[2]}" T_ERROR="${f[3]}" T_ASK_REFUSED="${f[4]}"
+            ;;
+    esac
+}
+
+load_trace() { # attempt-base: reads the attempt's trace and its facts, once per attempt
+    if [ "$TRACE_OF" = "$1" ]; then return 0; fi
+    read_trace "$1.stdout"
+    trace_facts
+    TRACE_OF="$1"
+}
+
+agy_copy_prompt() { # step 7: agy-prompt.md, the file agy's first attempt is given; here a plain copy of prompt.md
+    local copy="$RUN_DIR/agy-prompt.md"
+    read_text "$PROMPT_FILE" || end_as runner_failure "cannot read $PROMPT_FILE"
+    { printf '%s' "$TEXT" > "$copy"; } 2>/dev/null || end_as runner_failure "cannot write $copy"
+    PROMPT_FILE="$copy"
+}
+
+agy_configured_model() { # step 7: .model of agy's settings file, the default agy uses without --model; null when it names none
+    local settings="${HOME:-}/.gemini/antigravity-cli/settings.json" m
+    m="$(jq -c -s 'if length == 1 and (.[0] | type) == "object" then .[0].model else error("not one object") end
+        | if type == "string" and . != "" then . else null end' "$settings" 2>/dev/null)" && [ -n "$m" ] ||
+        end_as prerequisite_failed "cannot read agy's settings file $settings"
+    # shellcheck disable=SC2016  # a jq variable
+    st_update '.configured_model = $m' --argjson m "$m"
+}
+
+# ---------------------------------------------------------------------------
 # Attempts: argument vectors, one attempt, classification and its record.
 
-build_first_argv() { # fills ARGV and STDIN_FILE for the first attempt, per "Argument vectors"
+oc_agent_env() { # read|edit: sets OC_AGENT to that level's agent, and ARGV_ENV to its config, unchanged, and the two switches
+    local agent=ext-read file="$SELF_DIR/../opencode/read-agent.json"
+    if [ "$1" = edit ]; then agent=ext-edit file="$SELF_DIR/../opencode/edit-agent.json"; fi
+    read_text "$file" || end_as prerequisite_failed "cannot read the OpenCode agent file $file"
+    ARGV_ENV=("OPENCODE_CONFIG_CONTENT=$TEXT" OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1)
+    OC_AGENT="$agent"
+}
+
+build_first_argv() { # fills ARGV, ARGV_ENV and STDIN_FILE for the first attempt, per "Argument vectors"
     local sandbox=read-only
+    ARGV_ENV=()
     case "$KIND" in
         codex)
             if [ "$LEVEL" = edit ]; then sandbox=workspace-write; fi
@@ -737,7 +912,22 @@ build_first_argv() { # fills ARGV and STDIN_FILE for the first attempt, per "Arg
             ARGV+=("${CODEX_EXTRA_ARGS[@]}" -)
             STDIN_FILE="$RUN_DIR/prompt.md"
             ;;
-        *) end_as runner_failure "not implemented" ;;
+        agy)
+            read_text "$PROMPT_FILE" || end_as runner_failure "cannot read $PROMPT_FILE"
+            ARGV=(-p "$TEXT" --output-format stream-json)
+            if [ "$LEVEL" = edit ]; then ARGV+=(--mode accept-edits); fi
+            if [ -n "$MODEL" ]; then ARGV+=(--model "$MODEL"); fi
+            ARGV+=("${AGY_EXTRA_ARGS[@]}")
+            STDIN_FILE=/dev/null
+            ;;
+        opencode)
+            oc_agent_env "$LEVEL"
+            read_text "$PROMPT_FILE" || end_as runner_failure "cannot read $PROMPT_FILE"
+            ARGV=(run --pure --agent "$OC_AGENT" --model "$OC_MODEL")
+            if [ -n "$EFFORT" ]; then ARGV+=(--variant "$EFFORT"); fi
+            ARGV+=(--format json "$TEXT")
+            STDIN_FILE=/dev/null
+            ;;
     esac
 }
 
@@ -780,7 +970,9 @@ run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; 
     now_us
     PROGRESS_T0="$NOW" PROGRESS_LABEL="$PREFIX $1" PROGRESS_LIMIT="$3"
     POLL_HOOK=attempt_poll
+    CMD_ENV=("${ARGV_ENV[@]}")
     run_cmd "$3" "$base.stdout" "$base.stderr" "$STDIN_FILE" "$PROGRAM" "${ARGV[@]}"
+    CMD_ENV=()
     POLL_HOOK=''
     progress_clear
     A_EXIT="$C_EXIT" A_WALL="$C_WALL" A_PGID="$C_PGID" A_SIGNALLED="$C_SIGNALLED" A_DEADLINE=false
@@ -796,15 +988,22 @@ run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; 
     esac
 }
 
+# For agy and OpenCode the three below read the trace that load_trace loaded;
+# the callers load it in the main shell first, so a call in a subshell finds it.
+
 attempt_handles() { # attempt-base: the distinct handles in the attempt's files, one per line
     case "$KIND" in
         codex) codex_handles "$1.stderr" ;;
+        agy) load_trace "$1" && agy_handles "$T_EVENTS" ;;
+        opencode) load_trace "$1" && oc_handles "$T_EVENTS" ;;
     esac
 }
 
 attempt_answer() { # attempt-base: prints the attempt's answer
     case "$KIND" in
         codex) codex_answer "$1.stdout" ;;
+        agy) load_trace "$1" && agy_answer "$T_EVENTS" ;;
+        opencode) load_trace "$1" && oc_answer "$T_EVENTS" ;;
     esac
 }
 
@@ -815,7 +1014,8 @@ attempt_tokens() { # attempt-base: the attempt's tokens as compact JSON
             t="$(codex_tokens "$1.stderr")"
             jq -cn --arg t "$t" '{reported: (if $t == "" then null else ($t | tonumber) end)}'
             ;;
-        *) printf 'null\n' ;;
+        agy) load_trace "$1" && agy_tokens "$T_EVENTS" ;;
+        opencode) load_trace "$1" && oc_tokens "$T_EVENTS" ;;
     esac
 }
 
@@ -833,6 +1033,7 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
         RULE=1 VERDICT=cancelled
         return
     fi
+    if [ "$KIND" != codex ]; then load_trace "$base"; fi
     # A later attempt is passed the handle and must not report another; one
     # that starts afresh is passed none, and no handle in its files is no conflict.
     if [ "$1" != first ] && [ -n "$HANDLE" ]; then
@@ -847,19 +1048,50 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
         RULE=3 VERDICT=limit
         return
     fi
-    # Rule 4 reads agy's trace (denied actions).
+    # Rules 4, 6 and 7 read the trace, so a damaged one leaves them to rule 8 or 9.
+    if [ "$KIND" = agy ] && [ "$T_DAMAGED" = false ] && [ "$T_DENIED_N" -gt 0 ]; then
+        RULE=4 VERDICT=denied A_REASON="agy ended on denied actions: $T_DENIED_TOOLS"
+        return
+    fi
     if [ "$A_EXIT" != 0 ] && usage_limit_seen "$base"; then
         RULE=5 VERDICT=usage_limit
         return
     fi
-    # Rules 6 and 7 read OpenCode's and agy's traces (an error event, a result that is not SUCCESS).
+    if [ "$KIND" = opencode ] && [ "$T_DAMAGED" = false ] && [ "$T_ERROR_SEEN" = true ]; then
+        RULE=6 VERDICT=cli_failure A_REASON="opencode reported an error${T_ERROR:+: $T_ERROR}"
+        return
+    fi
+    if [ "$KIND" = agy ] && [ "$T_DAMAGED" = false ] && [ "$T_RESULT" = true ] && [ "$T_STATUS" != SUCCESS ]; then
+        RULE=7 VERDICT=cli_failure A_REASON="agy's result has status ${T_STATUS:-(none)}"
+        return
+    fi
     if [ "$A_EXIT" != 0 ]; then
         last_line "$base.stderr"
         RULE=8 VERDICT=cli_failure A_REASON="$LAST"
         return
     fi
-    # Rules 9 and 10 read the traces (unreadable, an OpenCode last step that is not stop).
-    A_ANSWER="$(attempt_answer "$base")"
+    if [ "$KIND" != codex ]; then
+        if [ "$T_DAMAGED" = true ]; then
+            A_REASON="a line of the trace that begins with { is not valid JSON: $base.stdout"
+        elif [ "$KIND" = agy ] && [ "$T_RESULT" = false ]; then
+            A_REASON="agy's trace has no result event: $base.stdout"
+        elif [ "$KIND" = opencode ] && [ "$T_LAST" != step_finish ]; then
+            A_REASON="opencode's trace does not end with a step_finish event: $base.stdout"
+        fi
+        if [ -n "$A_REASON" ]; then
+            RULE=9 VERDICT=trace_unreadable
+            return
+        fi
+    fi
+    # A permission asked and refused ends OpenCode's run after a tool-calling
+    # step; that is no failure, the answer is merely missing (rules 11 and 12).
+    if [ "$KIND" = opencode ] && [ "$T_REASON" != stop ] && [ "$T_ASK_REFUSED" = false ]; then
+        RULE=10 VERDICT=cli_failure A_REASON="opencode's last step ended with reason ${T_REASON:-(none)}"
+        return
+    fi
+    if ! A_ANSWER="$(attempt_answer "$base")" && [ "$KIND" != codex ]; then
+        end_as runner_failure "cannot read the answer in the events $T_EVENTS"
+    fi
     if [[ $A_ANSWER == *[![:space:]]* ]]; then
         RULE=11 VERDICT=answered
     else
@@ -867,40 +1099,79 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
     fi
 }
 
+write_earlier() { # phase n: OpenCode's text from the attempt's earlier steps to <p>.<ph><n>.earlier.txt when there is any; sets EARLIER and EARLIER_BYTES
+    local name="$PREFIX.$1$2.earlier.txt" t b
+    EARLIER='' EARLIER_BYTES=null
+    t="$(oc_earlier "$T_EVENTS" && printf x)" || end_as runner_failure "cannot read the earlier text in $T_EVENTS"
+    t="${t%x}"
+    [ -n "$t" ] || return 0
+    { printf '%s' "$t" > "$RUN_DIR/$name"; } 2>/dev/null || end_as runner_failure "cannot write $RUN_DIR/$name"
+    b="$(wc -c < "$RUN_DIR/$name" 2>/dev/null)"
+    b="${b//[[:space:]]/}"
+    case "$b" in '' | *[!0-9]*) end_as runner_failure "cannot read the size of $RUN_DIR/$name" ;; esac
+    EARLIER="$name" EARLIER_BYTES="$b"
+}
+
 record_attempt() { # phase n: appends the classified attempt to the status object; sets A_HANDLE_SEEN
-    local base="$RUN_DIR/$PREFIX.$1$2" h count=0 tok
+    local base="$RUN_DIR/$PREFIX.$1$2" h count=0 tok skipped=null den='[]'
+    EARLIER='' EARLIER_BYTES=null
+    if [ "$KIND" != codex ]; then
+        load_trace "$base"
+        skipped="$T_SKIPPED"
+    fi
     A_HANDLE_SEEN=''
     while IFS= read -r h; do
         A_HANDLE_SEEN="$h"
         count=$((count + 1))
     done < <(attempt_handles "$base")
     if [ "$count" != 1 ]; then A_HANDLE_SEEN=''; fi
-    tok="$(attempt_tokens "$base")"
+    tok="$(attempt_tokens "$base")" || end_as runner_failure "cannot read the tokens of attempt $1$2"
+    case "$KIND" in
+        agy) den="$(agy_denied "$T_EVENTS")" || end_as runner_failure "cannot read the denied actions in $T_EVENTS" ;;
+        opencode)
+            den="$(oc_denied "$T_EVENTS")" || end_as runner_failure "cannot read the denied calls in $T_EVENTS"
+            write_earlier "$1" "$2"
+            ;;
+    esac
+    # Run totals: Codex lists each attempt's number; agy reports a
+    # conversation's running total, so the last attempt that has tokens holds
+    # it; OpenCode's are summed field by field.
     # shellcheck disable=SC2016  # jq variables
     st_update '.attempts += [{phase: $ph, n: $n, fresh: false, pgid: $pgid, exit: $exit, wall: $wall,
             deadline_expired: $dl, signalled: $sig, rule: $rule, verdict: $verdict,
             handle_seen: (if $hs == "" then null else $hs end), tokens: $tok,
-            skipped_lines: null, earlier_text: null, earlier_text_bytes: null, denied: []}]
-        | if .kind == "codex" then .tokens.reported += [$tok.reported] else . end' \
+            skipped_lines: $skipped, earlier_text: (if $et == "" then null else $et end),
+            earlier_text_bytes: $eb, denied: $den}]
+        | if .kind == "codex" then .tokens.reported += [$tok.reported]
+          elif .kind == "agy" then .tokens = ([.attempts[].tokens | select(. != null)] | last)
+          else .tokens = ([.attempts[].tokens | select(. != null)]
+              | if length == 0 then null
+                else reduce .[] as $t ({}; reduce ($t | keys_unsorted[]) as $k (.; .[$k] += $t[$k])) end)
+          end
+        | .denied += ($den | map({attempt: ($ph + ($n | tostring))} + .))' \
         --arg ph "$1" --argjson n "$2" --argjson pgid "$A_PGID" --argjson exit "$A_EXIT" \
         --argjson wall "$A_WALL" --argjson dl "$A_DEADLINE" --argjson sig "$A_SIGNALLED" \
-        --argjson rule "$RULE" --arg verdict "$VERDICT" --arg hs "$A_HANDLE_SEEN" --argjson tok "$tok"
+        --argjson rule "$RULE" --arg verdict "$VERDICT" --arg hs "$A_HANDLE_SEEN" --argjson tok "$tok" \
+        --argjson skipped "$skipped" --arg et "$EARLIER" --argjson eb "$EARLIER_BYTES" --argjson den "$den"
 }
 
 take_session() { # phase n: the handle and what the CLI reported, from the attempt that created the session
-    local r
+    local r base="$RUN_DIR/$PREFIX.$1$2"
     if [ -n "$A_HANDLE_SEEN" ]; then
         HANDLE="$A_HANDLE_SEEN"
         # shellcheck disable=SC2016  # a jq variable
         st_update '.handle = $h' --arg h "$HANDLE"
     fi
     case "$KIND" in
-        codex)
-            r="$(codex_reported "$RUN_DIR/$PREFIX.$1$2.stderr")"
-            # shellcheck disable=SC2016  # a jq variable
-            st_update '.reported = $r' --argjson r "$r"
+        codex) r="$(codex_reported "$base.stderr")" ;;
+        agy)
+            load_trace "$base"
+            r="$(agy_reported "$T_EVENTS")" || end_as runner_failure "cannot read the first event in $T_EVENTS"
             ;;
+        *) return 0 ;;
     esac
+    # shellcheck disable=SC2016  # a jq variable
+    st_update '.reported = $r' --argjson r "$r"
 }
 
 end_with_verdict() { # ends the run under the verdict of the attempt just classified
@@ -913,7 +1184,11 @@ end_with_verdict() { # ends the run under the verdict of the attempt just classi
         limit) end_as limit "the time limit of $LIMIT was reached without an answer" ;;
         empty) end_as empty "$KIND ended without an answer" ;;
         usage_limit) end_as usage_limit "${A_REASON#ERROR: }" ;;
-        cli_failure) end_as cli_failure "$KIND exited with status $A_EXIT${A_REASON:+: $A_REASON}" ;;
+        cli_failure)
+            # Rule 8 is the exit status; rules 6, 7 and 10 name what the trace said.
+            if [ "$RULE" = 8 ]; then end_as cli_failure "$KIND exited with status $A_EXIT${A_REASON:+: $A_REASON}"; fi
+            end_as cli_failure "$A_REASON"
+            ;;
         *) end_as "$VERDICT" "${A_REASON:-classified by rule $RULE}" ;;
     esac
 }
@@ -931,9 +1206,10 @@ do_run() {
     [ -n "$PROGRAM" ] || end_as missing_cli "$KIND is not on PATH"
     case "$KIND" in
         codex) codex_probe ;;
-        *) end_as runner_failure "not implemented" ;;
+        agy) agy_copy_prompt ;;
     esac
     take_prompt_sum
+    if [ "$KIND" = agy ]; then agy_configured_model; fi
     # Step 8: the first attempt.
     build_first_argv
     PHASE=first
