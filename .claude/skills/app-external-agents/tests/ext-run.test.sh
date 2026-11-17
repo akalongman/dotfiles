@@ -3221,12 +3221,13 @@ assert_nofile "$RUN/qwen.status" "boundary-git-hangs: no status"
 
 # A git that answers with a failure is a usage error, not a missing prerequisite.
 new_case boundary-git-fails
-mk_tool "$CASE/failgit/git" <<< 'exit 1'
+mk_tool "$CASE/failgit/git" <<< "echo 'fatal: VARS-REASON' >&2; exit 1"
 EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
 answering qwen 1
 ext run --cli qwen --run-dir "$RUN"
 assert_eq "$rc" 64 "boundary-git-fails: rc"
 assert_contains "$ERR" "--local-env-vars" "boundary-git-fails: the message names the query"
+assert_contains "$ERR" "fatal: VARS-REASON" "boundary-git-fails: git's reason"
 assert_eq "$(ncalls qwen)" 0 "boundary-git-fails: no call"
 assert_nofile "$RUN/qwen.status" "boundary-git-fails: no status"
 
@@ -3270,6 +3271,7 @@ answering qwen 1
 ext run --cli qwen --run-dir "$RUN"
 assert_eq "$rc" 64 "boundary-unknown: rc"
 assert_contains "$ERR" "cannot tell the project boundary" "boundary-unknown: message"
+assert_contains "$ERR" "(fatal: " "boundary-unknown: git's own reason"
 assert_eq "$(ncalls qwen)" 0 "boundary-unknown: no call"
 assert_nofile "$RUN/qwen.status" "boundary-unknown: no status"
 
@@ -3672,6 +3674,31 @@ assert_eq "$rc" 0 "snap-no-helper: rc"
 assert_line "$(cat "$RUN/before.diff" 2>/dev/null)" '+changed' "snap-no-helper: before.diff"
 assert_nofile "$CASE/helper-ran" "snap-no-helper: the snapshot ran no diff helper"
 
+# The snapshot is plain text of the whole work tree, whatever the project's
+# configuration says about colour and relative diffs; the run starts in a
+# subdirectory, and the changes lie inside and outside it.
+new_case snap-plain
+git -C "$WORK" config color.ui always
+git -C "$WORK" config color.status always
+git -C "$WORK" config color.diff always
+git -C "$WORK" config diff.relative true
+mkdir "$WORK/sub"
+echo inside > "$WORK/sub/f"
+git -C "$WORK" add sub/f
+git -C "$WORK" commit -q -m sub
+echo changed >> "$WORK/README.md"
+echo more >> "$WORK/sub/f"
+WORK="$CASE/work/sub"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 0 "snap-plain: rc"
+assert_eq "$(LC_ALL=C grep -c $'\033' "$RUN/before.txt" "$RUN/before.diff" 2>&1)" \
+    "$RUN/before.txt:0"$'\n'"$RUN/before.diff:0" "snap-plain: no escape sequence in either file"
+assert_line "$(cat "$RUN/before.txt" 2>/dev/null)" ' M ../README.md' "snap-plain: before.txt, the change outside the directory"
+assert_line "$(cat "$RUN/before.txt" 2>/dev/null)" ' M f' "snap-plain: before.txt, the change inside it"
+assert_line "$(cat "$RUN/before.diff" 2>/dev/null)" '+changed' "snap-plain: before.diff, the change outside the directory"
+assert_line "$(cat "$RUN/before.diff" 2>/dev/null)" '+more' "snap-plain: before.diff, the change inside it"
+
 new_case snap-kept-by-continue
 ul_first_run
 assert_file "$RUN/before.diff" "snap-kept-by-continue: the run wrote before.diff"
@@ -3726,7 +3753,7 @@ assert_eq "$(ncalls codex)" 0 "snap-git-vars-fail: no call"
 
 new_case snap-status-fails
 mk_tool "$CASE/failgit/git" <<'EOF'
-case " $* " in *' status '*) exit 1 ;; esac
+case " $* " in *' status '*) echo 'fatal: STATUS-REASON' >&2; exit 1 ;; esac
 exec "$BIN_ROOT/utils/git" "$@"
 EOF
 EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
@@ -3735,7 +3762,39 @@ ext run --cli codex --run-dir "$RUN" --level edit
 assert_eq "$rc" 18 "snap-status-fails: rc"
 assert_eq "$(st .outcome)" prerequisite_failed "snap-status-fails: outcome"
 assert_contains "$(st .message)" "git status" "snap-status-fails: the query named"
+assert_contains "$(st .message)" "fatal: STATUS-REASON" "snap-status-fails: git's reason"
 assert_eq "$(ncalls codex)" 0 "snap-status-fails: no call"
+
+# The snapshot's later queries: a failing look at HEAD, or a failing diff,
+# ends the run as a missing prerequisite with git's own reason, before the
+# CLI starts.
+new_case snap-verify-fails
+mk_tool "$CASE/failgit/git" <<'EOF'
+case " $* " in *' --verify '*) echo 'fatal: VERIFY-REASON' >&2; exit 128 ;; esac
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 18 "snap-verify-fails: rc"
+assert_eq "$(st .outcome)" prerequisite_failed "snap-verify-fails: outcome"
+assert_contains "$(st .message)" "git rev-parse --verify HEAD failed with status 128" "snap-verify-fails: the query named"
+assert_contains "$(st .message)" "fatal: VERIFY-REASON" "snap-verify-fails: git's reason"
+assert_eq "$(ncalls codex)" 0 "snap-verify-fails: no call"
+
+new_case snap-diff-fails
+mk_tool "$CASE/failgit/git" <<'EOF'
+case " $* " in *' diff '*) echo 'fatal: DIFF-REASON' >&2; exit 128 ;; esac
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 18 "snap-diff-fails: rc"
+assert_eq "$(st .outcome)" prerequisite_failed "snap-diff-fails: outcome"
+assert_contains "$(st .message)" "git diff failed with status 128" "snap-diff-fails: the query named"
+assert_contains "$(st .message)" "fatal: DIFF-REASON" "snap-diff-fails: git's reason"
+assert_eq "$(ncalls codex)" 0 "snap-diff-fails: no call"
 
 # ---------------------------------------------------------------------------
 # Signals, the live status, failed writes, and concurrency. Every case here

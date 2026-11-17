@@ -49,6 +49,7 @@ PROTECTED=() PROTECTED_READ=0 # the protected directories, canonical, listed onc
 HOME_CANON='' VAR_TMP_CANON=''
 GIT_VARS=() GIT_VARS_READ=0   # the variables git lists as local to a repository, read once per invocation; unset for every git query and OpenCode command
 GIT_OUT='' GIT_RC=0           # what the last git query printed, and its status
+GIT_ERR=''                    # what it wrote on standard error, on one line, for a message
 OC_CONFIG=''                  # the config the next OpenCode attempt is given
 # agy: its settings, read and never changed, and the prompt copy built from them.
 AGY_SETTINGS="${HOME:-}/.gemini/antigravity-cli/settings.json"
@@ -130,7 +131,7 @@ CONT_N=0                      # the number of this invocation's continue attempt
 SIZE=0 SUM=''                 # what byte_size and file_sum found
 EARLIER='' EARLIER_BYTES=null # OpenCode: the last attempt's earlier-text file and its size
 RULE='' VERDICT=''
-NOW=0 US=0 TAIL=() LAST=''
+NOW=0 US=0 TAIL=() LAST='' ONE_LINE=''
 PROGRESS_TTY=0 PROGRESS_SHOWN=0 PROGRESS_T0=0 PROGRESS_LABEL='' PROGRESS_LIMIT=''
 
 case "${BASH_SOURCE[0]}" in
@@ -224,6 +225,13 @@ last_line() { # file: sets LAST to its last line that is not blank, made fit for
     tail_lines "$1"
     if [ "${#TAIL[@]}" -gt 0 ]; then LAST="${TAIL[-1]//[[:cntrl:]]/ }"; fi
     LAST="${LAST:0:300}"
+}
+
+one_line() { # text: sets ONE_LINE to its words joined by single spaces, at most 300 characters, fit for a one-line message
+    local w=()
+    read -r -d '' -a w <<< "${1//[[:cntrl:]]/ }"
+    ONE_LINE="${w[*]}"
+    ONE_LINE="${ONE_LINE:0:300}"
 }
 
 outcome_code() { # outcome: sets CODE to its exit status
@@ -903,17 +911,19 @@ take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt a
     # Each file is made first, so that a failed write is told apart from a
     # failed query; git then writes into it.
     { : > "$txt"; } 2>/dev/null || end_as runner_failure "cannot write $txt"
-    own_git -o "$txt" "$CWD" status --short -uall ||
-        end_as prerequisite_failed "git status failed with status $GIT_RC in $CWD, so no before snapshot was taken"
+    # Colour is off and the diff is not limited to the working directory,
+    # whatever the project's configuration says.
+    own_git -o "$txt" "$CWD" -c color.status=false status --short -uall ||
+        end_as prerequisite_failed "git status failed with status $GIT_RC in $CWD${GIT_ERR:+ ($GIT_ERR)}, so no before snapshot was taken"
     { : > "$dif"; } 2>/dev/null || end_as runner_failure "cannot write $dif"
     own_git "$CWD" rev-parse --verify --quiet HEAD
     case "$GIT_RC" in
         0)
-            own_git -o "$dif" "$CWD" diff --no-ext-diff --no-textconv HEAD ||
-                end_as prerequisite_failed "git diff failed with status $GIT_RC in $CWD, so before.diff is incomplete"
+            own_git -o "$dif" "$CWD" diff --no-ext-diff --no-textconv --no-color --no-relative HEAD ||
+                end_as prerequisite_failed "git diff failed with status $GIT_RC in $CWD${GIT_ERR:+ ($GIT_ERR)}, so before.diff is incomplete"
             ;;
         1) note "no commit yet: before.diff is empty" ;;
-        *) end_as prerequisite_failed "git rev-parse --verify HEAD failed with status $GIT_RC in $CWD, so before.diff is incomplete" ;;
+        *) end_as prerequisite_failed "git rev-parse --verify HEAD failed with status $GIT_RC in $CWD${GIT_ERR:+ ($GIT_ERR)}, so before.diff is incomplete" ;;
     esac
 }
 
@@ -1220,11 +1230,18 @@ agy_configured_model() { # step 7: .model of agy's settings file, the default ag
 git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repository, read once per invocation under the bound of the queries
     local out v
     [ "$GIT_VARS_READ" = 0 ] || return 0
+    # git's standard output and its status come back through one command
+    # substitution, its standard error, on one line, between them.
     out="$(
-        timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git rev-parse --local-env-vars < /dev/null 2>/dev/null
-        printf '\n%s' "$?"
+        exec 3>&1
+        err="$(timeout -k "$EXT_RUN_GRACE" "$EXT_RUN_PREFLIGHT_LIMIT" git rev-parse --local-env-vars < /dev/null 2>&1 >&3 3>&-)"
+        rc=$?
+        one_line "$err"
+        printf '\n%s\n%s' "$ONE_LINE" "$rc"
     )"
     GIT_RC="${out##*$'\n'}"
+    out="${out%$'\n'*}"
+    GIT_ERR="${out##*$'\n'}"
     out="${out%$'\n'*}"
     # A signal that arrived during the call decides, whatever its status.
     end_if_cancelled "during a git query (git rev-parse --local-env-vars)"
@@ -1238,9 +1255,9 @@ git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repo
         126 | 127) end_as prerequisite_failed "git cannot be run: git rev-parse --local-env-vars ended with status $GIT_RC (not found, or not executable)" ;;
         *)
             if [ "$OWNS_STATUS" = 1 ]; then
-                end_as prerequisite_failed "git rev-parse --local-env-vars failed with status $GIT_RC"
+                end_as prerequisite_failed "git rev-parse --local-env-vars failed with status $GIT_RC${GIT_ERR:+ ($GIT_ERR)}"
             fi
-            end_as usage_error "git rev-parse --local-env-vars failed with status $GIT_RC"
+            end_as usage_error "git rev-parse --local-env-vars failed with status $GIT_RC${GIT_ERR:+ ($GIT_ERR)}"
             ;;
     esac
     GIT_VARS=()
@@ -1253,7 +1270,7 @@ git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repo
     GIT_VARS_READ=1
 }
 
-own_git() { # [-o file] dir args...: one git query about dir, bounded, with the repository variables unset; sets GIT_OUT and GIT_RC, returns GIT_RC. With -o, git's standard output goes to the file, byte for byte, and GIT_OUT is empty
+own_git() { # [-o file] dir args...: one git query about dir, bounded, with the repository variables unset; sets GIT_OUT, GIT_ERR and GIT_RC, returns GIT_RC. With -o, git's standard output goes to the file, byte for byte, and GIT_OUT is empty
     local to='' dir out cmd
     if [ "$1" = -o ]; then
         to="$2"
@@ -1270,16 +1287,23 @@ own_git() { # [-o file] dir args...: one git query about dir, bounded, with the 
         -c core.fsmonitor=false -c diff.autoRefreshIndex=false -C "$dir" "$@")
     # git runs in the foreground of this command substitution, so a signal to
     # the runner is handled once the query has returned.
+    # Its standard error comes back on one line between its output and its
+    # status, so that a failure can give git's own reason.
     out="$(
         if [ "${#GIT_VARS[@]}" -gt 0 ]; then unset -v "${GIT_VARS[@]}"; fi
+        exec 3>&1
         if [ -n "$to" ]; then
-            "${cmd[@]}" < /dev/null 2>/dev/null > "$to"
+            err="$("${cmd[@]}" < /dev/null 2>&1 > "$to" 3>&-)"
         else
-            "${cmd[@]}" < /dev/null 2>/dev/null
+            err="$("${cmd[@]}" < /dev/null 2>&1 >&3 3>&-)"
         fi
-        printf '\n%s' "$?"
+        rc=$?
+        one_line "$err"
+        printf '\n%s\n%s' "$ONE_LINE" "$rc"
     )"
     GIT_RC="${out##*$'\n'}"
+    out="${out%$'\n'*}"
+    GIT_ERR="${out##*$'\n'}"
     GIT_OUT="${out%$'\n'*}"
     # A signal that arrived during the query decides, whatever its status.
     end_if_cancelled "during a git query (git $* in $dir)"
@@ -1305,7 +1329,7 @@ project_boundary() { # dir: sets BOUNDARY to the top of the git work tree that h
     d="$CANON"
     while :; do
         if [ -e "$d/.git" ] || [ -L "$d/.git" ]; then
-            end_as usage_error "cannot tell the project boundary of $1: git rev-parse --show-toplevel exited with status $GIT_RC there, and ${d%/}/.git exists"
+            end_as usage_error "cannot tell the project boundary of $1: git rev-parse --show-toplevel exited with status $GIT_RC there${GIT_ERR:+ ($GIT_ERR)}, and ${d%/}/.git exists"
         fi
         [ "$d" != / ] || break
         d="${d%/*}"
@@ -1412,8 +1436,7 @@ check_context() { # level cwd [dirs...]: the OpenCode validation; sets ALLOW_CAN
     done
     # Every OpenCode invocation passes here before its first command, a run in
     # step 3 and a continue in step 5, so the list run_cmd unsets for OpenCode
-    # is read by then (project_boundary's query would read it too).
-    git_local_vars
+    # is read by then: project_boundary's query, through own_git, reads it.
     project_boundary "$cwd"
     load_protected
     if within "$HOME_CANON" "$BOUNDARY"; then
