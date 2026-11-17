@@ -231,7 +231,7 @@ make_run() { # dir: a run directory as new_case makes it
     mkdir "$1" && printf 'PROMPT' > "$1/prompt.md"
 }
 
-which_on() { # path name [dir]: prints the file the name resolves to (its directory canonical); 1 when none, 2 on a bad PATH
+which_on() { # path name [dir]: prints the file the name resolves to, canonical (a link to it resolved); 1 when none, 2 on a bad PATH
     # A relative element is let through only when it leads from dir, where
     # the runner starts, to the case's fakes; any other is a bad PATH. A
     # continue looks the CLI up in its recorded directory, so a case with
@@ -250,8 +250,8 @@ which_on() { # path name [dir]: prints the file the name resolves to (its direct
                 ;;
         esac
         if [ -f "$d/$2" ] && [ -x "$d/$2" ]; then
-            c="$(cd "$d" && pwd -P)" || return 2
-            printf '%s\n' "$c/$2"
+            c="$(realpath -e -- "$d/$2")" || return 2
+            printf '%s\n' "$c"
             return 0
         fi
     done
@@ -290,6 +290,7 @@ check_fakes() { # stops the suite unless the three names resolve to the fakes on
 }
 
 new_case() { # name
+    local n d
     unset EXT_PATH EXT_CWD EXT_RUNNER PRE_LIMIT
     EXT_VARS=()
     BGN=0 BG=''
@@ -385,10 +386,13 @@ ext_prefix() { # args...: PREFIX from the --cli value, derived as the runner der
         fi
         shift
     done
+    PREFIX=""
     case "$cli" in
         codex | agy | deepseek | kimi | qwen) PREFIX="$cli" ;;
-        */*) PREFIX="${cli//\//-}" ;;
-        *) PREFIX="" ;;
+        *)
+            # A full model id, as the runner's valid_model_id accepts it.
+            if [[ $cli =~ ^[A-Za-z0-9][A-Za-z0-9._:@+-]*(/[A-Za-z0-9._:@+-]+)+$ ]]; then PREFIX="${cli//\//-}"; fi
+            ;;
     esac
 }
 
@@ -832,6 +836,30 @@ EXT_PATH="$CASE/real:$CASE/bin:$BIN_ROOT/utils"
 (ext run --cli codex --run-dir "$RUN") > /dev/null 2>&1
 assert_eq "$?" 2 "the suite stops on such a PATH"
 assert_eq "$([ -e "$CASE/real-ran" ] && echo ran || echo no)" no "the planted program did not run"
+
+# the same when the name in the case's bin is a link to a program elsewhere
+new_case path-guard-link
+mkdir "$CASE/real"
+printf '#!/bin/sh\n: > "%s/real-ran"\n' "$CASE" > "$CASE/real/codex"
+chmod +x "$CASE/real/codex"
+rm "$CASE/bin/codex"
+ln -s "$CASE/real/codex" "$CASE/bin/codex"
+(ext run --cli codex --run-dir "$RUN") > /dev/null 2>&1
+assert_eq "$?" 2 "path-guard-link: the suite stops on such a link"
+assert_eq "$([ -e "$CASE/real-ran" ] && echo ran || echo no)" no "path-guard-link: the planted program did not run"
+
+# new_case keeps its own loop variables, so a case's loop may use any name
+n=N d=D
+new_case new-case-locals
+assert_eq "$n $d" "N D" "new_case leaves n and d as they were"
+
+# ext_prefix derives the prefix the runner names in its summary, and none for
+# a --cli value the runner refuses (each run stops at the bad --level)
+new_case ext-prefix-as-runner
+for v in codex qwen a/b x.y/z-1 x/ a//b /x 'a b/c' nope; do
+    ext run --cli "$v" --run-dir "$RUN" --level bogus
+    assert_eq "${PREFIX:-ext-run}" "${OUT%%: *}" "ext-prefix-as-runner: --cli '$v'"
+done
 
 # an inherited git environment does not reach a fixture
 CASE_NAME=frame
@@ -3262,7 +3290,6 @@ new_case refuse-pattern
 mkdir -p "$CASE/out/star*"
 refused 'pattern character' "$CASE/out/star*"
 
-# (new_case sets d and n, so these loops use other names.)
 for b in / /tmp /home /var/tmp home parent-of-home; do
     new_case "refuse-broad-${b//\//_}"
     case "$b" in
@@ -3598,7 +3625,8 @@ assert_nofile "$RUN/before.diff" "snap-no-git: no before.diff"
 assert_contains "$(st .message)" "not a git repository" "snap-no-git: message"
 
 # The snapshot leaves the project's index alone, also when it is stale (a file
-# touched without a change): git status would otherwise refresh and rewrite it.
+# touched without a change): git status and git diff would otherwise refresh
+# and rewrite it.
 new_case snap-index-untouched
 touch -d @1000000000 "$WORK/README.md"
 keep "$WORK/.git/index"
@@ -4395,9 +4423,18 @@ new_case skill-outcomes; ext outcomes
 doc="$(awk -F'|' '/^\| `[a-z_]+` \| [0-9]+ \|/ { n = $2; c = $3; gsub(/[ `]/, "", n); gsub(/ /, "", c); print n "\t" c }' "$SKILL/SKILL.md")"
 assert_eq "$doc" "$OUT" "SKILL.md's outcome table equals ext-run outcomes"
 
+fenced_lines() { # file: the lines of its fenced blocks, indented or not, each without its indent; a line that ends in a backslash joined with the next
+    awk '/^[ \t]*```/ { f = !f; next }
+  f { sub(/^[ \t]+/, ""); if (sub(/\\$/, "")) { buf = buf $0 " "; next } print buf $0; buf = "" }' "$1"
+}
+
+# fenced_lines also reads a fence that is indented, as one in a list item is
+new_case fenced-lines
+printf '%s\n' 'Text.' '```' 'ext-run outcomes' '```' '- An item:' '' '   ```' '   codex exec x' '   ```' > "$CASE/sample.md"
+assert_eq "$(fenced_lines "$CASE/sample.md")" $'ext-run outcomes\ncodex exec x' "fenced-lines: both blocks"
+
 # every command line SKILL.md shows is one the runner accepts, for every CLI the line is written for
-mapfile -t shown < <(awk '/^```/ { f = !f; next }
-  f { if (sub(/\\$/, "")) { buf = buf $0 " "; next } print buf $0; buf = "" }' "$SKILL/SKILL.md")
+mapfile -t shown < <(fenced_lines "$SKILL/SKILL.md")
 nrun=0; ncont=0; i=0; raw=()   # raw is filled by the eval below
 for line in "${shown[@]}"; do
   case "$line" in
