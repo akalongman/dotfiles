@@ -497,6 +497,11 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     if [ -e "$gidf" ] || [ -L "$gidf" ] || [ -e "$gidf.go" ] || [ -L "$gidf.go" ]; then
         end_as runner_failure "cannot clear $gidf before starting $what"
     fi
+    # The command's output files are made here, so that one that cannot be
+    # written is named as such; the job's own redirection would fail before
+    # the start and look like a start that recorded no group.
+    { : > "$out"; } 2>/dev/null || end_as runner_failure "cannot write $out"
+    { : > "$err"; } 2>/dev/null || end_as runner_failure "cannot write $err"
     # An OpenCode command is started without git's repository variables, so
     # that OpenCode's own repository discovery finds the work tree
     # check_context checked, not one the caller's environment points at.

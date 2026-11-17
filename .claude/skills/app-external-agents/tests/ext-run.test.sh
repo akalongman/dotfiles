@@ -3609,6 +3609,36 @@ assert_eq "$rc" 21 "write-fails-exit: rc"
 assert_eq "$(st .outcome)" runner_failure "write-fails-exit: outcome"
 assert_nofile "$RUN/codex.out" "write-fails-exit: no answer file"
 
+# An output file of a command that cannot be opened is named as a failed
+# write before the command starts, not as a start that recorded no group.
+new_case write-fails-stdout
+: > "$SCN/codex.sandbox.hold"
+answering codex 1
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/sandbox.started"
+mkdir "$RUN/codex.first1.stdout"
+: > "$SCN/codex.sandbox.release"
+ext_wait
+assert_eq "$rc" 21 "write-fails-stdout: rc"
+assert_eq "$(st .message)" "cannot write $RUN/codex.first1.stdout" "write-fails-stdout: the file named"
+assert_lacks "$ERR" "Is a directory" "write-fails-stdout: no unprefixed error line"
+assert_eq "$(ncalls codex)" 0 "write-fails-stdout: no call"
+
+# The same for the sandbox probe's standard error in a continue, which then
+# leaves the saved status as it was.
+new_case write-fails-probe-err
+ul_first_run
+keep "$RUN/codex.status"
+rm "$RUN/codex.probe.err"
+mkdir "$RUN/codex.probe.err"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "write-fails-probe-err: rc"
+assert_ends "$OUT" "status: none" "write-fails-probe-err: no status named"
+assert_contains "$ERR" "cannot write $RUN/codex.probe.err" "write-fails-probe-err: the file named"
+assert_lacks "$ERR" "Is a directory" "write-fails-probe-err: no unprefixed error line"
+unchanged "$RUN/codex.status" "write-fails-probe-err"
+assert_eq "$(ncalls codex)" 1 "write-fails-probe-err: no continue attempt"
+
 new_case write-fails-config
 : > "$SCN/opencode.version.hold"
 answering qwen 1
