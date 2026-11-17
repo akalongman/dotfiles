@@ -3344,8 +3344,9 @@ no_locks() { # the case's run directory holds no lock directory
     echo none
 }
 
-mk_gate() { # a mkdir in $CASE/gate that holds every claim until two claimants have reached it (at most 5 s), then makes the directory
-    mkdir "$CASE/gate.d" || exit 2
+mk_gate() { # [-p]: a mkdir in $CASE/gate that holds every claim until two claimants have reached it (at most 5 s), then makes the directory (with -p when asked, so that it succeeds for both) and records its status in $CASE/gate.rc
+    mkdir "$CASE/gate.d" "$CASE/gate.rc" || exit 2
+    if [ "${1:-}" = -p ]; then : > "$CASE/gate.p"; fi
     mk_tool "$CASE/gate/mkdir" <<'EOF' || exit 2
 last="${*: -1}"
 if [[ $last == *.lock ]]; then
@@ -3357,6 +3358,11 @@ if [[ $last == *.lock ]]; then
         sleep 0.01
         n=$((n + 1))
     done
+    if [ -e "$CASE/gate.p" ]; then set -- -p "$@"; fi
+    "$BIN_ROOT/utils/mkdir" "$@"
+    st=$?
+    printf '%s\n' "$st" > "$CASE/gate.rc/$$"
+    exit "$st"
 fi
 exec "$BIN_ROOT/utils/mkdir" "$@"
 EOF
@@ -3900,6 +3906,23 @@ for r in 1 2 3; do
     assert_eq "$(ncalls codex)" 1 "same-prefix-race-$r: one call"
     assert_eq "$(no_locks)" none "same-prefix-race-$r: no lock"
 done
+
+# The same with a gate that makes the lock directory with mkdir -p, so that
+# mkdir reports success to both claimants, as uutils mkdir can under a race,
+# and only the exclusive pid file decides.
+new_case same-prefix-race-both-made
+mk_gate -p
+EXT_PATH="$CASE/gate:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+ext_bg run --cli codex --run-dir "$RUN"
+ext_wait 1
+r1="$rc"
+ext_wait 2
+assert_eq "$(cat "$CASE/gate.rc"/* 2>/dev/null | tr '\n' ' ')" "0 0 " "same-prefix-race-both-made: mkdir succeeded for both"
+assert_eq "$(printf '%s\n' "$r1" "$rc" | LC_ALL=C sort | tr '\n' ' ')" "0 64 " "same-prefix-race-both-made: one rc 0, one rc 64"
+assert_eq "$(ncalls codex)" 1 "same-prefix-race-both-made: one call"
+assert_eq "$(no_locks)" none "same-prefix-race-both-made: no lock"
 
 new_case two-continues
 ul_first_run
