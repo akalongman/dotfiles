@@ -659,7 +659,7 @@ against the evidence before repeating it.
 
 The runner and every command here are bash. The runner needs bash 5 or
 later (its clock is `EPOCHREALTIME`) and `jq`, `timeout` (with `-k`),
-`setsid`, `realpath`, `ps` and `sha256sum` on PATH; when bash is older or
+`setsid`, `realpath`, `ps`, `sha256sum` and `awk` on PATH; when bash is older or
 a program is missing, it ends `prerequisite_failed` and names what is
 missing. `timeout` and `realpath` may be GNU's or the Rust coreutils
 (uutils). git is asked for OpenCode's project boundary and the before

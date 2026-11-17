@@ -961,6 +961,43 @@ assert_contains "$OUT" "status: none" "missing-helper: no status named"
 assert_contains "$ERR" "jq" "missing-helper: jq named"
 assert_nofile "$RUN/codex.status" "missing-helper: no status"
 
+new_case missing-awk
+mkdir "$CASE/noawk"
+for f in "$BIN_ROOT/utils"/*; do
+    if [ "${f##*/}" != awk ]; then ln -s "$f" "$CASE/noawk/${f##*/}"; fi
+done
+EXT_PATH="$CASE/noawk:$CASE/bin"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "missing-awk: rc"
+assert_contains "$ERR" "missing helper programs: awk" "missing-awk: awk named"
+assert_nofile "$RUN/codex.status" "missing-awk: no status"
+
+# An awk that runs and prints nothing leaves the waits unconverted: the run
+# stops before it writes, instead of taking every wait as zero and every
+# status 124 as an expired deadline.
+new_case awk-fails
+mk_tool "$CASE/badawk/awk" <<'EOF'
+exit 1
+EOF
+EXT_PATH="$CASE/badawk:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --exit 124 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN" --limit 30s
+assert_eq "$rc" 18 "awk-fails: rc"
+assert_contains "$ERR" "cannot convert EXT_RUN_GRACE" "awk-fails: the wait named"
+assert_nofile "$RUN/agy.status" "awk-fails: no status"
+assert_eq "$(ncalls agy)" 0 "awk-fails: no call"
+
+new_case bad-knobs
+answering codex 1
+for kv in EXT_RUN_POLL=1s EXT_RUN_START_WAIT=0 EXT_RUN_GRACE=ten EXT_RUN_KILL_WAIT=-1 EXT_RUN_PREFLIGHT_LIMIT=0; do
+    EXT_VARS=("$kv")
+    ext run --cli codex --run-dir "$RUN"
+    assert_eq "$rc" 18 "bad-knobs $kv: rc"
+    assert_contains "$ERR" "bad values in the environment: $kv" "bad-knobs $kv: the knob named"
+done
+assert_nofile "$RUN/codex.status" "bad-knobs: no status"
+assert_eq "$(ncalls codex)" 0 "bad-knobs: no call"
+
 new_case missing-conf
 rm "$CASE/skill/scripts/ext-run.conf"
 ext run --cli codex --run-dir "$RUN"
@@ -1117,6 +1154,11 @@ assert_eq "$(st '.attempts[0].rule')" 8 "codex-fail: rule"
 assert_nofile "$RUN/codex.out" "codex-fail: no answer file"
 assert_eq "$(cat "$RUN/codex.first1.stdout")" PARTIAL "codex-fail: the attempt's stdout is kept"
 assert_contains "$(st .message)" boom "codex-fail: message"
+assert_eq "$(cat "$RUN/codex.first1.exit")" 3 "codex-fail: the exit file holds the CLI's status"
+t="$(cat "$RUN/codex.first1.time")"
+assert_eq "$([[ $t =~ ^[0-9]+\.[0-9]{3}$ ]] && echo yes || echo no)" yes "codex-fail: the time file holds wall seconds ($t)"
+assert_eq "$(jq -n --argjson t "$t" --argjson w "$(st '.attempts[0].wall')" '$t == $w' 2>/dev/null)" true \
+    "codex-fail: the time file and the attempt's wall agree"
 
 for x in 124 137 127; do
     new_case "own-$x"

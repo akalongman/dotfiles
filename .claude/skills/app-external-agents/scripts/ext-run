@@ -194,9 +194,9 @@ to_seconds() { # dur: prints the duration as decimal seconds
     LC_ALL=C awk -v v="$v" -v m="$m" 'BEGIN { s = sprintf("%.6f", v * m); sub(/\.?0+$/, "", s); print s }'
 }
 
-to_us() { # decimal seconds: sets US to them in whole microseconds (at most 10^12 s)
+to_us() { # decimal seconds: sets US to them in whole microseconds (at most 10^12 s); 1 unless the text is such a number, with at least one digit
     local i f=''
-    [[ $1 =~ ^([0-9]*)(\.([0-9]*))?$ ]] || return 1
+    [[ $1 =~ ^([0-9]*)(\.([0-9]*))?$ && $1 == *[0-9]* ]] || return 1
     i="${BASH_REMATCH[1]:-0}"
     f="${BASH_REMATCH[3]}000000"
     if [ "${#i}" -gt 12 ]; then i=999999999999; fi
@@ -722,7 +722,7 @@ check_ground() {
             *) end_as prerequisite_failed "HOME is not an absolute path; an OpenCode run needs it to find the protected directories" ;;
         esac
     fi
-    for h in jq timeout setsid realpath ps sha256sum; do
+    for h in jq timeout setsid realpath ps sha256sum awk; do
         type -P "$h" > /dev/null || missing+=("$h")
     done
     if [ "${#missing[@]}" -gt 0 ]; then
@@ -742,9 +742,10 @@ check_knobs() { # the test knobs: three durations and two plain numbers of secon
     if [ "${#bad[@]}" -gt 0 ]; then
         end_as prerequisite_failed "bad values in the environment: ${bad[*]}"
     fi
-    to_us "$(to_seconds "$EXT_RUN_GRACE")" || end_as prerequisite_failed "cannot convert EXT_RUN_GRACE"
+    # to_seconds is awk's; an awk that prints no number stops the run here.
+    to_us "$(to_seconds "$EXT_RUN_GRACE")" || end_as prerequisite_failed "cannot convert EXT_RUN_GRACE with awk"
     GRACE_US="$US"
-    to_us "$(to_seconds "$EXT_RUN_KILL_WAIT")" || end_as prerequisite_failed "cannot convert EXT_RUN_KILL_WAIT"
+    to_us "$(to_seconds "$EXT_RUN_KILL_WAIT")" || end_as prerequisite_failed "cannot convert EXT_RUN_KILL_WAIT with awk"
     KILL_WAIT_US="$US"
     to_us "$EXT_RUN_START_WAIT" || end_as prerequisite_failed "cannot convert EXT_RUN_START_WAIT"
     START_WAIT_US="$US"
