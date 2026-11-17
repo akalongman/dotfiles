@@ -1035,10 +1035,11 @@ def oc_texts: . as $e
         | select((.t | type) == "string" and .t != "")];
 def oc_answer: oc_bound as $b | oc_texts | map(select($b == null or .i > $b) | .t) | join("\n");
 def oc_earlier: oc_bound as $b | oc_texts | map(select($b != null and .i < $b) | .t) | join("\n");
-def oc_denied($rule; $ask): [.[] | select(.type == "tool_use") | g(.part) | select(type == "object")
-    | select(g(.state.status) == "error")
+def oc_failed_calls: .[] | select(.type == "tool_use") | g(.part) | select(type == "object" and g(.state.status) == "error");
+def oc_error_has($t): g(.state.error) | type == "string" and contains($t);
+def oc_refused($ask): $ask != "" and oc_error_has($ask);
+def oc_denied($rule; $ask): [oc_failed_calls | select(oc_error_has($rule) or oc_refused($ask))
     | g(.state.error) as $x
-    | select(($x | type) == "string" and (($x | contains($rule)) or ($ask != "" and ($x | contains($ask)))))
     | g(.state.input) as $i
     | {tool: (g(.tool) | text1),
        input: (if ($i | g(.command) | type) == "string" then $i.command
@@ -1102,9 +1103,7 @@ trace_facts() { # sets the T_ facts the classification rules read from T_EVENTS
                   ($err != null),
                   ($err | g(.error) | (if type == "object" then [g(.name), g(.data.message)]
                       | map(select(type == "string" and . != "")) | join(": ") else . end) | text1 | .[0:300]),
-                  ($reason == "tool-calls" and $ask != "" and any($step[]; .type == "tool_use"
-                      and g(.part.state.status) == "error"
-                      and (g(.part.state.error) | type == "string" and contains($ask)))),
+                  ($reason == "tool-calls" and any($step | oc_failed_calls; oc_refused($ask))),
                   "."' "$T_EVENTS" 2>/dev/null)" &&
                 mapfile -t f <<< "$out" && [ "${#f[@]}" = 6 ] && [ "${f[5]}" = . ] ||
                 end_as runner_failure "cannot read the events in $T_EVENTS"
