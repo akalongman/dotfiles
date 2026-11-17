@@ -4115,8 +4115,9 @@ assert_eq "$(st '.attempts | length')" 0 "term-before-first: no attempt"
 assert_eq "$(ncalls codex)" 0 "term-before-first: no call"
 assert_nofile "$RUN/codex.lock" "term-before-first: no lock"
 
-# agy's settings are read in step 3 for the rules and in step 7 for the model:
-# a file that no longer parses by then ends the run there, with its status.
+# agy's settings are read once, in step 3, for the rules and the model: a file
+# that no longer parses by step 7 is not read again, the run goes on, and the
+# status records the model step 3 read.
 new_case agy-settings-changed
 # shellcheck disable=SC2016  # the runner's jq filter, as written
 mk_jq_hold '.prompt_sha256 = $s'
@@ -4127,14 +4128,45 @@ wait_for "$CASE/jq-entered"
 printf 'not json\n' > "$HOME/.gemini/antigravity-cli/settings.json"
 : > "$CASE/jq-go"
 ext_wait
-assert_eq "$rc" 18 "agy-settings-changed: rc"
-assert_eq "$(st .outcome)" prerequisite_failed "agy-settings-changed: outcome"
-assert_eq "$(st .phase)" preflight "agy-settings-changed: phase"
-assert_contains "$(st .message)" "cannot read agy's settings file $HOME/.gemini/antigravity-cli/settings.json" \
-    "agy-settings-changed: the file named"
-assert_eq "$(st .configured_model)" null "agy-settings-changed: configured_model"
-assert_eq "$(ncalls agy)" 0 "agy-settings-changed: no call"
-assert_nofile "$RUN/agy.lock" "agy-settings-changed: no lock"
+assert_eq "$rc" 0 "agy-settings-changed: rc"
+assert_eq "$(st .outcome)" answered "agy-settings-changed: outcome"
+assert_eq "$(st .configured_model)" "Fixture Default" "agy-settings-changed: configured_model, as step 3 read it"
+assert_eq "$(ncalls agy)" 1 "agy-settings-changed: one call"
+
+# One read of the settings file in a whole run: a jq in front of the real one
+# notes every call that names the file.
+new_case agy-settings-read-once
+mk_tool "$CASE/logjq/jq" <<'EOF'
+for a in "$@"; do
+    if [ "$a" = "$HOME/.gemini/antigravity-cli/settings.json" ]; then echo read >> "$CASE/settings-reads"; fi
+done
+exec "$BIN_ROOT/utils/jq" "$@"
+EOF
+EXT_PATH="$CASE/logjq:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-settings-read-once: rc"
+assert_eq "$(wc -l < "$CASE/settings-reads" 2>/dev/null | tr -d '[:space:]')" 1 "agy-settings-read-once: one read"
+assert_eq "$(st .configured_model)" "Fixture Default" "agy-settings-read-once: configured_model"
+assert_line "$(cat "$RUN/agy-prompt.md" 2>/dev/null)" '- cat' "agy-settings-read-once: the rules from the same read"
+
+# A settings file that names no model, or no string for it, gives null.
+new_case agy-settings-no-model
+k=0
+for m in none 5 '""'; do
+    k=$((k + 1))
+    RUN="$CASE/run$k"
+    make_run "$RUN"
+    if [ "$m" = none ]; then
+        jq -cn '{permissions: {allow: ["command(cat)"]}}' > "$HOME/.gemini/antigravity-cli/settings.json"
+    else
+        jq -cn --argjson m "$m" '{model: $m, permissions: {allow: ["command(cat)"]}}' > "$HOME/.gemini/antigravity-cli/settings.json"
+    fi
+    play agy "$k" --stdout "$(t_agy_answer C)"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$rc" 0 "agy-settings-no-model $m: rc"
+    assert_eq "$(st .configured_model)" null "agy-settings-no-model $m: configured_model"
+done
 
 new_case term-in-version
 : > "$SCN/opencode.version.hold"

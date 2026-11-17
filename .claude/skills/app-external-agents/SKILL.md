@@ -405,7 +405,9 @@ directories where its file-reading tool works, and the instruction to use
 `cat`, `head` or `grep` for every other path. In a headless run agy ends
 the whole run with no answer at the first refused command or file read,
 so it has to know the lists up front. The runner reads agy's settings
-and never changes them.
+once, before it claims the prefix, for these lists and for the default
+model it records as `configured_model`, and never changes them; a change
+to the file after that read does not reach the run.
 
 Stopping a run. Send the runner the termination signal (TERM); its
 process id is in `<run>/<p>.lock/pid` while it runs. An interrupt (INT)

@@ -51,9 +51,10 @@ GIT_VARS=() GIT_VARS_READ=0   # the variables git lists as local to a repository
 GIT_OUT='' GIT_RC=0           # what the last git query printed, and its status
 GIT_ERR=''                    # what it wrote on standard error, on one line, for a message
 OC_CONFIG=''                  # the config the next OpenCode attempt is given
-# agy: its settings, read and never changed, and the prompt copy built from them.
+# agy: its settings, read once in step 3 and never changed, and the prompt copy built from them.
 AGY_SETTINGS="${HOME:-}/.gemini/antigravity-cli/settings.json"
 AGY_CMDS=() AGY_READS=()      # the X of its command(X) rules and the P of its read_file(P) rules
+AGY_MODEL=''                  # its .model as JSON, a string or null; step 7 records it as configured_model
 AGY_COPY=''                   # agy-prompt.md as step 3 built it; step 7 writes it
 PHASE=preflight MESSAGE=''
 NOTES=''                      # notes no outcome replaces (the before snapshot's), joined by "; "; the status's message carries them after MESSAGE, and its notes field lists them; a continue takes them from the record
@@ -823,7 +824,8 @@ validate_run() { # step 3, without writing
         fi
     fi
     PROMPT_FILE="$prompt"
-    # agy: its settings, and the prompt copy built in memory, which is longer
+    # agy: its settings, read here and only here (the rules, and the model
+    # step 7 records), and the prompt copy built in memory, which is longer
     # than prompt.md and must also fit in one argument; step 7 writes it.
     if [ "$KIND" = agy ]; then
         agy_rules || end_as prerequisite_failed "cannot read agy's settings file $AGY_SETTINGS"
@@ -1158,22 +1160,27 @@ load_trace() { # attempt-base: reads the attempt's trace and its facts, once per
     TRACE_OF="$1"
 }
 
-agy_rules() { # step 3: sets AGY_CMDS and AGY_READS from the command(X) and read_file(P) rules of agy's settings; 1 when the file cannot be read
+agy_rules() { # step 3, the one read of agy's settings: sets AGY_CMDS and AGY_READS from its command(X) and read_file(P) rules, and AGY_MODEL from its .model; 1 when the file cannot be read
     local r x
-    AGY_CMDS=() AGY_READS=()
-    # One rule per NUL-ended item, "c" or "r" and its value, so that any value survives.
+    AGY_CMDS=() AGY_READS=() AGY_MODEL=''
+    # The model first, as JSON ("m" and a string, or null when the file names
+    # none), then one rule per NUL-ended item, "c" or "r" and its value, so
+    # that any value survives.
     mapfile -d '' -t r < <(jq --raw-output0 -s '
         if length == 1 and (.[0] | type) == "object" then .[0] else error("not one object") end
-        | .permissions.allow? // [] | if type == "array" then .[] else empty end | strings
-        | (capture("^command\\((?<x>.+)\\)$") | "c" + .x), (capture("^read_file\\((?<x>.+)\\)$") | "r" + .x)' \
+        | ("m" + (.model | if type == "string" and . != "" then . else null end | tojson)),
+          (.permissions.allow? // [] | if type == "array" then .[] else empty end | strings
+           | (capture("^command\\((?<x>.+)\\)$") | "c" + .x), (capture("^read_file\\((?<x>.+)\\)$") | "r" + .x))' \
         "$AGY_SETTINGS" 2>/dev/null)
     wait "$!" || return 1
     for x in "${r[@]}"; do
         case "$x" in
+            m*) AGY_MODEL="${x#m}" ;;
             c*) AGY_CMDS+=("${x#c}") ;;
             r*) AGY_READS+=("${x#r}") ;;
         esac
     done
+    [ -n "$AGY_MODEL" ]
 }
 
 agy_outside_dirs() { # step 3: sets ALLOW_CANON to the outside directories agy's prompt copy names, the list the status records
@@ -1221,13 +1228,9 @@ agy_copy_prompt() { # step 7: writes agy-prompt.md, the copy step 3 built and ch
     PROMPT_FILE="$copy"
 }
 
-agy_configured_model() { # step 7: .model of agy's settings file, the default agy uses without --model; null when it names none
-    local m
-    m="$(jq -c -s 'if length == 1 and (.[0] | type) == "object" then .[0].model else error("not one object") end
-        | if type == "string" and . != "" then . else null end' "$AGY_SETTINGS" 2>/dev/null)" && [ -n "$m" ] ||
-        end_as prerequisite_failed "cannot read agy's settings file $AGY_SETTINGS"
+agy_configured_model() { # step 7: configured_model, the default agy uses without --model: the .model step 3 read with the rules; the file is not read again
     # shellcheck disable=SC2016  # a jq variable
-    st_update '.configured_model = $m' --argjson m "$m"
+    st_update '.configured_model = $m' --argjson m "$AGY_MODEL"
 }
 
 # ---------------------------------------------------------------------------
