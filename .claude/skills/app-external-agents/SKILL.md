@@ -556,7 +556,11 @@ processes had ended, or exited in a way nobody planned; `usage_error`,
 bad input (an argument, a refused outside directory or project boundary,
 a claimed prefix, files of the prefix that already exist, a before
 snapshot already in the run directory of a run that takes one, a saved record
-that a continue cannot continue, a prompt changed before a start-again);
+that a continue cannot continue, a prompt changed before a start-again),
+or, for OpenCode, a git that ran and failed while the project boundary
+was checked, before the invocation owned a status file (its
+`git rev-parse --local-env-vars` call, or the boundary query where a
+`.git` lies above the directory);
 `missing_cli`, the CLI is not on PATH. The runner prints the same list
 with `outcomes`:
 
@@ -576,11 +580,11 @@ with `outcomes`:
 | `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
 | `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
 | `handle_conflict` | 17 | the handles the message names; nothing further is resumed |
-| `prerequisite_failed` | 18 | what the message names, one of these: bash older than 5; a missing helper program; a jq older than 1.7 (one that does not take `--raw-output0`); the settings file `scripts/ext-run.conf` missing or unreadable (or the runner's own directory, where it is looked for, not found), and for OpenCode an empty `OC_SKILL_DENY_KEY` or an `OC_TESTED_VERSION` in it that is not a version, or a `HOME` that is not an absolute path; a test setting of the runner (`EXT_RUN_GRACE`, `EXT_RUN_KILL_WAIT`, `EXT_RUN_PREFLIGHT_LIMIT`, `EXT_RUN_POLL`, `EXT_RUN_START_WAIT`) set in the environment to a value it refuses, or an `awk` that cannot convert one; the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike); agy's settings file that cannot be read or is not one JSON object (an agy run, refused before it writes anything); the OpenCode agent files, when the config to inject cannot be built from them; git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` failed or answered with what is not a list of variable names or without `GIT_DIR`; git that failed in the before snapshot where a `.git` lies above the working directory (git's reason is in the message, and the CLI was not started); or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
+| `prerequisite_failed` | 18 | what the message names, one of these: bash older than 5; a missing helper program; a jq older than 1.7 (one that does not take `--raw-output0`); the settings file `scripts/ext-run.conf` missing or unreadable (or the runner's own directory, where it is looked for, not found), and for OpenCode an empty `OC_SKILL_DENY_KEY` or an `OC_TESTED_VERSION` in it that is not a version, or a `HOME` that is not an absolute path; a test setting of the runner (`EXT_RUN_GRACE`, `EXT_RUN_KILL_WAIT`, `EXT_RUN_PREFLIGHT_LIMIT`, `EXT_RUN_POLL`, `EXT_RUN_START_WAIT`) set in the environment to a value it refuses, or an `awk` that cannot convert one; the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike); agy's settings file that cannot be read or is not one JSON object (an agy run, refused before it writes anything); the OpenCode agent files, when the config to inject cannot be built from them; git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` answered (status 0) with what is not a list of variable names or without `GIT_DIR`; git that failed in the before snapshot where a `.git` lies above the working directory, and, for Codex and agy, which ask git only there, a `git rev-parse --local-env-vars` call that failed, whether or not a `.git` lies above the working directory (git's reason is in the message, and the CLI was not started; for OpenCode, which asks git first for the project boundary, such a call that failed is a `usage_error`); or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
 | `unsupported_version` | 19 | the OpenCode version found and the tested one; when `opencode --version` failed, did not answer within the preflight limit or printed what is not a version, the message says so instead |
 | `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
 | `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below |
-| `usage_error` | 64 | the fault the message names. A refused outside directory or project boundary needs a bundle; a before snapshot already in the run directory needs a new run directory; a claimed prefix comes with the runner's verdict on the claim's owner and, when that owner is not running or unknown, the command that removes the claim, which the owner decides on |
+| `usage_error` | 64 | the fault the message names. A refused outside directory or project boundary needs a bundle; a git that ran and failed while OpenCode's project boundary was checked (its `git rev-parse --local-env-vars` call, or the boundary query where a `.git` lies above the directory) is reported with git's own reason, which the message quotes, rather than with a bundle as the remedy, and the repair, of git or of that repository, is the owner's; a before snapshot already in the run directory needs a new run directory; a claimed prefix comes with the runner's verdict on the claim's owner and, when that owner is not running or unknown, the command that removes the claim, which the owner decides on |
 | `missing_cli` | 127 | which CLI is not on PATH |
 
 A summary line that ends `status: none`. A `runner_failure` that no
@@ -608,7 +612,8 @@ fault the message names lies:
   file was written for), a claimed prefix, a missing CLI, a prerequisite
   (any the `prerequisite_failed` row names, apart from agy's settings
   file and the before snapshot, which a continue neither reads nor
-  takes), an OpenCode
+  takes), for OpenCode a `git rev-parse --local-env-vars` call that
+  failed (a `usage_error`), an OpenCode
   version the guard refused, a process group or session that outlived
   the kill, or a signal. A record that could be continued before still can be: once
   the fault is cleared, the same continue command is checked afresh.
@@ -732,10 +737,14 @@ older, jq does not take `--raw-output0`, or a program is missing, it ends
 (uutils). git is asked for OpenCode's project boundary and the before
 snapshot; a git that cannot be run, that does not answer within the
 preflight limit of one minute, or whose `git rev-parse --local-env-vars`
-fails or does not answer with a list of variable names that includes
-`GIT_DIR` (every git lists it), is `prerequisite_failed` as well, and so
-is a git that fails in the before snapshot where a `.git` lies above the
-working directory. The
+exits 0 without a list of variable names that includes `GIT_DIR`
+(every git lists it), is `prerequisite_failed` as well, and so is a git
+that fails in the before snapshot where a `.git` lies above the working
+directory. A `git rev-parse --local-env-vars` call that runs and fails
+is `prerequisite_failed` for Codex and agy, which ask git only in the
+before snapshot, and `usage_error` for OpenCode, which asks git first
+for the project boundary, before the run or the continue owns its status
+file. The
 runner was built and tested on Linux. macOS ships bash 3.2 and no
 `setsid`, so it needs bash 5, coreutils and util-linux installed. On
 Windows the runner would run in Git Bash, where the `timeout` on PATH
