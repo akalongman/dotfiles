@@ -373,11 +373,11 @@ settings and credential directories of the three CLIs (`~/.codex`,
 numbered copies such as `~/.claude2`), and the owner's key stores
 (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.secrets`, `~/.config/gh`). Where
 `CODEX_HOME`, `XDG_CONFIG_HOME` or `XDG_DATA_HOME` moves one of them, the
-moved location is protected as well as the default one, and so is
-`GH_CONFIG_DIR` when it is set. For agy the runner names in its prompt
-copy, by their real paths, those of the directories that its
-file-reading tool cannot open, to be read with shell commands. Codex
-reads anywhere and ignores them. Never
+moved location is protected as well as the default one, and so are
+`GH_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` when they are set. For agy the
+runner names in its prompt copy, by their real paths, those of the
+directories that its file-reading tool cannot open, to be read with
+shell commands. Codex reads anywhere and ignores them. Never
 pass a protected directory as `--allow-dir` to any CLI: the runner
 refuses one for OpenCode only, and for agy and Codex nothing but the
 session enforces it. Material that lives inside a protected directory, a

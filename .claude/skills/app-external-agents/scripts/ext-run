@@ -277,6 +277,13 @@ canonical() { # path: sets CANON to its canonical absolute path, whatever it con
     [ -n "$CANON" ]
 }
 
+canonical_any() { # path: the same for a path that need not exist: the part that exists is resolved (realpath -m)
+    local p
+    p="$(realpath -m -- "$1" && printf x)" || return 1
+    CANON="${p%$'\n'x}"
+    [ -n "$CANON" ]
+}
+
 valid_duration() { # timeout's syntax, greater than zero
     [[ $1 =~ ^([0-9]+(\.[0-9]*)?|\.[0-9]+)[smhd]?$ ]] && [[ ${1%[smhd]} =~ [1-9] ]]
 }
@@ -1339,7 +1346,7 @@ project_boundary() { # dir: sets BOUNDARY to the top of the git work tree that h
 }
 
 protected_dirs() { # prints the protected directories, each made canonical and ended by a NUL
-    local p c list=()
+    local p list=()
     list=("$HOME/.codex" "$HOME/.gemini" "$HOME/.config/opencode" "$HOME/.local/share/opencode" "$HOME/.opencode" "$HOME/.claude")
     # This agent's numbered copies, those that exist.
     for p in "$HOME"/.claude[0-9]*; do
@@ -1352,23 +1359,23 @@ protected_dirs() { # prints the protected directories, each made canonical and e
     if [ -n "${XDG_CONFIG_HOME:-}" ]; then list+=("$XDG_CONFIG_HOME/opencode" "$XDG_CONFIG_HOME/gh"); fi
     if [ -n "${XDG_DATA_HOME:-}" ]; then list+=("$XDG_DATA_HOME/opencode"); fi
     if [ -n "${GH_CONFIG_DIR:-}" ]; then list+=("$GH_CONFIG_DIR"); fi
+    if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then list+=("$CLAUDE_CONFIG_DIR"); fi
     for p in "${list[@]}"; do
-        # -m resolves the part of the path that exists, so a symbolic link
+        # The part of the path that exists is resolved, so a symbolic link
         # above a directory that does not exist yet cannot hide it.
-        c="$(realpath -m -- "$p" && printf x)" || return 1
-        printf '%s\0' "${c%$'\n'x}"
+        canonical_any "$p" || return 1
+        printf '%s\0' "$CANON"
     done
 }
 
 load_protected() { # sets PROTECTED, HOME_CANON and VAR_TMP_CANON, once per invocation
-    local c
     [ "$PROTECTED_READ" = 0 ] || return 0
     mapfile -d '' -t PROTECTED < <(protected_dirs)
     wait "$!" || end_as runner_failure "cannot list the protected directories"
-    c="$(realpath -m -- "$HOME" && printf x)" || end_as runner_failure "cannot resolve the home directory $HOME"
-    HOME_CANON="${c%$'\n'x}"
-    c="$(realpath -m -- /var/tmp && printf x)" || end_as runner_failure "cannot resolve /var/tmp"
-    VAR_TMP_CANON="${c%$'\n'x}"
+    canonical_any "$HOME" || end_as runner_failure "cannot resolve the home directory $HOME"
+    HOME_CANON="$CANON"
+    canonical_any /var/tmp || end_as runner_failure "cannot resolve /var/tmp"
+    VAR_TMP_CANON="$CANON"
     PROTECTED_READ=1
 }
 
