@@ -616,6 +616,7 @@ otherwise left out with its parentheses.
 | wall | `attempts[].wall`, one value per attempt with its phase when there is more than one | the same | the same |
 | handle | `handle` | the same | the same |
 | version | none | none | `versions.preflight`, followed by "untested" when `version_untested` is true |
+| outside directories (after the first line) | `allow_dirs` is `[]`: Codex is given none and reads anywhere | `allow_dirs`: exactly the directories its prompt copy names to be read with shell commands, by their real paths; one inside the working directory or under a file-reading directory is not named and not listed | `allow_dirs`: the directories it was granted, by their canonical paths |
 | snapshot notes (after the first line) | `notes`: the before snapshot's notes, `not a git repository: no before snapshot` or `no commit yet: before.diff is empty`, also joined after the message; a continue keeps them and repeats them after its own message; empty when there are none | the same | the same |
 
 After the first line, as they apply:

@@ -3445,6 +3445,30 @@ assert_eq "$rc" 0 "agy-prompt-in-work: rc"
 assert_contains "$(cat "$RUN/agy-prompt.md" 2>/dev/null)" "# Reading files" "agy-prompt-in-work: the copy has its blocks"
 assert_lacks "$(cat "$RUN/agy-prompt.md" 2>/dev/null)" "outside those rules" "agy-prompt-in-work: no outside list"
 
+# allow_dirs records what the CLI was given of the outside directories: for
+# agy exactly the ones its prompt copy names (a link by its real path, one
+# that does not resolve as given), not one under a file-reading directory or
+# inside the working directory.
+new_case agy-allow-dirs
+mkdir -p "$CASE/out" "$CASE/ok/in" "$WORK/sub"
+ln -s "$CASE/out" "$CASE/lnk"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN" --allow-dir "$CASE/lnk" --allow-dir "$CASE/ok/in" --allow-dir "$WORK/sub" \
+    --allow-dir "$CASE/nowhere"
+assert_eq "$rc" 0 "agy-allow-dirs: rc"
+assert_eq "$(stj .allow_dirs)" "$(jq -cn --arg a "$CASE/out" --arg b "$CASE/nowhere" '[$a, $b]')" \
+    "agy-allow-dirs: the two directories the copy names"
+assert_eq "$(stj .allow_dirs)" "$(sed -n '/^These directories named for this task/,$ s/^- //p' "$RUN/agy-prompt.md" |
+    jq -R . | jq -cs .)" "agy-allow-dirs: exactly the copy's list"
+
+# Codex is given none of them.
+new_case codex-allow-dirs
+mkdir "$CASE/out"
+answering codex 1
+ext run --cli codex --run-dir "$RUN" --allow-dir "$CASE/out"
+assert_eq "$rc" 0 "codex-allow-dirs: rc"
+assert_eq "$(stj .allow_dirs)" '[]' "codex-allow-dirs: none recorded"
+
 new_case agy-no-settings
 rm "$HOME/.gemini/antigravity-cli/settings.json"
 play agy 1 --stdout "$(t_agy_answer C)"

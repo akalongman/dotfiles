@@ -40,7 +40,7 @@ ACTION=run
 NAME='' KIND='' PREFIX='' OC_MODEL=''
 LEVEL=read LIMIT=90m RESUME_LIMIT=30m MODEL='' EFFORT='' RUN_ARG=''
 ALLOW_DIRS=()  # --allow-dir values as given
-ALLOW_CANON=() # their canonical paths, once a check has made them; the status records these
+ALLOW_CANON=() # what the CLI is given of them, the list the status records: OpenCode's grants, canonical (check_context); the ones agy's prompt copy names (agy_outside_dirs); none for Codex
 RUN_DIR='' CWD='' CANON=''
 # OpenCode: what check_context found, and what the git queries left.
 BOUNDARY=''                   # the project boundary, canonical
@@ -805,6 +805,7 @@ validate_run() { # step 3, without writing
     # than prompt.md and must also fit in one argument; step 7 writes it.
     if [ "$KIND" = agy ]; then
         agy_rules || end_as prerequisite_failed "cannot read agy's settings file $AGY_SETTINGS"
+        agy_outside_dirs
         AGY_COPY="$(agy_prompt_text && printf x)" || end_as usage_error "prompt.md is not readable: $prompt"
         AGY_COPY="${AGY_COPY%x}"
         SIZE="$(printf '%s' "$AGY_COPY" | wc -c)"
@@ -1151,9 +1152,9 @@ agy_rules() { # step 3: sets AGY_CMDS and AGY_READS from the command(X) and read
     done
 }
 
-agy_prompt_text() { # prints agy-prompt.md: prompt.md, then agy's shell commands, its file-reading directories, and the outside directories the file-reading tool cannot open; 1 when prompt.md cannot be read
-    local d p under outside=()
-    read_text "$PROMPT_FILE" || return 1
+agy_outside_dirs() { # step 3: sets ALLOW_CANON to the outside directories agy's prompt copy names, the list the status records
+    local d p under
+    ALLOW_CANON=()
     # Each outside directory by its real path (as given when it has none),
     # unless it lies in the working directory or under a file-reading
     # directory, which agy matches against a file's real path as written.
@@ -1167,8 +1168,13 @@ agy_prompt_text() { # prints agy-prompt.md: prompt.md, then agy's shell commands
                 break
             fi
         done
-        if [ "$under" = 0 ]; then outside+=("$d"); fi
+        if [ "$under" = 0 ]; then ALLOW_CANON+=("$d"); fi
     done
+}
+
+agy_prompt_text() { # prints agy-prompt.md: prompt.md, then agy's shell commands, its file-reading directories, and the outside directories the file-reading tool cannot open (ALLOW_CANON); 1 when prompt.md cannot be read
+    local d p
+    read_text "$PROMPT_FILE" || return 1
     printf '%s' "$TEXT"
     # prompt.md's last line is ended before the blocks begin.
     case "$TEXT" in *$'\n') ;; *) printf '\n' ;; esac
@@ -1179,9 +1185,9 @@ agy_prompt_text() { # prints agy-prompt.md: prompt.md, then agy's shell commands
     for p in "${AGY_READS[@]}"; do printf -- '- %s\n' "$p"; done
     # shellcheck disable=SC2016  # the backticks are the copy's own text
     printf '%s\n' 'For every other path, and for any path that may be a symbolic link, use `cat`, `head` or `grep`. One refused file read ends this run with no answer.'
-    if [ "${#outside[@]}" -gt 0 ]; then
+    if [ "${#ALLOW_CANON[@]}" -gt 0 ]; then
         printf '%s\n' 'These directories named for this task are outside those rules, so read them with shell commands only:'
-        for d in "${outside[@]}"; do printf -- '- %s\n' "$d"; done
+        for d in "${ALLOW_CANON[@]}"; do printf -- '- %s\n' "$d"; done
     fi
 }
 
