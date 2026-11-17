@@ -137,9 +137,10 @@ case "${BASH_SOURCE[0]}" in
 esac
 # An absolute physical path, taken before anything is sourced or the
 # directory changes, so that a continue still finds the settings, the agent
-# files and the follow-up texts in the recorded working directory. Empty when
-# the directory cannot be entered; check_ground then stops.
-if SELF_DIR="$(cd -P -- "$SELF_DIR" 2>/dev/null && pwd -P && printf x)"; then
+# files and the follow-up texts in the recorded working directory. CDPATH is
+# ignored, so that a relative start finds this directory and no other. Empty
+# when the directory cannot be entered; check_ground then stops.
+if SELF_DIR="$(CDPATH='' cd -P -- "$SELF_DIR" 2>/dev/null && pwd -P && printf x)"; then
     SELF_DIR="${SELF_DIR%$'\n'x}"
 else
     SELF_DIR=''

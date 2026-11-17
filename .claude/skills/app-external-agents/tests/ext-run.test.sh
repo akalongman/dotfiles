@@ -2494,6 +2494,16 @@ assert_eq "$(agent_env_is qwen 2 read-agent.json)" true "continue-relative-runne
 assert_eq "$(callf qwen 2 cwd)" "$WORK" "continue-relative-runner: in the recorded directory"
 assert_file "$RUN/qwen.continue1.stdout" "continue-relative-runner: qwen.continue1.stdout"
 
+# The same start under an exported CDPATH that holds another scripts
+# directory: the runner still finds its own directory.
+new_case relative-runner-cdpath
+mkdir -p "$CASE/decoy/scripts"
+answering codex 1
+EXT_VARS=("CDPATH=$CASE/decoy")
+EXT_CWD="$CASE/skill" EXT_RUNNER=scripts/ext-run ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "relative-runner-cdpath: rc"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" A "relative-runner-cdpath: the answer"
+
 new_case continue-foreign-prefix
 ul_first_run
 rewrite_status codex '.prefix = "agy"'
