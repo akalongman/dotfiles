@@ -1603,6 +1603,27 @@ assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" ONLY "oc-only-text: the answer"
 assert_nofile "$RUN/qwen.first1.earlier.txt" "oc-only-text: no earlier text file"
 assert_eq "$(st '.attempts[0].earlier_text')" null "oc-only-text: earlier_text"
 
+# Several text parts of one step are joined with a newline: the final step's
+# into the answer, the earlier steps' into the earlier text.
+new_case oc-two-parts
+play qwen 1 --stdout "$(
+    oc_start S
+    oc_text S N1
+    oc_bash S ls
+    oc_text S N2
+    oc_finish S tool-calls
+    oc_start S
+    oc_text S A
+    oc_text S B
+    oc_finish S stop
+)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-two-parts: rc"
+assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" "$(printf 'A\nB')" "oc-two-parts: the final step's parts, one per line"
+assert_eq "$(cat "$RUN/qwen.first1.earlier.txt" 2>/dev/null)" "$(printf 'N1\nN2')" \
+    "oc-two-parts: the earlier step's parts, one per line"
+assert_eq "$(st '.attempts[0].earlier_text_bytes')" 5 "oc-two-parts: earlier_text_bytes"
+
 new_case oc-length
 play qwen 1 --stdout "$(oc_start S; oc_text S CUT; oc_finish S length)"
 ext run --cli qwen --run-dir "$RUN"
@@ -1760,7 +1781,7 @@ assert_eq "$(st .requested.effort)" high "oc-effort: requested effort"
 new_case oc-full-id
 play a-b 1 --stdout "$(t_oc_only S)"
 ext run --cli a/b --run-dir "$RUN"
-assert_eq "$PREFIX" a-b "oc-full-id: prefix"
+assert_begins "$OUT" "a-b: " "oc-full-id: the summary line names the prefix"
 assert_file "$RUN/a-b.out" "oc-full-id: the answer file"
 assert_contains "$(argv a-b 1)" '"--model","a/b"' "oc-full-id: the model id as given"
 assert_eq "$(st .oc_model)" a/b "oc-full-id: oc_model"
@@ -2018,6 +2039,12 @@ ext run --cli codex --run-dir "$RUN"
 assert_eq "$rc" 16 "no-handle: rc"
 assert_eq "$(st .outcome)" no_handle "no-handle: outcome"
 assert_eq "$(ncalls codex)" 1 "no-handle: no resume"
+# The record a handle failure before the resume leaves, on which a continue's
+# checks rely: decided in the resume phase, with the resume itself unused.
+assert_eq "$(st .phase)" resume "no-handle: phase"
+assert_eq "$(st .resume_used)" false "no-handle: resume_used"
+assert_eq "$(st .resume_reason)" null "no-handle: resume_reason"
+assert_eq "$(st '.attempts | length')" 1 "no-handle: one attempt"
 
 new_case two-handles
 play agy 1 --stdout "$(agy_init C; agy_cmd D ls; agy_result C SUCCESS '')"
@@ -2025,6 +2052,10 @@ ext run --cli agy --run-dir "$RUN"
 assert_eq "$rc" 17 "two-handles: rc"
 assert_eq "$(st .outcome)" handle_conflict "two-handles: outcome"
 assert_eq "$(ncalls agy)" 1 "two-handles: no resume"
+assert_eq "$(st .phase)" resume "two-handles: phase"
+assert_eq "$(st .resume_used)" false "two-handles: resume_used"
+assert_eq "$(st .resume_reason)" null "two-handles: resume_reason"
+assert_eq "$(st '.attempts | length')" 1 "two-handles: one attempt"
 
 new_case one-handle-repeated
 play agy 1 --stdout "$(agy_init C; agy_cmd C ls; agy_result C SUCCESS '')"
@@ -2367,9 +2398,14 @@ assert_eq "$(st .handle)" U2 "fresh-then-empty: handle"
 assert_file "$RUN/codex.resume1.stdout" "fresh-then-empty: codex.resume1.stdout"
 assert_eq "$(ncalls codex)" 3 "fresh-then-empty: three calls"
 
+# The run starts under the default limit, so that the door attempt never meets
+# a deadline on a loaded machine; the record's limit is then made 1 s, the
+# limit the fresh attempt must run under.
 new_case fresh-then-limit
 play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
-ext run --cli codex --run-dir "$RUN" --limit 1s --resume-limit 20s
+ext run --cli codex --run-dir "$RUN" --resume-limit 20s
+assert_eq "$rc" 13 "fresh-then-limit: rc of the run"
+rewrite_status codex '.limit = "1s"'
 play codex 2 --sleep 5 --stderr "$(codex_err U2)"
 play codex 3 --stdout LATE --stderr "$(codex_err U2)"
 ext continue --cli codex --run-dir "$RUN"
@@ -2388,6 +2424,8 @@ ext continue --cli codex --run-dir "$RUN"
 assert_eq "$rc" 16 "fresh-then-no-handle: rc"
 assert_eq "$(st .outcome)" no_handle "fresh-then-no-handle: outcome"
 assert_eq "$(ncalls codex)" 2 "fresh-then-no-handle: the discarded U1 is not used"
+assert_eq "$(st .handle)" null "fresh-then-no-handle: the discarded U1 is not kept"
+assert_eq "$(st .handle_source)" continue1 "fresh-then-no-handle: handle_source"
 
 new_case ul-resume-twice
 play codex 1 --stdout '' --stderr "$(codex_err U1)"
@@ -2615,6 +2653,18 @@ assert_eq "$rc" 64 "continue-files-in-the-way: rc"
 assert_contains "$ERR" "already exist" "continue-files-in-the-way: message"
 unchanged "$RUN/codex.status" "continue-files-in-the-way"
 assert_eq "$(ncalls codex)" 1 "continue-files-in-the-way: no call after the run"
+
+# While the one resume is unused, a file of that resume is in the way too.
+new_case continue-resume-file-in-the-way
+ul_first_run
+: > "$RUN/codex.resume1.stdout"
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-resume-file-in-the-way: rc"
+assert_contains "$ERR" "already exist" "continue-resume-file-in-the-way: message"
+assert_contains "$ERR" ": codex.resume1.stdout" "continue-resume-file-in-the-way: the file named"
+unchanged "$RUN/codex.status" "continue-resume-file-in-the-way"
+assert_eq "$(ncalls codex)" 1 "continue-resume-file-in-the-way: no call after the run"
 
 new_case fresh-prompt-changed
 play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
@@ -3590,6 +3640,27 @@ assert_eq "$(st .phase)" preflight "term-before-first: phase"
 assert_eq "$(st '.attempts | length')" 0 "term-before-first: no attempt"
 assert_eq "$(ncalls codex)" 0 "term-before-first: no call"
 assert_nofile "$RUN/codex.lock" "term-before-first: no lock"
+
+# agy's settings are read in step 3 for the rules and in step 7 for the model:
+# a file that no longer parses by then ends the run there, with its status.
+new_case agy-settings-changed
+# shellcheck disable=SC2016  # the runner's jq filter, as written
+mk_jq_hold '.prompt_sha256 = $s'
+EXT_PATH="$CASE/slowjq:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --stdout "$(t_agy_answer C)"
+ext_bg run --cli agy --run-dir "$RUN"
+wait_for "$CASE/jq-entered"
+printf 'not json\n' > "$HOME/.gemini/antigravity-cli/settings.json"
+: > "$CASE/jq-go"
+ext_wait
+assert_eq "$rc" 18 "agy-settings-changed: rc"
+assert_eq "$(st .outcome)" prerequisite_failed "agy-settings-changed: outcome"
+assert_eq "$(st .phase)" preflight "agy-settings-changed: phase"
+assert_contains "$(st .message)" "cannot read agy's settings file $HOME/.gemini/antigravity-cli/settings.json" \
+    "agy-settings-changed: the file named"
+assert_eq "$(st .configured_model)" null "agy-settings-changed: configured_model"
+assert_eq "$(ncalls agy)" 0 "agy-settings-changed: no call"
+assert_nofile "$RUN/agy.lock" "agy-settings-changed: no lock"
 
 new_case term-in-version
 : > "$SCN/opencode.version.hold"
