@@ -173,6 +173,10 @@ writes its files under its own prefix, `<p>` below: `codex`, `agy`, the
 alias, or a full model id with every `/` replaced by `-`. At the edit
 level each run
 gets a run directory of its own, with the CLI name or alias in the slug.
+The before snapshot (`before.txt` and `before.diff`, see step 7) belongs
+to the run directory, not to a prefix: a run that takes one, at the edit
+level or agy at either level, refuses a run directory that already holds
+either file, and a new run directory is the remedy.
 The skill never deletes a run directory; the owner does.
 
 ### 3. Build a bundle when the material calls for one
@@ -462,7 +466,11 @@ Files in the run directory, under the prefix `<p>`:
 - `codex.probe.err`: the standard error of the last Codex sandbox probe.
 - `agy-prompt.md`: agy's prompt copy.
 - `before.txt` and `before.diff`: the before snapshot, written by an
-  edit-level run and by every agy run, in a git work tree.
+  edit-level run and by every agy run, in a git work tree. Outside one
+  (no `.git` on the way up from the working directory) the run writes
+  neither and notes it; where a `.git` lies above and git fails there (a
+  `.git` file it cannot read, a repository it refuses to trust), the run
+  ends `prerequisite_failed` before the CLI starts.
 - `<p>.lock/`: the claim on the prefix, present while the runner runs.
 
 The claim. Each invocation claims its prefix in the run directory before
@@ -470,7 +478,11 @@ it writes anything: it makes `<p>.lock` and then creates `<p>.lock/pid`
 exclusively, and the invocation that creates the pid file holds the
 claim. A second invocation with the same prefix, a second continue of one
 run included, is refused. A run also refuses to start when files of its
-prefix already exist.
+prefix already exist, and a run that takes the before snapshot when
+`before.txt` or `before.diff` already exists. That second check narrows
+the overlap of two such runs started together in one run directory and
+does not close it, since both can pass it before either writes; one run
+directory per edit-level run avoids it.
 
 ## Outcomes
 
@@ -501,7 +513,8 @@ while the CLI ran, or before a resume; `runner_failure`, the runner could
 not write or read one of its own files or could not confirm that the CLI's
 processes had ended, or exited in a way nobody planned; `usage_error`,
 bad input (an argument, a refused outside directory or project boundary,
-a claimed prefix, files of the prefix that already exist, a saved record
+a claimed prefix, files of the prefix that already exist, a before
+snapshot already in the run directory of a run that takes one, a saved record
 that a continue cannot continue, a prompt changed before a start-again);
 `missing_cli`, the CLI is not on PATH. The runner prints the same list
 with `outcomes`:
@@ -522,11 +535,11 @@ with `outcomes`:
 | `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
 | `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
 | `handle_conflict` | 17 | the handles the message names; nothing further is resumed |
-| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, a jq older than 1.7 (one that does not take `--raw-output0`), the settings file, the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike), git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` does not list `GIT_DIR`, or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
+| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, a jq older than 1.7 (one that does not take `--raw-output0`), the settings file, the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike), git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` does not list `GIT_DIR`, git that failed in the before snapshot where a `.git` lies above the working directory (git's reason is in the message, and the CLI was not started), or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
 | `unsupported_version` | 19 | the OpenCode version found and the tested one |
 | `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
 | `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below |
-| `usage_error` | 64 | the fault the message names. A refused outside directory or project boundary needs a bundle; a claimed prefix comes with the runner's verdict on the claim's owner and, when that owner is not running or unknown, the command that removes the claim, which the owner decides on |
+| `usage_error` | 64 | the fault the message names. A refused outside directory or project boundary needs a bundle; a before snapshot already in the run directory needs a new run directory; a claimed prefix comes with the runner's verdict on the claim's owner and, when that owner is not running or unknown, the command that removes the claim, which the owner decides on |
 | `missing_cli` | 127 | which CLI is not on PATH |
 
 A summary line that ends `status: none`. A `runner_failure` that no
@@ -649,7 +662,8 @@ After the first line, as they apply:
   status does not show that nothing was written: a change to a file that
   was already changed or untracked, to an ignored file, or outside the
   repository does not show in it. When `notes` says there was no git
-  repository, say that there is no snapshot, also after a continue;
+  repository (no `.git` above the working directory), say that there is
+  no snapshot, also after a continue;
 - paths into a bundle, mapped back to the originals.
 
 When more than one answered, compare them all: where they agree, where
@@ -674,7 +688,8 @@ older, jq does not take `--raw-output0`, or a program is missing, it ends
 snapshot; a git that cannot be run, that does not answer within the
 preflight limit of one minute, or whose `git rev-parse --local-env-vars`
 does not list `GIT_DIR` (every git lists it), is `prerequisite_failed` as
-well. The
+well, and so is a git that fails in the before snapshot where a `.git`
+lies above the working directory. The
 runner was built and tested on Linux. macOS ships bash 3.2 and no
 `setsid`, so it needs bash 5, coreutils and util-linux installed. On
 Windows the runner would run in Git Bash, where the `timeout` on PATH

@@ -44,6 +44,7 @@ ALLOW_CANON=() # what the CLI is given of them, the list the status records: Ope
 RUN_DIR='' CWD='' CANON=''
 # OpenCode: what check_context found, and what the git queries left.
 BOUNDARY=''                   # the project boundary, canonical
+ABOVE=''                      # the .git that git_above found on the way up
 REASON=''                     # why check_allow_dir refused a directory
 PROTECTED=() PROTECTED_READ=0 # the protected directories, canonical, listed once per invocation
 HOME_CANON='' VAR_TMP_CANON=''
@@ -881,7 +882,11 @@ claim() { # step 4: the lock directory of the prefix, then the pid in it
         "If no run of this prefix is going on, remove the claim with:" "  rm -r -- $q"
 }
 
-check_leftovers() { # step 5, under the claim
+takes_snapshot() { # this run takes the before snapshot in step 7: the edit level, and agy at either level (its read level is instructed only)
+    [ "$LEVEL" = edit ] || [ "$KIND" = agy ]
+}
+
+check_leftovers() { # step 5, under the claim: files of the prefix, and a before snapshot when this run takes one
     local f rest found=()
     shopt -s nullglob
     for f in "$RUN_DIR/$PREFIX".*; do
@@ -900,6 +905,19 @@ check_leftovers() { # step 5, under the claim
         end_as usage_error "files of prefix $PREFIX already exist in $RUN_DIR: ${found[*]}" \
             "Start the run in a new run directory, or remove those files if no run needs them."
     fi
+    # The before snapshot is the run directory's, not the prefix's, so a run
+    # that takes one refuses a directory that holds one already, decided by
+    # level and kind without asking git. Two prefixes started together can
+    # both pass here before either writes: this narrows that overlap and does
+    # not close it.
+    takes_snapshot || return 0
+    for f in before.txt before.diff; do
+        if [ -e "$RUN_DIR/$f" ] || [ -L "$RUN_DIR/$f" ]; then found+=("$f"); fi
+    done
+    if [ "${#found[@]}" -gt 0 ]; then
+        end_as usage_error "a before snapshot already exists in $RUN_DIR: ${found[*]}" \
+            "Start the run in a new run directory: a run at the edit level, and every agy run, takes a before snapshot of its own."
+    fi
 }
 
 take_prompt_sum() { # step 7: prompt_sha256 of the file the first attempt is given
@@ -908,12 +926,21 @@ take_prompt_sum() { # step 7: prompt_sha256 of the file the first attempt is giv
     st_update '.prompt_sha256 = $s' --arg s "$SUM"
 }
 
-take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt and before.diff of the git work tree that holds the working directory; outside one, a note
+take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt and before.diff of the git work tree that holds the working directory; outside one, a note; a git that fails under a .git ends the run
     local txt="$RUN_DIR/before.txt" dif="$RUN_DIR/before.diff"
-    # Only "true" is a work tree. A failing query is git's answer outside
-    # one, and it cannot end the run: a usage error is never written to the
-    # status file this step owns.
-    if ! own_git "$CWD" rev-parse --is-inside-work-tree || [ "${GIT_OUT%$'\n'}" != true ]; then
+    # Only "true" is a work tree. A failing query is git's answer outside one
+    # only when no .git lies on the way up; with one there, git failed on a
+    # repository (a .git file it cannot read, one it refuses to trust), the
+    # snapshot cannot be taken, and the run stops before the CLI starts. This
+    # step owns the status file, where no usage error is ever written.
+    if ! own_git "$CWD" rev-parse --is-inside-work-tree; then
+        if git_above "$CWD"; then
+            end_as prerequisite_failed "git rev-parse --is-inside-work-tree failed with status $GIT_RC in $CWD${GIT_ERR:+ ($GIT_ERR)}, and $ABOVE exists, so no before snapshot was taken"
+        fi
+        note "not a git repository: no before snapshot"
+        return 0
+    fi
+    if [ "${GIT_OUT%$'\n'}" != true ]; then
         note "not a git repository: no before snapshot"
         return 0
     fi
@@ -1329,8 +1356,20 @@ own_git() { # [-o file] dir args...: one git query about dir, bounded, with the 
     return "$GIT_RC"
 }
 
+git_above() { # canonical dir: sets ABOVE to the first .git on the way up from dir, dir's own included; 1 when there is none
+    local d="$1"
+    while :; do
+        if [ -e "$d/.git" ] || [ -L "$d/.git" ]; then
+            ABOVE="${d%/}/.git"
+            return 0
+        fi
+        [ "$d" != / ] || return 1
+        d="${d%/*}"
+        d="${d:-/}"
+    done
+}
+
 project_boundary() { # dir: sets BOUNDARY to the top of the git work tree that holds dir, else to dir, canonical; 1 when no work tree holds it
-    local d
     if own_git "$1" rev-parse --show-toplevel; then
         canonical "${GIT_OUT%$'\n'}" ||
             end_as usage_error "cannot resolve the top of the git work tree that holds $1: ${GIT_OUT//[[:cntrl:]]/ }"
@@ -1341,15 +1380,9 @@ project_boundary() { # dir: sets BOUNDARY to the top of the git work tree that h
     BOUNDARY="$CANON"
     # git found no work tree, or failed. That is the answer only when no .git
     # lies on the way up; otherwise the boundary is unknown and the run stops.
-    d="$CANON"
-    while :; do
-        if [ -e "$d/.git" ] || [ -L "$d/.git" ]; then
-            end_as usage_error "cannot tell the project boundary of $1: git rev-parse --show-toplevel exited with status $GIT_RC there${GIT_ERR:+ ($GIT_ERR)}, and ${d%/}/.git exists"
-        fi
-        [ "$d" != / ] || break
-        d="${d%/*}"
-        d="${d:-/}"
-    done
+    if git_above "$CANON"; then
+        end_as usage_error "cannot tell the project boundary of $1: git rev-parse --show-toplevel exited with status $GIT_RC there${GIT_ERR:+ ($GIT_ERR)}, and $ABOVE exists"
+    fi
     return 1
 }
 
@@ -2063,7 +2096,7 @@ do_run() {
         agy) agy_copy_prompt ;;
     esac
     # agy can write at the read level too (its read level is instructed only).
-    if [ "$LEVEL" = edit ] || [ "$KIND" = agy ]; then take_snapshot; fi
+    if takes_snapshot; then take_snapshot; fi
     take_prompt_sum
     if [ "$KIND" = agy ]; then agy_configured_model; fi
     # Step 8: the first attempt. A signal that arrived during step 7 ends the

@@ -3747,6 +3747,8 @@ assert_eq "$(wc -c 2>/dev/null < "$RUN/before.diff" | tr -d '[:space:]')" 0 "sna
 assert_contains "$(st .message)" "no commit" "snap-unborn: message"
 assert_contains "$OUT" "no commit" "snap-unborn: the note in the summary"
 
+# No .git anywhere above the working directory: the note, and the run goes on
+# without a snapshot (a git that fails under a .git: snap-git-fails-in-repo).
 new_case snap-no-git
 WORK="$CASE/plain"
 mkdir "$WORK"
@@ -3944,6 +3946,89 @@ assert_eq "$(st .outcome)" prerequisite_failed "snap-diff-fails: outcome"
 assert_contains "$(st .message)" "git diff failed with status 128" "snap-diff-fails: the query named"
 assert_contains "$(st .message)" "fatal: DIFF-REASON" "snap-diff-fails: git's reason"
 assert_eq "$(ncalls codex)" 0 "snap-diff-fails: no call"
+
+# git runs and fails although a .git lies above the working directory: a
+# .git file git cannot read, or a repository git refuses (a stand-in that
+# answers as git does for a repository of another owner). The snapshot cannot
+# be taken, so the run stops before the CLI starts, at the edit level and for
+# agy at the read level, and its status names git's reason. A directory with
+# no .git above still gets the note (snap-no-git, notes-continue-no-git).
+new_case snap-git-fails-in-repo
+mkdir -p "$CASE/broken/sub"
+: > "$CASE/broken/.git"
+mk_tool "$CASE/refusinggit/git" <<'EOF'
+case " $* " in
+    *' --is-inside-work-tree '*) echo "fatal: detected dubious ownership in repository at '$CASE/work'" >&2; exit 128 ;;
+esac
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+play agy 1 --stdout "$(t_agy_answer C)"
+k=0
+for f in broken refusing; do
+    for a in "codex --level edit" agy; do
+        k=$((k + 1))
+        RUN="$CASE/run$k"
+        make_run "$RUN"
+        if [ "$f" = broken ]; then
+            WORK="$CASE/broken/sub" top="$CASE/broken/.git" why='(fatal: '
+            unset EXT_PATH
+        else
+            WORK="$CASE/work" top="$CASE/work/.git" why='(fatal: detected dubious ownership'
+            EXT_PATH="$CASE/refusinggit:$CASE/bin:$BIN_ROOT/utils"
+        fi
+        read -r -a w <<< "$a"
+        ext run --cli "${w[0]}" --run-dir "$RUN" "${w[@]:1}"
+        l="snap-git-fails-in-repo $f ${w[0]}"
+        assert_eq "$rc" 18 "$l: rc"
+        assert_eq "$OUT" "${w[0]}: prerequisite_failed ($(st .message)); status: $RUN/${w[0]}.status" "$l: the status named"
+        assert_eq "$(st .outcome)" prerequisite_failed "$l: outcome"
+        assert_eq "$(st .phase)" preflight "$l: phase"
+        assert_contains "$(st .message)" "git rev-parse --is-inside-work-tree failed with status 128 in $WORK" "$l: the query named"
+        assert_contains "$(st .message)" "$why" "$l: git's reason"
+        assert_contains "$(st .message)" "$top exists" "$l: the .git named"
+        assert_eq "$(stj .notes)" '[]' "$l: no note"
+        assert_nofile "$RUN/before.txt" "$l: no before.txt"
+    done
+done
+assert_eq "$(ncalls codex)" 0 "snap-git-fails-in-repo: no call of codex"
+assert_eq "$(ncalls agy)" 0 "snap-git-fails-in-repo: no call of agy"
+
+# A run that would take the before snapshot (the edit level, agy at either
+# level) refuses a run directory that holds one already, decided under the
+# claim without asking git, so also outside a git work tree: no status, no
+# call, the files and a new run directory named, the files left as they were.
+# A read-level Codex or OpenCode run beside them takes no snapshot and runs.
+new_case snap-exists
+mkdir "$CASE/plain"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+play agy 1 --stdout "$(t_agy_answer C)"
+answering qwen 1
+for files in before.txt before.diff 'before.txt before.diff'; do
+    rm -f "$RUN/before.txt" "$RUN/before.diff"
+    for f in $files; do printf 'OLD\n' > "$RUN/$f"; done
+    for a in "codex --level edit" agy "qwen --level edit" "codex --level edit plain"; do
+        read -r -a w <<< "$a"
+        WORK="$CASE/work"
+        if [ "${w[3]:-}" = plain ]; then WORK="$CASE/plain"; fi
+        ext run --cli "${w[0]}" --run-dir "$RUN" "${w[@]:1:2}"
+        l="snap-exists $files, $a"
+        assert_eq "$rc" 64 "$l: rc"
+        assert_eq "$OUT" "${w[0]}: usage_error (a before snapshot already exists in $RUN: $files); status: none" "$l: summary"
+        assert_contains "$ERR" "Start the run in a new run directory" "$l: the remedy"
+        assert_nofile "$RUN/${w[0]}.status" "$l: no status"
+        assert_nofile "$RUN/${w[0]}.lock" "$l: no lock"
+    done
+    for f in $files; do assert_eq "$(cat "$RUN/$f")" OLD "snap-exists $files: $f left as it was"; done
+done
+assert_nofile "$RUN/agy-prompt.md" "snap-exists: no prompt copy"
+assert_eq "$(ncalls codex) $(ncalls agy) $(ncalls qwen)" "0 0 0" "snap-exists: no call"
+WORK="$CASE/work"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "snap-exists: a read-level Codex run beside them"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "snap-exists: a read-level OpenCode run beside them"
+for f in before.txt before.diff; do assert_eq "$(cat "$RUN/$f")" OLD "snap-exists: $f still as it was"; done
 
 # ---------------------------------------------------------------------------
 # Signals, the live status, failed writes, and concurrency. Every case here
@@ -4546,12 +4631,21 @@ assert_eq "$rc" 21 "write-fails-agy-copy: rc"
 assert_eq "$(st .outcome)" runner_failure "write-fails-agy-copy: outcome"
 assert_eq "$(ncalls agy)" 0 "write-fails-agy-copy: no call"
 
+# A snapshot file that cannot be written ends the run as a runner failure.
+# before.txt becomes a directory once the run has passed its check of the
+# run directory (step 5): when git is first asked, in step 7. (One that is
+# already there is refused in step 5: snap-exists.)
 new_case write-fails-snapshot
-mkdir "$RUN/before.txt"
+mk_tool "$CASE/mkgit/git" <<'EOF'
+if [ "$*" = 'rev-parse --local-env-vars' ]; then mkdir -p "$CASE/run/before.txt"; fi
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+EXT_PATH="$CASE/mkgit:$CASE/bin:$BIN_ROOT/utils"
 answering codex 1
 ext run --cli codex --run-dir "$RUN" --level edit
 assert_eq "$rc" 21 "write-fails-snapshot: rc"
 assert_eq "$(st .outcome)" runner_failure "write-fails-snapshot: outcome"
+assert_contains "$(st .message)" "cannot write $RUN/before.txt" "write-fails-snapshot: the file named"
 assert_eq "$(ncalls codex)" 0 "write-fails-snapshot: no call"
 
 new_case unwritable-claim
