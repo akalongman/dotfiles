@@ -495,7 +495,7 @@ needs is missing or failed (a helper program, bash 5, its settings file,
 the Codex sandbox probe, git); `unsupported_version`, the OpenCode
 version guard refused; `cancelled`, a signal stopped the runner before or
 while the CLI ran, or before a resume; `runner_failure`, the runner could
-not write one of its own files or could not confirm that the CLI's
+not write or read one of its own files or could not confirm that the CLI's
 processes had ended, or exited in a way nobody planned; `usage_error`,
 bad input (an argument, a refused outside directory or project boundary,
 a claimed prefix, files of the prefix that already exist, a saved record

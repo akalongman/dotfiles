@@ -100,6 +100,7 @@ CMD_ENV=()                    # the same for the command run_cmd starts; run_att
 OC_AGENT=''                   # the OpenCode agent of the next attempt
 PROMPT_FILE=''                # the file the first attempt is given
 TEXT=''                       # what read_text read
+HANDLES=()                    # what read_handles read: the distinct session handles of one attempt
 # An agy or OpenCode trace as read_trace and trace_facts left it, for the attempt TRACE_OF.
 TRACE_OF='' T_EVENTS='' T_SKIPPED=0 T_DAMAGED=false
 T_RESULT=false T_STATUS='' T_DENIED_N=0 T_DENIED_TOOLS=''          # agy
@@ -1693,6 +1694,14 @@ attempt_tokens() { # attempt-base: the attempt's tokens as compact JSON
     esac
 }
 
+read_handles() { # attempt-base id: sets HANDLES to the distinct handles in the attempt's files; a read that fails ends the run as runner_failure
+    local out
+    # A failed read is not "no handle": the command substitution keeps its status.
+    out="$(attempt_handles "$1")" || end_as runner_failure "cannot read the session handles of attempt $2"
+    HANDLES=()
+    if [ -n "$out" ]; then mapfile -t HANDLES <<< "$out"; fi
+}
+
 agy_usage_limit() { # attempt-base: true when the attempt ended in agy's quota error; sets A_REASON and A_AT_DOOR
     local line=''
     [ "$T_DAMAGED" = false ] && [ "$T_RESULT" = true ] && [ "$T_STATUS" != SUCCESS ] || return 1
@@ -1729,12 +1738,13 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
     # A later attempt is passed the handle and must not report another; one
     # that starts afresh is passed none, and no handle in its files is no conflict.
     if [ "$1" != first ] && [ -n "$HANDLE" ]; then
-        while IFS= read -r h; do
+        read_handles "$base" "$1$2"
+        for h in "${HANDLES[@]}"; do
             if [ "$h" != "$HANDLE" ]; then
                 RULE=2 VERDICT=handle_conflict A_REASON="the attempt reported handle $h, not $HANDLE"
                 return
             fi
-        done < <(attempt_handles "$base")
+        done
     fi
     if [ "$A_DEADLINE" = true ]; then
         RULE=3 VERDICT=limit
@@ -1805,7 +1815,7 @@ write_earlier() { # phase n: OpenCode's text from the attempt's earlier steps to
 }
 
 record_attempt() { # phase n [fresh]: appends the classified attempt to the status object; sets A_HANDLE_SEEN
-    local base="$RUN_DIR/$PREFIX.$1$2" h count=0 tok skipped=null den='[]' fresh=false
+    local base="$RUN_DIR/$PREFIX.$1$2" tok skipped=null den='[]' fresh=false
     if [ "${3:-}" = fresh ]; then fresh=true; fi
     EARLIER='' EARLIER_BYTES=null
     if [ "$KIND" != codex ]; then
@@ -1813,11 +1823,8 @@ record_attempt() { # phase n [fresh]: appends the classified attempt to the stat
         skipped="$T_SKIPPED"
     fi
     A_HANDLE_SEEN=''
-    while IFS= read -r h; do
-        A_HANDLE_SEEN="$h"
-        count=$((count + 1))
-    done < <(attempt_handles "$base")
-    if [ "$count" != 1 ]; then A_HANDLE_SEEN=''; fi
+    read_handles "$base" "$1$2"
+    if [ "${#HANDLES[@]}" = 1 ]; then A_HANDLE_SEEN="${HANDLES[0]}"; fi
     tok="$(attempt_tokens "$base")" || end_as runner_failure "cannot read the tokens of attempt $1$2"
     case "$KIND" in
         agy) den="$(agy_denied "$T_EVENTS")" || end_as runner_failure "cannot read the denied actions in $T_EVENTS" ;;
@@ -1868,19 +1875,19 @@ take_session() { # phase n: the handle and what the CLI reported, from the attem
 }
 
 require_handle() { # sets HANDLE from the files of the attempt handle_source names: exactly one, or the run ends as no_handle or handle_conflict
-    local src base hs=() all
+    local src base all
     src="$(jq -r '.handle_source | strings' <<< "$ST" 2>/dev/null)"
     [[ $src =~ ^(first|continue)[1-9][0-9]*$ ]] ||
         end_as runner_failure "the status names no attempt that created the session (handle_source: ${src:-none})"
     base="$RUN_DIR/$PREFIX.$src"
-    # The trace is loaded here, in this shell, so that the subshell below finds it.
+    # The trace is loaded here, in this shell, so that the subshell of the read finds it.
     if [ "$KIND" != codex ]; then load_trace "$base"; fi
-    mapfile -t hs < <(attempt_handles "$base")
-    case "${#hs[@]}" in
+    read_handles "$base" "$src"
+    case "${#HANDLES[@]}" in
         0) end_as no_handle "the files of attempt $src hold no session handle" ;;
-        1) HANDLE="${hs[0]}" ;;
+        1) HANDLE="${HANDLES[0]}" ;;
         *)
-            printf -v all '%s, ' "${hs[@]}"
+            printf -v all '%s, ' "${HANDLES[@]}"
             end_as handle_conflict "the files of attempt $src hold more than one session handle: ${all%, }"
             ;;
     esac

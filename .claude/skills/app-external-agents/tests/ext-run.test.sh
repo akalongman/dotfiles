@@ -2057,6 +2057,50 @@ assert_eq "$(st .resume_used)" false "two-handles: resume_used"
 assert_eq "$(st .resume_reason)" null "two-handles: resume_reason"
 assert_eq "$(st '.attempts | length')" 1 "two-handles: one attempt"
 
+# A read of the session handles that fails is the runner's fault, named as
+# such; it is never taken for no handle or no conflict. Here the first
+# attempt's read fails (a jq that refuses the handles of the events).
+new_case handles-unreadable-first
+mk_tool "$CASE/failjq/jq" <<'EOF'
+if [ "$1" = -r ] && [ "$2" = -s ] && [[ $3 == *' oc_handles' ]]; then
+    printf '%s\n' 'jq: error: cannot read the events' >&2
+    exit 5
+fi
+exec "$BIN_ROOT/utils/jq" "$@"
+EOF
+EXT_PATH="$CASE/failjq:$CASE/bin:$BIN_ROOT/utils"
+play qwen 1 --stdout "$(t_oc_only S)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 21 "handles-unreadable-first: rc"
+assert_eq "$(st .outcome)" runner_failure "handles-unreadable-first: outcome"
+assert_eq "$(st .message)" "cannot read the session handles of attempt first1" "handles-unreadable-first: message"
+assert_nofile "$RUN/qwen.out" "handles-unreadable-first: no answer"
+assert_eq "$(ncalls qwen)" 1 "handles-unreadable-first: one call"
+
+# The same for a later attempt's check of rule 2: an awk that cannot read the
+# resume's standard error the first time it looks for the session id there,
+# which is that check; the record's read after it would succeed.
+new_case handles-unreadable-resume
+mk_tool "$CASE/failawk/awk" <<'EOF'
+for a in "$@"; do last="$a"; done
+for a in "$@"; do
+    if [ "$a" = 'k=session id: ' ] && [[ $last == *.resume1.stderr ]] && mkdir "$CASE/awk-failed" 2>/dev/null; then
+        printf 'awk: cannot open "%s"\n' "$last" >&2
+        exit 2
+    fi
+done
+exec "$BIN_ROOT/utils/awk" "$@"
+EOF
+EXT_PATH="$CASE/failawk:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --stdout OK --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "handles-unreadable-resume: rc"
+assert_eq "$(st .outcome)" runner_failure "handles-unreadable-resume: outcome"
+assert_eq "$(st .phase)" resume "handles-unreadable-resume: phase"
+assert_eq "$(st .message)" "cannot read the session handles of attempt resume1" "handles-unreadable-resume: message"
+assert_nofile "$RUN/codex.out" "handles-unreadable-resume: no answer"
+
 new_case one-handle-repeated
 play agy 1 --stdout "$(agy_init C; agy_cmd C ls; agy_result C SUCCESS '')"
 play agy 2 --stdout "$(t_agy_answer C)"
@@ -2665,6 +2709,21 @@ assert_contains "$ERR" "already exist" "continue-resume-file-in-the-way: message
 assert_contains "$ERR" ": codex.resume1.stdout" "continue-resume-file-in-the-way: the file named"
 unchanged "$RUN/codex.status" "continue-resume-file-in-the-way"
 assert_eq "$(ncalls codex)" 1 "continue-resume-file-in-the-way: no call after the run"
+
+# A continue's read of the session handle that fails leaves the saved status
+# as it was, so the run can be continued once the file can be read again.
+new_case handles-unreadable-continue
+ul_first_run
+chmod 000 "$RUN/codex.first1.stderr"
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "handles-unreadable-continue: rc"
+assert_contains "$OUT" "runner_failure (cannot read the session handles of attempt first1)" \
+    "handles-unreadable-continue: outcome and message"
+assert_ends "$OUT" "status: none" "handles-unreadable-continue: no status named"
+unchanged "$RUN/codex.status" "handles-unreadable-continue"
+assert_eq "$(ncalls codex)" 1 "handles-unreadable-continue: no call after the run"
+chmod 600 "$RUN/codex.first1.stderr"
 
 new_case fresh-prompt-changed
 play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
