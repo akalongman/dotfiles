@@ -895,19 +895,26 @@ take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt a
 # ---------------------------------------------------------------------------
 # Codex: what its files say, and its sandbox probe.
 
-codex_header() { # stderr-file key: the values of "<key>: " lines between the first two lines of dashes
-    LC_ALL=C awk -v k="$2: " '
-        /^-+\r?$/ { if (++d == 2) exit; next }
+codex_header() { # stderr-file key [closed]: the values of "<key>: " lines between the first two lines of dashes; with closed, none until the second line of dashes is there
+    LC_ALL=C awk -v k="$2: " -v closed="${3:-}" '
+        /^-+\r?$/ {
+            if (++d == 2) {
+                for (i = 1; i <= n; i++) print w[i]
+                exit
+            }
+            next
+        }
         d == 1 && index($0, k) == 1 {
             v = substr($0, length(k) + 1)
             sub(/^[ \t]+/, "", v)
             sub(/[ \t\r]+$/, "", v)
-            print v
+            if (closed == "") print v
+            else w[++n] = v
         }' "$1" 2>/dev/null
 }
 
-codex_handles() { # stderr-file: the distinct session handles of the header, one per line
-    codex_header "$1" 'session id' | LC_ALL=C awk 'NF && !seen[$0]++'
+codex_handles() { # stderr-file [closed]: the distinct session handles of the header, one per line
+    codex_header "$1" 'session id' "${2:-}" | LC_ALL=C awk 'NF && !seen[$0]++'
 }
 
 codex_answer() { # stdout-file: the answer is the attempt's standard output
@@ -1554,9 +1561,11 @@ live_handles() { # attempt-base: the distinct handles the running attempt's file
     # where agy and OpenCode name the session, so a long trace is not parsed
     # again at every poll. A line not yet complete does not parse and is left
     # out, and nothing here ends the run: the attempt's classification reads
-    # the whole trace once it has ended.
+    # the whole trace once it has ended. Codex's header is read once its
+    # closing line of dashes is there, so a session id line still being
+    # written is not taken.
     case "$KIND" in
-        codex) codex_handles "$1.stderr" ;;
+        codex) codex_handles "$1.stderr" closed ;;
         agy)
             head -c 262144 2>/dev/null < "$1.stdout" |
                 jq -nRr "$JQ_TRACE"' [inputs | try fromjson catch empty | objects] | agy_handles' 2>/dev/null

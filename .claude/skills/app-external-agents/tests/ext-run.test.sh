@@ -3700,6 +3700,22 @@ release codex 1
 ext_wait
 assert_eq "$rc" 0 "late-handle: rc"
 
+# A header whose closing line of dashes is not written yet: its session id
+# line may still be partly written, so the running status shows no handle;
+# the final record reads the header as the ended attempt left it.
+new_case handle-before-dashes
+codex_err U1 | sed -n '1,/^session id: /p' > "$CASE/open-header.err"
+play codex 1 --hold --stdout A --stderr-file "$CASE/open-header.err"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+sleep 1
+assert_eq "$(st .handle)" null "handle-before-dashes: no handle while the header is open"
+assert_eq "$(st .outcome)" running "handle-before-dashes: the attempt was still held"
+release codex 1
+ext_wait
+assert_eq "$rc" 0 "handle-before-dashes: rc"
+assert_eq "$(st .handle)" U1 "handle-before-dashes: the final record's handle"
+
 new_case running-status-agy
 play agy 1 --stdout-early "$(agy_init C)" --hold --stdout "$(agy_result C SUCCESS A)"
 ext_bg run --cli agy --run-dir "$RUN"
