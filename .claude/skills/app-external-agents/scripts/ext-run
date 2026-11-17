@@ -55,7 +55,7 @@ AGY_SETTINGS="${HOME:-}/.gemini/antigravity-cli/settings.json"
 AGY_CMDS=() AGY_READS=()      # the X of its command(X) rules and the P of its read_file(P) rules
 AGY_COPY=''                   # agy-prompt.md as step 3 built it; step 7 writes it
 PHASE=preflight MESSAGE=''
-NOTES=''                      # notes no outcome replaces (the before snapshot's), joined by "; "; the status's message carries them after MESSAGE
+NOTES=''                      # notes no outcome replaces (the before snapshot's), joined by "; "; the status's message carries them after MESSAGE, and its notes field lists them; a continue takes them from the record
 JOINED=''                     # MESSAGE and NOTES as joined_message joined them
 LOCK='' CLAIMED=0
 STATUS_FILE='' STATUS_BROKEN=0 FINALIZING=0
@@ -161,9 +161,11 @@ say() {
     printf 'ext-run: %s\n' "$1" >&2
 }
 
-note() { # text: a note for the status's message, kept whatever outcome follows
+note() { # text: a note for the status's message and its notes field, kept whatever outcome follows
     say "$1"
     NOTES="${NOTES:+$NOTES; }$1"
+    # shellcheck disable=SC2016  # a jq variable
+    st_update '.notes += [$n]' --arg n "$1"
 }
 
 joined_message() { # sets JOINED to the outcome's message followed by the notes, "; " between them
@@ -315,7 +317,7 @@ init_status() { # the status object as step 6 of a run writes it
         --arg cwd "$CWD" --arg limit "$LIMIT" --arg rlimit "$RESUME_LIMIT" --arg model "$MODEL" \
         --arg effort "$EFFORT" --arg ocm "$OC_MODEL" --arg boundary "$BOUNDARY" '
         def named: if . == "" then null else . end;
-        {outcome: "running", phase: "preflight", message: "",
+        {outcome: "running", phase: "preflight", message: "", notes: [],
          name: $name, kind: $kind, prefix: $prefix, level: $level, cwd: $cwd, boundary: ($boundary | named),
          limit: $limit, resume_limit: $rlimit,
          requested: {model: ($model | named), effort: ($effort | named)},
@@ -2072,6 +2074,7 @@ elif (.resume_used | bool | not) then incomplete("resume_used")
 elif .cut_off_phase == "resume" and (.resume_reason | IN("limit", "empty") | not) then incomplete("resume_reason")
 elif (source_ok | not) then incomplete("handle_source")
 elif (.allow_dirs | type == "array" and all(.[]; str) | not) then incomplete("allow_dirs")
+elif has("notes") and (.notes | type == "array" and all(.[]; str) | not) then incomplete("notes")
 elif (.requested | type == "object" and has("model") and has("effort") and (.model | named) and (.effort | named)
     | not) then incomplete("requested")
 elif (.prompt_sha256 | str | not) then incomplete("prompt_sha256")
@@ -2194,8 +2197,10 @@ do_continue() {
     fi
     # Step 7: the status file is this invocation's from here on. The earlier
     # cut's reset time belongs to that usage limit; a new one records its own.
+    # The snapshot's notes stay, none in a record written before they were
+    # recorded, and follow this invocation's message as they followed the run's.
     PHASE="continue"
-    st_update '.reset_at = null'
+    st_update '.reset_at = null | .notes = (.notes // [])'
     if [ "$FRESH" = 1 ]; then
         # shellcheck disable=SC2016  # a jq variable
         st_update '.handle_source = $id | .handle = null | .reported = null | .fresh_start = false' \
@@ -2206,6 +2211,8 @@ do_continue() {
     # for example) still leaves the record as it was, so the run can be
     # continued again.
     end_if_cancelled "before the continue started"
+    NOTES="$(jq -r '.notes | join("; ")' <<< "$ST")" ||
+        end_as runner_failure "cannot read the notes of the status file $STATUS_FILE"
     OWNS_STATUS=1
     write_status
     # Step 8.

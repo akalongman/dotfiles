@@ -616,6 +616,7 @@ otherwise left out with its parentheses.
 | wall | `attempts[].wall`, one value per attempt with its phase when there is more than one | the same | the same |
 | handle | `handle` | the same | the same |
 | version | none | none | `versions.preflight`, followed by "untested" when `version_untested` is true |
+| snapshot notes (after the first line) | `notes`: the before snapshot's notes, `not a git repository: no before snapshot` or `no commit yet: before.diff is empty`, also joined after the message; a continue keeps them and repeats them after its own message; empty when there are none | the same | the same |
 
 After the first line, as they apply:
 
@@ -643,8 +644,8 @@ After the first line, as they apply:
   commit `before.diff` stays empty), and summarize the diff. An unchanged
   status does not show that nothing was written: a change to a file that
   was already changed or untracked, to an ignored file, or outside the
-  repository does not show in it. When the status message says there was
-  no git repository, say that there is no snapshot;
+  repository does not show in it. When `notes` says there was no git
+  repository, say that there is no snapshot, also after a continue;
 - paths into a bundle, mapped back to the originals.
 
 When more than one answered, compare them all: where they agree, where

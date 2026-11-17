@@ -2481,6 +2481,45 @@ assert_eq "$(st '.attempts[0].rule')" 7 "agy-error-not-quota: rule"
 assert_eq "$(st .reset_at)" null "agy-error-not-quota: reset_at"
 assert_eq "$(st .fresh_start)" false "agy-error-not-quota: fresh_start"
 
+# The before snapshot's notes are recorded in notes and outlive a continue,
+# which repeats them after its own message: a continue cut off again, then
+# one that answers.
+new_case notes-continue-no-git
+WORK="$CASE/plain"
+mkdir "$WORK"
+play agy 1 --exit 3 --stdout "$(t_agy_quota_door C1 45m)" --stderr "$(agy_quota_err 45m)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 13 "notes-continue-no-git: the run's rc"
+assert_eq "$(stj .notes)" '["not a git repository: no before snapshot"]' "notes-continue-no-git: the run's notes"
+play agy 2 --exit 3 --stdout "$(t_agy_quota_door C2 30m)" --stderr "$(agy_quota_err 30m)"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 13 "notes-continue-no-git: the first continue's rc"
+assert_eq "$(st .message)" "$(agy_quota_text 30m); not a git repository: no before snapshot" \
+    "notes-continue-no-git: the first continue's message, then the note"
+play agy 3 --stdout "$(t_agy_answer C3)"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "notes-continue-no-git: rc"
+assert_eq "$(stj .notes)" '["not a git repository: no before snapshot"]' "notes-continue-no-git: the notes kept"
+assert_eq "$(st .message)" "not a git repository: no before snapshot" "notes-continue-no-git: the message repeats the note"
+assert_eq "$OUT" "agy: answered (not a git repository: no before snapshot); status: $RUN/agy.status" \
+    "notes-continue-no-git: and so does the summary"
+
+new_case notes-continue-no-commit
+WORK="$CASE/unborn"
+mkdir "$WORK"
+git init -q --template="$ROOT/tpl" "$WORK"
+echo x > "$WORK/new"
+play agy 1 --exit 3 --stdout "$(t_agy_quota_work C1 2h5m)" --stderr "$(agy_quota_err 2h5m)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 13 "notes-continue-no-commit: the run's rc"
+assert_eq "$(stj .notes)" '["no commit yet: before.diff is empty"]' "notes-continue-no-commit: the run's notes"
+play agy 2 --stdout "$(t_agy_answer C1)"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "notes-continue-no-commit: rc"
+assert_eq "$(stj .notes)" '["no commit yet: before.diff is empty"]' "notes-continue-no-commit: the notes kept"
+assert_eq "$(st .message)" "no commit yet: before.diff is empty" "notes-continue-no-commit: the message repeats the note"
+assert_contains "$OUT" "(no commit yet: before.diff is empty)" "notes-continue-no-commit: and so does the summary"
+
 new_case fresh-then-empty
 play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
 ext run --cli codex --run-dir "$RUN"
@@ -2724,6 +2763,32 @@ ext continue --cli codex --run-dir "$RUN"
 assert_eq "$rc" 64 "continue-bad-nested: rc"
 assert_contains "$ERR" "incomplete: requested" "continue-bad-nested: the field named"
 unchanged "$RUN/codex.status" "continue-bad-nested"
+
+# A record written before notes were recorded continues, its notes read as
+# none; a notes field that is there must be a list of strings.
+new_case notes-old-record
+ul_first_run
+rewrite_status codex 'del(.notes)'
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "notes-old-record: rc"
+assert_eq "$(st .outcome)" answered "notes-old-record: outcome"
+assert_eq "$(stj .notes)" '[]' "notes-old-record: no notes"
+assert_eq "$(st .message)" "" "notes-old-record: message"
+
+new_case notes-ill-formed
+ul_first_run
+cp "$RUN/codex.status" "$CASE/saved.status"
+for f in '.notes = "x"' '.notes = [1]' '.notes = null'; do
+    cp "$CASE/saved.status" "$RUN/codex.status"
+    rewrite_status codex "$f"
+    keep "$RUN/codex.status"
+    ext continue --cli codex --run-dir "$RUN"
+    assert_eq "$rc" 64 "notes-ill-formed $f: rc"
+    assert_contains "$ERR" "incomplete: notes is missing or ill formed" "notes-ill-formed $f: the field named"
+    unchanged "$RUN/codex.status" "notes-ill-formed $f"
+done
+assert_eq "$(ncalls codex)" 1 "notes-ill-formed: no call after the run"
 
 new_case continue-contradiction
 ul_first_run
