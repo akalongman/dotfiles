@@ -522,7 +522,7 @@ with `outcomes`:
 | `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
 | `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
 | `handle_conflict` | 17 | the handles the message names; nothing further is resumed |
-| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, a jq older than 1.7 (one that does not take `--raw-output0`), the settings file, the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike), git that did not answer or cannot be run, or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
+| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, a jq older than 1.7 (one that does not take `--raw-output0`), the settings file, the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike), git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` does not list `GIT_DIR`, or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
 | `unsupported_version` | 19 | the OpenCode version found and the tested one |
 | `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
 | `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below |
@@ -551,8 +551,8 @@ fault the message names lies:
   that names no status file, or a `--cli` other than the one the status
   file was written for), a claimed prefix, a missing CLI, a prerequisite
   (a helper program, a jq older than 1.7, the settings file, the Codex
-  sandbox probe, a follow-up text, git that did not answer or cannot be
-  run), an OpenCode
+  sandbox probe, a follow-up text, git that did not answer, cannot be
+  run, or lists no `GIT_DIR`), an OpenCode
   version the guard refused, a process group or session that outlived
   the kill, or a signal. A record that could be continued before still can be: once
   the fault is cleared, the same continue command is checked afresh.
@@ -671,8 +671,10 @@ by Ubuntu 22.04 and Debian 12, lacks), and `timeout` (with `-k`),
 older, jq does not take `--raw-output0`, or a program is missing, it ends
 `prerequisite_failed` before anything starts and names what is missing. `timeout` and `realpath` may be GNU's or the Rust coreutils
 (uutils). git is asked for OpenCode's project boundary and the before
-snapshot; a git that cannot be run, or that does not answer within the
-preflight limit of one minute, is `prerequisite_failed` as well. The
+snapshot; a git that cannot be run, that does not answer within the
+preflight limit of one minute, or whose `git rev-parse --local-env-vars`
+does not list `GIT_DIR` (every git lists it), is `prerequisite_failed` as
+well. The
 runner was built and tested on Linux. macOS ships bash 3.2 and no
 `setsid`, so it needs bash 5, coreutils and util-linux installed. On
 Windows the runner would run in Git Bash, where the `timeout` on PATH

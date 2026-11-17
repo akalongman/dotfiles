@@ -3287,6 +3287,33 @@ assert_contains "$ERR" "not a name" "git-vars-not-names: what it printed"
 assert_eq "$(ncalls qwen)" 0 "git-vars-not-names: no call"
 assert_nofile "$RUN/qwen.status" "git-vars-not-names: no status"
 
+# Every git lists GIT_DIR among the variables local to a repository, so an
+# answer that does not (none at all, or other names only) is not git's list,
+# and the variables to leave out are unknown: a missing prerequisite that
+# names git, before the run writes anything.
+new_case git-vars-no-git-dir
+mk_tool "$CASE/emptygit/git" <<'EOF'
+if [ "$*" = 'rev-parse --local-env-vars' ]; then exit 0; fi
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+mk_tool "$CASE/shortgit/git" <<'EOF'
+if [ "$*" = 'rev-parse --local-env-vars' ]; then echo GIT_WORK_TREE; exit 0; fi
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+answering qwen 1
+for g in emptygit shortgit; do
+    RUN="$CASE/run-$g"
+    make_run "$RUN"
+    EXT_PATH="$CASE/$g:$CASE/bin:$BIN_ROOT/utils"
+    ext run --cli qwen --run-dir "$RUN"
+    assert_eq "$rc" 18 "git-vars-no-git-dir $g: rc"
+    assert_contains "$ERR" "git rev-parse --local-env-vars" "git-vars-no-git-dir $g: git named"
+    assert_contains "$ERR" "did not list GIT_DIR" "git-vars-no-git-dir $g: what is missing"
+    assert_ends "$OUT" "status: none" "git-vars-no-git-dir $g: no status named"
+    assert_nofile "$RUN/qwen.status" "git-vars-no-git-dir $g: no status"
+done
+assert_eq "$(ncalls qwen)" 0 "git-vars-no-git-dir: no call"
+
 # A continue meets git as a run does: one that cannot be run, or that lists
 # what is not a variable name, is a missing prerequisite, and the saved
 # status stays as it was.
@@ -3317,6 +3344,29 @@ assert_eq "$(ncalls qwen)" 1 "continue-git-broken: no call after the first"
 unset EXT_PATH
 ext continue --cli qwen --run-dir "$RUN"
 assert_eq "$rc" 0 "continue-git-broken: the run can still be continued"
+
+# The same for an answer that does not name GIT_DIR: the saved status stays as
+# it was, and the run can be continued once git answers.
+new_case continue-git-no-git-dir
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+fake_ul qwen
+keep "$RUN/qwen.status"
+mk_tool "$CASE/emptygit/git" <<'EOF'
+if [ "$*" = 'rev-parse --local-env-vars' ]; then exit 0; fi
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+play qwen 2 --stdout "$(t_oc_only S)"
+EXT_PATH="$CASE/emptygit:$CASE/bin:$BIN_ROOT/utils"
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 18 "continue-git-no-git-dir: rc"
+assert_contains "$ERR" "did not list GIT_DIR" "continue-git-no-git-dir: git and what is missing named"
+assert_ends "$OUT" "status: none" "continue-git-no-git-dir: no status named"
+unchanged "$RUN/qwen.status" "continue-git-no-git-dir"
+assert_eq "$(ncalls qwen)" 1 "continue-git-no-git-dir: no call after the first"
+unset EXT_PATH
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-git-no-git-dir: the run can still be continued"
 
 # git fails although a .git lies above the directory (here a .git file git
 # cannot read): the boundary is unknown, and the directory is not taken for it.
@@ -3832,6 +3882,23 @@ assert_eq "$rc" 18 "snap-git-vars-fail: rc, not a usage error"
 assert_eq "$(st .outcome)" prerequisite_failed "snap-git-vars-fail: outcome"
 assert_contains "$(st .message)" "--local-env-vars" "snap-git-vars-fail: the query named"
 assert_eq "$(ncalls codex)" 0 "snap-git-vars-fail: no call"
+
+# An answer that does not name GIT_DIR, met first in the snapshot for Codex:
+# the run ends there, recorded, before the CLI starts.
+new_case snap-git-vars-no-git-dir
+mk_tool "$CASE/emptygit/git" <<'EOF'
+if [ "$*" = 'rev-parse --local-env-vars' ]; then exit 0; fi
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+EXT_PATH="$CASE/emptygit:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 18 "snap-git-vars-no-git-dir: rc"
+assert_eq "$(st .outcome)" prerequisite_failed "snap-git-vars-no-git-dir: outcome"
+assert_contains "$(st .message)" "git rev-parse --local-env-vars" "snap-git-vars-no-git-dir: git named"
+assert_contains "$(st .message)" "did not list GIT_DIR" "snap-git-vars-no-git-dir: what is missing"
+assert_nofile "$RUN/before.txt" "snap-git-vars-no-git-dir: no before.txt"
+assert_eq "$(ncalls codex)" 0 "snap-git-vars-no-git-dir: no call"
 
 new_case snap-status-fails
 mk_tool "$CASE/failgit/git" <<'EOF'

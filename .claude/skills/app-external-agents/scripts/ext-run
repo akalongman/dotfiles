@@ -1256,9 +1256,10 @@ git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repo
     # A signal that arrived during the call decides, whatever its status.
     end_if_cancelled "during a git query (git rev-parse --local-env-vars)"
     # A git that did not answer, cannot be run, or answers with what is not a
-    # list of names is a missing prerequisite. Any other failure is a usage
-    # error (the plan's Contract, run step 3), except once this invocation
-    # owns a status file, where no usage error is ever written.
+    # list of names, or with a list that does not name GIT_DIR, is a missing
+    # prerequisite. Any other failure is a usage error (the plan's Contract,
+    # run step 3), except once this invocation owns a status file, where no
+    # usage error is ever written.
     case "$GIT_RC" in
         0) ;;
         124 | 137) end_as prerequisite_failed "git did not answer within $EXT_RUN_PREFLIGHT_LIMIT (git rev-parse --local-env-vars)" ;;
@@ -1277,6 +1278,10 @@ git_local_vars() { # sets GIT_VARS to the variables git lists as local to a repo
             end_as prerequisite_failed "git rev-parse --local-env-vars (status 0) printed what is not a variable name: ${v//[[:cntrl:]]/ }"
         GIT_VARS+=("$v")
     done <<< "$out"
+    # Every git lists GIT_DIR. A list without it, none at all included, is
+    # not git's, and the variables to unset would be unknown.
+    [[ " ${GIT_VARS[*]} " == *' GIT_DIR '* ]] ||
+        end_as prerequisite_failed "git rev-parse --local-env-vars (status 0) did not list GIT_DIR, which every git lists, so the repository variables to leave out are unknown"
     GIT_VARS_READ=1
 }
 
