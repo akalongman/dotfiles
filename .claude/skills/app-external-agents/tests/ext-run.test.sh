@@ -988,6 +988,23 @@ assert_eq "$(printf '%s\n' "$ERR" | grep -c '^  rm -r -- ')" 1 "claimed: the rem
 assert_file "$RUN/codex.lock" "claimed: the lock stays"
 assert_nofile "$RUN/codex.status" "claimed: no status"
 
+# A ps that cannot list the processes cannot show the claim's owner gone, so
+# the refusal takes it to be running and offers no removal command.
+new_case claimed-ps-fails
+mkdir "$RUN/codex.lock"
+d="$(dead_pid)"
+echo "$d" > "$RUN/codex.lock/pid"
+mk_tool "$CASE/badps/ps" <<'EOF'
+printf 'ps: cannot list the processes\n' >&2
+exit 1
+EOF
+EXT_PATH="$CASE/badps:$CASE/bin:$BIN_ROOT/utils"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "claimed-ps-fails: rc"
+assert_contains "$ERR" "pid $d is running" "claimed-ps-fails: the owner taken to be running"
+assert_lacks "$ERR" "rm -r" "claimed-ps-fails: no removal command"
+assert_file "$RUN/codex.lock" "claimed-ps-fails: the lock stays"
+
 new_case claimed-no-pid
 mkdir "$RUN/codex.lock"
 ext run --cli codex --run-dir "$RUN"
@@ -1245,6 +1262,25 @@ assert_contains "$(st .message)" "could not start" "start-no-gid: message"
 assert_nofile "$CALLS/sandbox.started" "start-no-gid: the command never ran"
 assert_nofile "$RUN/codex.lock" "start-no-gid: no lock"
 
+# The start ends before the command has recorded its group, and the group
+# appears while the runner waits one poll for it: the runner stops it, and a
+# process of it that outlives the kill is named beside the failed start.
+new_case start-late-survivor
+mk_ghost_ps "$CASE/late"
+mk_tool "$CASE/late/setsid" <<'EOF'
+( sleep 0.5; exec "$BIN_ROOT/utils/setsid" "$@" ) &
+exit 0
+EOF
+EXT_PATH="$CASE/late:$CASE/bin:$BIN_ROOT/utils"
+EXT_VARS=(EXT_RUN_POLL=2)
+answering agy 1
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 21 "start-late-survivor: rc"
+assert_contains "$(st .message)" "could not start" "start-late-survivor: the failed start named"
+assert_contains "$(st .message)" "could not stop process group" "start-late-survivor: and the survivor"
+assert_eq "$(ncalls agy)" 0 "start-late-survivor: no call"
+assert_nofile "$RUN/agy.lock" "start-late-survivor: no lock"
+
 new_case survivor-probe
 mk_ghost_ps "$CASE/ghost"
 EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
@@ -1255,6 +1291,27 @@ assert_eq "$rc" 21 "survivor-probe: rc"
 assert_contains "$(st .message)" "could not stop" "survivor-probe: message"
 assert_file "$CALLS/sandbox.started" "survivor-probe: the probe ran"
 assert_eq "$(ncalls codex)" 0 "survivor-probe: no model attempt after it"
+
+# A ps that cannot list the processes confirms nothing: the stop goes on to
+# the kill and ends the run as a runner failure, instead of reading the
+# failure as "no process is alive".
+new_case ps-fails
+mk_tool "$CASE/badps/ps" <<'EOF'
+if [ "${1:-}" = -A ]; then
+    printf 'ps: cannot list the processes\n' >&2
+    exit 1
+fi
+exec "$BIN_ROOT/utils/ps" "$@"
+EOF
+EXT_PATH="$CASE/badps:$CASE/bin:$BIN_ROOT/utils"
+answering codex 1
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "ps-fails: rc"
+assert_eq "$(st .outcome)" runner_failure "ps-fails: outcome"
+assert_contains "$(st .message)" "could not stop process group" "ps-fails: the group named"
+assert_contains "$(st .message)" "ps could not list the processes" "ps-fails: the cause named"
+assert_eq "$(ncalls codex)" 0 "ps-fails: no model attempt after the probe"
+assert_eq "$(alive "$(cat "$CALLS/sandbox.pid" 2>/dev/null)" && echo yes || echo no)" no "ps-fails: the probe is gone"
 
 # A worker that leads a process group of its own inside the CLI's session (as
 # Codex's node_repl was seen on 2026-11-16) is stopped with the session.
@@ -1354,6 +1411,22 @@ assert_eq "$rc" 138 "unexpected-exit-forked: rc"
 assert_eq "$(alive "$(callf codex 1 pid)" && echo yes || echo no)" no "unexpected-exit-forked: the CLI is gone"
 assert_eq "$(alive "$(callf codex 1 child)" && echo yes || echo no)" no "unexpected-exit-forked: its child is gone"
 assert_nofile "$RUN/codex.lock" "unexpected-exit-forked: no lock"
+
+# An unplanned exit while a process of the group outlives the kill: the
+# message keeps the unexpected exit and names the survivor after it.
+new_case unexpected-exit-survivor
+mk_ghost_ps "$CASE/ghost"
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --hold --child 300 --stdout "$(t_agy_answer C)"
+ext_bg run --cli agy --run-dir "$RUN"
+wait_for "$CALLS/agy.1/started"
+kill -USR1 "$BG"
+ext_wait
+assert_eq "$rc" 138 "unexpected-exit-survivor: rc"
+assert_eq "$(st .outcome)" runner_failure "unexpected-exit-survivor: outcome"
+assert_contains "$(st .message)" "unexpected exit" "unexpected-exit-survivor: the unexpected exit named"
+assert_contains "$(st .message)" "could not stop process group" "unexpected-exit-survivor: and the survivor"
+assert_nofile "$RUN/agy.lock" "unexpected-exit-survivor: no lock"
 
 new_case start-abandoned
 mk_tool "$CASE/held/setsid" <<'EOF'

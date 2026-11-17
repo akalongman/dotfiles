@@ -110,6 +110,8 @@ CANCEL_SIG=''                 # the signal that set CANCEL: TERM, HUP or INT
 C_EXIT='' C_WALL='' C_WALL_US=0 C_END_US=0 C_PGID='' C_SIGNALLED=false # the last command run_cmd ran; C_END_US is when it ended
 C_STUCK=false C_STUCK_MSG=''  # a process of its group or session outlived the kill, and the message that says so
 STOP_WHAT='' SESSION_PIDS=()  # where stop_cmd found a survivor; the live processes session_alive found
+STOP_WHY='' PS_FAILED=0       # why that stop failed; 1 once ps could not list the processes during it
+STOP_FAILED=''                # the finalizer's first step: the message of a stop that failed
 A_BASE='' A_CREATES=0         # the running attempt's file base; 1 when it creates the session (first1, or a continue that starts afresh)
 LIVE_HANDLE=''                # the handle the running attempt's files showed; only a running status carries it
 A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false A_END_US=0 # the last attempt
@@ -238,12 +240,20 @@ alias_model() { # alias: prints the OpenCode model id it stands for
     esac
 }
 
-pid_alive() { # pid: the process exists and is not a zombie
-    local s
+pid_alive() { # pid: the process exists and is not a zombie; a ps that cannot list the processes counts it as alive
+    local out p s
     case "${1:-}" in '' | *[!0-9]* | 0) return 1 ;; esac
-    s="$(ps -o stat= -p "$1" 2>/dev/null)" || return 1
-    s="${s//[[:space:]]/}"
-    [ -n "$s" ] && [ "${s#Z}" = "$s" ]
+    # ps -p fails alike for a pid that is gone and for a ps that cannot list
+    # processes, so the whole table is read; one that cannot be read shows
+    # nothing gone.
+    if ! out="$(ps -A -o pid=,stat= 2>/dev/null)" || [ -z "$out" ]; then return 0; fi
+    while read -r p s; do
+        if [ "$p" = "$1" ]; then
+            [ "${s#Z}" = "$s" ]
+            return
+        fi
+    done <<< "$out"
+    return 1
 }
 
 canonical() { # path: sets CANON to its canonical absolute path, whatever it contains
@@ -368,11 +378,15 @@ publish_answer() { # the answer to <p>.out through <p>.out.tmp
 # ---------------------------------------------------------------------------
 # Starting and stopping a command.
 
-group_alive() { # pgid: ps shows a process of that group whose state does not begin with Z
-    local g s
+group_alive() { # pgid: ps shows a process of that group whose state does not begin with Z; a ps that cannot list the processes counts as one (PS_FAILED)
+    local out g s
+    if ! out="$(ps -A -o pgid= -o stat= 2>/dev/null)" || [ -z "$out" ]; then
+        PS_FAILED=1
+        return 0
+    fi
     while read -r g s; do
         if [ "$g" = "$1" ] && [ "${s#Z}" = "$s" ]; then return 0; fi
-    done < <(ps -A -o pgid= -o stat= 2>/dev/null)
+    done <<< "$out"
     return 1
 }
 
@@ -400,12 +414,16 @@ stop_group() { # pgid [term]: TERM when asked, the grace period, KILL, the wait 
 # The started shell calls setsid, so the group it leads also leads a session
 # of the same id, and the kernel does not reuse that id while a member lives.
 # A worker that moved to a process group of its own stays in that session.
-session_alive() { # sid: ps shows a process of that session whose state does not begin with Z; sets SESSION_PIDS to them
-    local p s st
+session_alive() { # sid: ps shows a process of that session whose state does not begin with Z; sets SESSION_PIDS to them; a ps that cannot list the processes counts as one (PS_FAILED)
+    local out p s st
     SESSION_PIDS=()
+    if ! out="$(ps -A -o pid=,sid=,stat= 2>/dev/null)" || [ -z "$out" ]; then
+        PS_FAILED=1
+        return 0
+    fi
     while read -r p s st; do
         if [ "$s" = "$1" ] && [ "${st#Z}" = "$st" ]; then SESSION_PIDS+=("$p"); fi
-    done < <(ps -A -o pid=,sid=,stat= 2>/dev/null)
+    done <<< "$out"
     [ "${#SESSION_PIDS[@]}" -gt 0 ]
 }
 
@@ -423,17 +441,21 @@ session_gone_within() { # sid microseconds: true once the session has no live pr
 
 stop_session() { # sid [term]: its live processes, as stop_group does a group: TERM when asked, the grace period, KILL, the wait after it; 1 when one outlived it
     case "$1" in '' | *[!0-9]* | 0 | 1) return 0 ;; esac
-    if [ "${2:-}" = term ] && session_alive "$1"; then kill -TERM -- "${SESSION_PIDS[@]}" 2>/dev/null; fi
+    if [ "${2:-}" = term ] && session_alive "$1" && [ "${#SESSION_PIDS[@]}" -gt 0 ]; then
+        kill -TERM -- "${SESSION_PIDS[@]}" 2>/dev/null
+    fi
     session_gone_within "$1" "$GRACE_US" && return 0
-    if session_alive "$1"; then kill -KILL -- "${SESSION_PIDS[@]}" 2>/dev/null; fi
+    if session_alive "$1" && [ "${#SESSION_PIDS[@]}" -gt 0 ]; then kill -KILL -- "${SESSION_PIDS[@]}" 2>/dev/null; fi
     session_gone_within "$1" "$KILL_WAIT_US" && return 0
     return 1
 }
 
-stop_cmd() { # pgid [term]: a started command's group, then the session it leads; 1 when a process outlived the kill, with STOP_WHAT naming where
-    STOP_WHAT=''
+stop_cmd() { # pgid [term]: a started command's group, then the session it leads; 1 when a process outlived the kill or ps could not show it gone, with STOP_WHAT naming where and STOP_WHY why
+    STOP_WHAT='' PS_FAILED=0
     stop_group "$@" || STOP_WHAT="process group $1"
     stop_session "$@" || STOP_WHAT="${STOP_WHAT:+$STOP_WHAT and }session $1"
+    STOP_WHY='a process outlived the kill'
+    if [ "$PS_FAILED" = 1 ]; then STOP_WHY='ps could not list the processes'; fi
     [ -z "$STOP_WHAT" ]
 }
 
@@ -454,19 +476,18 @@ read_gid() { # sets GID from <p>.lock/gid when it is a regular file that is not 
     GID="$v"
 }
 
-stop_active() { # the finalizer's first step: the job, and the group and session the gid file names
+stop_active() { # the finalizer's first step: the job, and the group and session the gid file names; sets STOP_FAILED when that stop failed
     if job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
     if read_gid && ! stop_cmd "$GID" term; then
-        OUTCOME=runner_failure
-        MESSAGE="could not stop $STOP_WHAT: a process outlived the kill"
-        say "$MESSAGE"
+        STOP_FAILED="could not stop $STOP_WHAT: $STOP_WHY"
+        say "$STOP_FAILED"
     fi
     wait "$ACTIVE_JOB" 2>/dev/null
     ACTIVE_JOB=''
 }
 
 run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner starts a CLI command; sets the C_ variables
-    local limit="$1" out="$2" err="$3" in="$4" gidf="$LOCK/gid" what g t0 t1 end stuck=0
+    local limit="$1" out="$2" err="$3" in="$4" gidf="$LOCK/gid" what g t0 t1 end stuck=0 late=''
     shift 4
     what="${1##*/}${2:+ $2}"
     C_EXIT='' C_WALL='' C_WALL_US=0 C_END_US=0 C_PGID='' C_SIGNALLED=false C_STUCK=false C_STUCK_MSG=''
@@ -504,9 +525,11 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
         if job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
         wait "$ACTIVE_JOB" 2>/dev/null
         sleep "$EXT_RUN_POLL"
-        if read_gid; then stop_cmd "$GID" term; fi
+        # A group that appeared late is stopped with its session, and a
+        # process that outlives the kill is named beside the failed start.
+        if read_gid && ! stop_cmd "$GID" term; then late="; could not stop $STOP_WHAT: $STOP_WHY"; fi
         ACTIVE_JOB=''
-        end_as runner_failure "could not start $what: no process group was recorded within $EXT_RUN_START_WAIT s"
+        end_as runner_failure "could not start $what: no process group was recorded within $EXT_RUN_START_WAIT s$late"
     fi
     g="$GID"
     C_PGID="$g"
@@ -546,7 +569,7 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     # The caller ends the run: an attempt records itself first, unclassified.
     if [ "$stuck" = 1 ]; then
         C_STUCK=true
-        C_STUCK_MSG="could not stop $STOP_WHAT of $what: a process outlived the kill"
+        C_STUCK_MSG="could not stop $STOP_WHAT of $what: $STOP_WHY"
     fi
 }
 
@@ -580,6 +603,12 @@ finalize() {
         OUTCOME=runner_failure
         MESSAGE="unexpected exit (status $code)"
         say "$MESSAGE"
+    fi
+    # A process that outlived that stop makes the run a runner failure; the
+    # message keeps what ended the run and names the survivor after it.
+    if [ -n "$STOP_FAILED" ]; then
+        OUTCOME=runner_failure
+        MESSAGE="${MESSAGE:+$MESSAGE; }$STOP_FAILED"
     fi
     if [ "$OWNS_STATUS" = 1 ] && [ "$STATUS_BROKEN" = 0 ]; then
         if [ "$HAS_ANSWER" = 1 ]; then publish_answer; fi
