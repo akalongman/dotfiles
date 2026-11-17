@@ -1470,6 +1470,9 @@ assert_contains "$(st .message)" "unexpected exit" "unexpected-exit-survivor: th
 assert_contains "$(st .message)" "could not stop process group" "unexpected-exit-survivor: and the survivor"
 assert_nofile "$RUN/agy.lock" "unexpected-exit-survivor: no lock"
 
+# The runner dies while its starter is held before setsid; the finalizer
+# kills the starter there, so it never runs the command (the started shell's
+# own wait is the next case's).
 new_case start-abandoned
 mk_tool "$CASE/held/setsid" <<'EOF'
 printf '%s\n' "$$" > "$CASE/setsid.pid"
@@ -1496,6 +1499,38 @@ assert_eq "$rc" 138 "start-abandoned: rc"
 assert_eq "$(alive "$hp" && echo yes || echo no)" no "start-abandoned: the starter ended"
 assert_nofile "$CALLS/sandbox.started" "start-abandoned: the command never ran"
 assert_nofile "$RUN/codex.lock" "start-abandoned: no lock"
+
+# A runner killed outright (no finalizer runs) after it started a command
+# that has not yet recorded its group: the started shell records it later,
+# gets no go-ahead and exits 125 by itself once its wait of five seconds has
+# passed, without running the command.
+new_case start-abandoned-killed
+mk_tool "$CASE/held/setsid" <<'EOF'
+printf '%s\n' "$$" > "$CASE/setsid.pid"
+(
+    k=0
+    until [ -e "$CASE/setsid.go" ]; do
+        [ "$k" -lt 200 ] || exit 99
+        sleep 0.05
+        k=$((k + 1))
+    done
+    exec "$BIN_ROOT/utils/setsid" "$@"
+) &
+wait "$!"
+printf '%s\n' "$?" > "$CASE/starter.rc"
+EOF
+EXT_PATH="$CASE/held:$CASE/bin:$BIN_ROOT/utils"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CASE/setsid.pid"
+kill -KILL "$BG"
+ext_wait
+: > "$CASE/setsid.go"
+wait_for "$RUN/codex.lock/gid" 50
+wait_for "$CASE/starter.rc" 150
+assert_eq "$rc" 137 "start-abandoned-killed: rc"
+assert_eq "$(cat "$CASE/starter.rc" 2>/dev/null)" 125 "start-abandoned-killed: the started shell exited 125 for want of a go-ahead"
+assert_nofile "$RUN/codex.lock/gid.go" "start-abandoned-killed: no go-ahead was given"
+assert_nofile "$CALLS/sandbox.started" "start-abandoned-killed: the command never ran"
 
 new_case progress-line
 play codex 1 --sleep 1 --stdout A --stderr "$(codex_err U1)"
