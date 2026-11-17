@@ -2304,6 +2304,7 @@ unchanged "$RUN/codex.first1.stderr" "ul-first continue"
 assert_eq "$(st .limit)" 40s "ul-first continue: limit"
 assert_eq "$(st .resume_limit)" 7s "ul-first continue: resume_limit"
 assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" DONE "ul-first continue: the answer"
+assert_eq "$(st .reset_at)" null "ul-first continue: no reset time under another outcome"
 
 new_case ul-door
 play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"

@@ -2176,8 +2176,10 @@ do_continue() {
             build_later_argv read "$text"
         fi
     fi
-    # Step 7: the status file is this invocation's from here on.
+    # Step 7: the status file is this invocation's from here on. The earlier
+    # cut's reset time belongs to that usage limit; a new one records its own.
     PHASE="continue"
+    st_update '.reset_at = null'
     if [ "$FRESH" = 1 ]; then
         # shellcheck disable=SC2016  # a jq variable
         st_update '.handle_source = $id | .handle = null | .reported = null | .fresh_start = false' \
