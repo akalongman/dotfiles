@@ -97,7 +97,12 @@ and every granted directory; both calls completed without a permission
 being asked, and both files changed on disk. The
 runner does not look for such links; step 3 says how the session finds
 one that leads into a protected directory, and a bundle built by step
-3's rules holds none, because its copies follow links. OpenCode's
+3's rules holds none, because its copies follow links. Before an
+edit-level OpenCode run, the session lists the links under the project
+that lead outside it to something the owner can write, names each to the
+owner by its path and target, and asks before starting the run. Step 3
+("Links out of the project at the edit level") has the command and says
+what counts. OpenCode's
 own tool-output directory (`~/.local/share/opencode/tool-output/`) stays
 readable in every run. The edit agent allows edits and shell commands
 inside the project. Its rule denies the direct `git commit` and
@@ -239,7 +244,9 @@ gives the path to compare with for `~/.ssh`, and so on for each. A
 target that is, lies inside or contains a protected directory (the home
 directory, for example) calls for a bundle. At the edit level, which
 never runs from a bundle, the session names the link to the owner
-before the run, by the link's own path, and the owner decides.
+before the run, by its path and target, and asks before starting the
+run, whether or not the owner can write its target (see "Links out of
+the project at the edit level" below).
 Worked example: the private dotfiles checkout, `~/.dotfiles-private`,
 is a git work tree of its own whose top overlaps no protected directory,
 so an OpenCode run started in it passes the boundary check, and its
@@ -274,6 +281,55 @@ after the copy. Codex and agy can still open the originals by their
 paths, and agy writes files of its own outside the working directory. The
 bundle decides what OpenCode is granted and what every reviewer is
 pointed at, nothing more. An edit-level task is never run from a bundle.
+
+Links out of the project at the edit level. OpenCode's write and edit
+tools follow a link inside the project out of it, with no permission
+asked (see "Levels"), and the runner does not look for links. Before an
+edit-level OpenCode run, the session lists the links under the project
+that lead outside it to something the owner can write, names each to the
+owner by its path and target, and asks before starting the run. An
+edit-level run has no granted directory, because the runner refuses
+`--allow-dir` at the edit level, so such a link also leads outside every
+granted directory. Something the owner can write is a target writable by
+the owner, a directory holding something writable by the owner, or a
+missing target whose nearest existing directory above it is writable by
+the owner, because the write tool can create the missing target through
+the link. A link to a file the owner cannot write, such as a
+virtualenv's link to the system python, is not such a link. This prints
+each such link under `<boundary>`, the project boundary of step 6, as
+`<link path> -> <target>`:
+
+```
+top=<boundary>
+T=$(realpath -- "$top")
+find -H "$top" -type l -print0 | while IFS= read -r -d '' l; do
+  t=$(realpath -m -- "$l") || continue
+  case "$t/" in "$T"/*) continue ;; esac
+  if [ -e "$t" ]; then
+    w=$(find "$t" -writable -print -quit 2>/dev/null)
+  else
+    a=$t; until [ -e "${a:-/}" ]; do a=${a%/*}; done
+    w=''; if [ -d "${a:-/}" ] && [ -w "${a:-/}" ]; then w=${a:-/}; fi
+  fi
+  if [ -n "$w" ]; then printf '%s -> %s\n' "$l" "$t"; fi
+done
+```
+
+It prints nothing for a link whose target lies inside the project or
+holds nothing writable by the owner. Inside a linked directory the
+search stops at the first entry writable by the owner, so a large tree
+the owner cannot write (a link to `/usr`, for example) is searched
+whole. A link that cannot be resolved, a loop for example, is named by
+`realpath` on standard error and skipped, since nothing can be written
+through it. When the command prints nothing, the run starts without the
+question; otherwise it starts only when the owner says so, and what the
+run writes through such a link does not show in the snapshot comparison
+(see "Report"). Worked example: in the acceptance rerun of 2026-11-18
+the project `edit-proj` held `link`, a link to the scratch directory
+`edit-outside`, which the owner can write, and the command prints
+`.../edit-proj/link -> .../edit-outside`. A link to `/usr/bin/python3`,
+as a virtualenv's `bin/python` is, resolves on this machine to
+`/usr/bin/python3.14`, which the owner cannot write, and prints nothing.
 
 ### 4. Write `<run>/prompt.md`
 
@@ -355,7 +411,8 @@ of the run:
 ```
 
 Edit level, one CLI at a time, each in a run directory of its own and
-never from a bundle:
+never from a bundle; for OpenCode, only after step 3's "Links out of the
+project at the edit level":
 
 ```
 ~/.claude/skills/app-external-agents/scripts/ext-run run --cli <name> --run-dir <run> --level edit
