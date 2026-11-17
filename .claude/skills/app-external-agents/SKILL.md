@@ -220,11 +220,22 @@ and each outside directory by their own paths (step 6), not the links
 inside them, and OpenCode's read tool follows a link out of its fence
 (see "Levels"). So before an OpenCode run the session lists the links on
 disk under the boundary and under each outside directory, and resolves
-each: `find <dir> -type l -exec realpath -- {} +` prints where every
-link under `<dir>` leads. A target that is, lies inside or contains a
-protected directory (the home directory, for example) calls for a
-bundle. At the edit level, which never runs from a bundle, the session
-names the link to the owner before the run, and the owner decides.
+each. This prints every link under `<dir>`, then where it leads:
+
+```
+find -H <dir> -type l -exec sh -c 'for l do printf "%s -> %s\n" "$l" "$(realpath -- "$l")"; done' sh {} +
+```
+
+`-H` makes `find` descend also when `<dir>` is itself a link, as an
+outside directory may be; the runner grants such a directory by the
+path it leads to. Compare each target with the protected directories by
+their canonical paths, as the runner does, because a protected directory
+may itself be a link into another directory: `realpath -m -- ~/.ssh`
+gives the path to compare with for `~/.ssh`, and so on for each. A
+target that is, lies inside or contains a protected directory (the home
+directory, for example) calls for a bundle. At the edit level, which
+never runs from a bundle, the session names the link to the owner
+before the run, by the link's own path, and the owner decides.
 Worked example: the private dotfiles checkout, `~/.dotfiles-private`,
 is a git work tree of its own whose top overlaps no protected directory,
 so an OpenCode run started in it passes the boundary check, and its
@@ -239,6 +250,10 @@ Rules for building it:
 
 - copy files and directories following symbolic links, so that no link
   leads out of the bundle;
+- before copying a directory whole, list its links with the command
+  above, and leave out each link whose target is, lies inside or
+  contains a protected directory, or is a credential file: the copy
+  follows the link and would carry what it leads to into the bundle;
 - never copy a credential file, and never a whole protected directory;
 - never copy a `.git` directory or file, which would lead back to the
   original repository. A review of a git range or of uncommitted changes
