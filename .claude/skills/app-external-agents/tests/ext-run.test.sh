@@ -1039,6 +1039,32 @@ done
 assert_nofile "$CALLS/sandbox.started" "jq-without-raw-output0: no sandbox probe"
 assert_nofile "$CALLS/version.started" "jq-without-raw-output0: no version command"
 
+# For OpenCode, step 2 also refuses a tested version in the settings file
+# that is not a version, which does not stop a Codex run, and a HOME that
+# is not absolute, since the protected directories are found from it.
+new_case oc-tested-version-bad
+conf_set 'OC_TESTED_VERSION=1.19'
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 18 "oc-tested-version-bad: rc"
+assert_eq "$OUT" "qwen: prerequisite_failed (OC_TESTED_VERSION in $CASE/skill/scripts/ext-run.conf is not a version: '1.19'); status: none" \
+    "oc-tested-version-bad: the summary names the setting and its value"
+assert_eq "$(ncalls qwen)" 0 "oc-tested-version-bad: no call"
+assert_nofile "$CALLS/version.started" "oc-tested-version-bad: no version command"
+assert_nofile "$RUN/qwen.status" "oc-tested-version-bad: no status"
+answering codex 1
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-tested-version-bad: codex runs"
+
+new_case oc-home-relative
+EXT_VARS=("HOME=home")
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 18 "oc-home-relative: rc"
+assert_contains "$ERR" "HOME is not an absolute path" "oc-home-relative: message"
+assert_eq "$(ncalls qwen)" 0 "oc-home-relative: no call"
+assert_nofile "$RUN/qwen.status" "oc-home-relative: no status"
+
 # An awk that runs and prints nothing leaves the waits unconverted: the run
 # stops before it writes, instead of taking every wait as zero and every
 # status 124 as an expired deadline.
@@ -3261,6 +3287,37 @@ assert_contains "$ERR" "not a name" "git-vars-not-names: what it printed"
 assert_eq "$(ncalls qwen)" 0 "git-vars-not-names: no call"
 assert_nofile "$RUN/qwen.status" "git-vars-not-names: no status"
 
+# A continue meets git as a run does: one that cannot be run, or that lists
+# what is not a variable name, is a missing prerequisite, and the saved
+# status stays as it was.
+new_case continue-git-broken
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+fake_ul qwen
+keep "$RUN/qwen.status"
+mk_tool "$CASE/nogit/git" <<< 'exit 127'
+mk_tool "$CASE/oddgit/git" <<'EOF'
+if [ "$*" = 'rev-parse --local-env-vars' ]; then
+    echo 'not a name'
+    exit 0
+fi
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+play qwen 2 --stdout "$(t_oc_only S)"
+for g in nogit oddgit; do
+    EXT_PATH="$CASE/$g:$CASE/bin:$BIN_ROOT/utils"
+    ext continue --cli qwen --run-dir "$RUN"
+    assert_eq "$rc" 18 "continue-git-broken $g: rc"
+    assert_ends "$OUT" "status: none" "continue-git-broken $g: no status named"
+    assert_contains "$ERR" "git" "continue-git-broken $g: git named"
+    unchanged "$RUN/qwen.status" "continue-git-broken $g"
+done
+assert_contains "$ERR" "not a name" "continue-git-broken oddgit: what it printed"
+assert_eq "$(ncalls qwen)" 1 "continue-git-broken: no call after the first"
+unset EXT_PATH
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-git-broken: the run can still be continued"
+
 # git fails although a .git lies above the directory (here a .git file git
 # cannot read): the boundary is unknown, and the directory is not taken for it.
 new_case boundary-unknown
@@ -3570,6 +3627,19 @@ assert_contains "$OUT" "status: none" "agy-no-settings: no status named"
 assert_contains "$ERR" "$HOME/.gemini/antigravity-cli/settings.json" "agy-no-settings: the file named"
 assert_eq "$(ncalls agy)" 0 "agy-no-settings: no call"
 assert_nofile "$RUN/agy.status" "agy-no-settings: no status"
+
+# agy's settings must be one JSON object; anything else stops a run before it writes.
+new_case agy-settings-not-object
+play agy 1 --stdout "$(t_agy_answer C)"
+for s in '[]' '{} {}' '"x"'; do
+    printf '%s\n' "$s" > "$HOME/.gemini/antigravity-cli/settings.json"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$rc" 18 "agy-settings-not-object $s: rc"
+    assert_eq "$OUT" "agy: prerequisite_failed (cannot read agy's settings file $HOME/.gemini/antigravity-cli/settings.json); status: none" \
+        "agy-settings-not-object $s: the file named"
+    assert_eq "$(ncalls agy)" 0 "agy-settings-not-object $s: no call"
+    assert_nofile "$RUN/agy.status" "agy-settings-not-object $s: no status"
+done
 
 new_case agy-settings-untouched
 s="$(sum "$HOME/.gemini/antigravity-cli/settings.json")"
