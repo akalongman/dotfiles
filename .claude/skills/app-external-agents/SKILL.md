@@ -454,12 +454,21 @@ stop, without the signal, follows every command it starts. A worker that
 starts a session of its own escapes both. A signal that
 arrives before or while the CLI runs ends the run as `cancelled`. One
 that arrives after the CLI has exited leaves that attempt's verdict
-standing: a run
-whose CLI answered ends `answered` and keeps its answer, and a run whose
-attempt failed ends under that failure; a resume that would have
-followed is not started, and the run then ends `cancelled`. A kill signal
-or a power loss cannot be caught: the status file then still says
-`running`, and the report says that the run did not finish.
+standing: a run whose CLI answered ends under that answer, `answered`,
+or `answered_after_resume` when the answer came from the resume or a
+continue of it, and keeps it, and a run whose attempt failed ends under
+that failure; a resume that would have followed is not started, and the
+run then ends `cancelled`. A kill signal (KILL) or a power loss cannot
+be caught: the status file then still says `running`, and the report
+says that the run did not finish. After a KILL the CLI, in a session of
+its own, runs on until its time limit ends it, at the edit level
+possibly still writing, and the claim stays, so a later run or continue
+of the prefix is refused with `pid <n> is not running` and the command
+that removes the claim. So stop a run with TERM only, and after any
+other stop look before reporting: `<run>/<p>.lock/gid` holds the id of
+the session of the last command the runner started (the CLI, once an
+attempt has begun), `ps -s <id>` lists what is left of it, and the
+report names what still runs; the owner decides whether to stop it.
 
 ### 7. When a run ends
 
