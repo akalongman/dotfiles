@@ -77,8 +77,8 @@ HAS_ANSWER=0 ANSWER_TEXT=''
 OC_RULE_TEXT='The user has specified a rule which prevents you from using this specific tool call'
 
 # Test knobs, with their defaults.
-EXT_RUN_GRACE="${EXT_RUN_GRACE:-10s}"                   # timeout's kill grace; stop_group's wait after TERM
-EXT_RUN_KILL_WAIT="${EXT_RUN_KILL_WAIT:-5s}"            # stop_group's wait after KILL
+EXT_RUN_GRACE="${EXT_RUN_GRACE:-10s}"                   # timeout's kill grace; the stop's wait after TERM, for the group and then the session
+EXT_RUN_KILL_WAIT="${EXT_RUN_KILL_WAIT:-5s}"            # the stop's wait after KILL, for the group and then the session
 EXT_RUN_PREFLIGHT_LIMIT="${EXT_RUN_PREFLIGHT_LIMIT:-1m}" # limit of a preflight command
 EXT_RUN_POLL="${EXT_RUN_POLL:-1}"                       # seconds between looks at a running command
 EXT_RUN_START_WAIT="${EXT_RUN_START_WAIT:-5}"           # seconds for a started command to record its group
@@ -540,7 +540,8 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     g="$GID"
     C_PGID="$g"
     # A signal that arrived while the command recorded its group: it gets no
-    # go-ahead, so it never becomes the CLI, and the group is stopped below.
+    # go-ahead, so it never becomes the CLI, and its group and session are
+    # stopped below.
     if [ "$CANCEL" = 0 ]; then
         { : > "$gidf.go"; } 2>/dev/null || end_as runner_failure "cannot write $gidf.go"
         # The loop is left at the next poll after a signal; the hook may end
@@ -579,10 +580,10 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     fi
 }
 
-after_preflight_cmd() { # what: after a preflight command, a group that outlived the kill ends the run as runner_failure, a signal as cancelled
+after_preflight_cmd() { # what: after a preflight command, a process of its group or session that outlived the kill ends the run as runner_failure, a signal as cancelled
     if [ "$C_STUCK" = true ]; then end_as runner_failure "$C_STUCK_MSG"; fi
     # Also a signal that arrived after the command's last poll, while it was
-    # reaped and its group stopped.
+    # reaped and its group and session stopped.
     end_if_cancelled "during $1"
 }
 
@@ -603,7 +604,8 @@ finalize() {
     trap - EXIT
     FINALIZING=1
     progress_clear
-    # A command still running: the job, and the group the gid file names.
+    # A command still running: the job, and the group and session the gid
+    # file names.
     if [ -n "$ACTIVE_JOB" ]; then stop_active; fi
     if [ -z "$OUTCOME" ]; then
         OUTCOME=runner_failure
@@ -1069,10 +1071,10 @@ trace_facts() { # sets the T_ facts the classification rules read from T_EVENTS
     # empty last fact survives the command substitution.
     case "$KIND" in
         agy)
-            # shellcheck disable=SC2016  # jq variables
             # A step_update of a type other than user_input or error_message
             # means the model took a turn (agent_response, tool, ...); a quota
             # error before the first one leaves only those two (rule 5).
+            # shellcheck disable=SC2016  # jq variables
             out="$(jq -r -s "$JQ_TRACE"' agy_result as $r | ($r != null), ($r | g(.result.status) | text1),
                 (agy_denied | length), (agy_denied | map(.tool) | join(", ") | text1),
                 ($r | g(.result.error) | if type == "string" then . else "" end | text1),
@@ -1639,9 +1641,9 @@ run_attempt() { # phase n limit: one attempt with PROGRAM, ARGV and STDIN_FILE; 
             if [ "$C_WALL_US" -ge "$US" ]; then A_DEADLINE=true; fi
             ;;
     esac
-    # A process of the group outlived the kill and may still write to the
-    # attempt's files: the attempt is recorded as measured, not classified,
-    # and no answer is taken from it.
+    # A process of the group or the session outlived the kill and may still
+    # write to the attempt's files: the attempt is recorded as measured, not
+    # classified, and no answer is taken from it.
     if [ "$C_STUCK" = true ]; then
         record_unclassified "$1" "$2"
         end_as runner_failure "$C_STUCK_MSG"
@@ -1993,8 +1995,9 @@ do_run() {
     classify first 1
     record_attempt first 1
     take_session first 1
-    # stop_group has run for the attempt inside run_cmd; had a process
-    # outlived it, run_attempt would have ended the run and no resume would start.
+    # run_cmd has stopped the attempt's group and session; had a process
+    # outlived the kill, run_attempt would have ended the run and no resume
+    # would start.
     if resume_due; then do_resume "$VERDICT"; fi
     end_with_verdict
 }
