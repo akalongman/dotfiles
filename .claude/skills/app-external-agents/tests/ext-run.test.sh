@@ -231,15 +231,22 @@ make_run() { # dir: a run directory as new_case makes it
     mkdir "$1" && printf 'PROMPT' > "$1/prompt.md"
 }
 
-which_on() { # path name: prints the file the name resolves to (its directory canonical); 1 when none, 2 on a bad PATH
+which_on() { # path name [dir]: prints the file the name resolves to (its directory canonical); 1 when none, 2 on a bad PATH
+    # A relative element is let through only when it leads from dir, where
+    # the runner starts, to the case's fakes; any other is a bad PATH. A
+    # continue looks the CLI up in its recorded directory, so a case with
+    # such an element starts its continue there.
     local IFS=: d c dirs
     read -r -a dirs <<< "$1"
     for d in "${dirs[@]}"; do
         case "$d" in
             /*) ;;
             *)
-                printf 'ext-run.test: PATH %s has an empty or relative element\n' "$1" >&2
-                return 2
+                if [ -z "$d" ] || [ -z "${3:-}" ] || [ "$(cd -P -- "$3/$d" 2>/dev/null && pwd -P)" != "$CASE/bin" ]; then
+                    printf 'ext-run.test: PATH %s has an empty or relative element\n' "$1" >&2
+                    return 2
+                fi
+                d="$CASE/bin"
                 ;;
         esac
         if [ -f "$d/$2" ] && [ -x "$d/$2" ]; then
@@ -251,13 +258,13 @@ which_on() { # path name: prints the file the name resolves to (its directory ca
     return 1
 }
 
-check_path() { # path: stops the suite when a CLI name resolves outside the fakes and the sentinels
+check_path() { # path: stops the suite when a CLI name resolves outside the fakes and the sentinels, as seen from where the runner starts
     local n p r
     case "$1" in
         '' | *:) printf 'ext-run.test: PATH %s has an empty element\n' "$1" >&2; exit 2 ;;
     esac
     for n in codex agy opencode; do
-        p="$(which_on "$1" "$n")"
+        p="$(which_on "$1" "$n" "${EXT_CWD:-$WORK}")"
         r=$?
         [ "$r" != 2 ] || exit 2
         [ "$r" = 0 ] || continue
@@ -2538,6 +2545,33 @@ EXT_VARS=("CDPATH=$CASE/decoy")
 EXT_CWD="$CASE/skill" EXT_RUNNER=scripts/ext-run ext run --cli codex --run-dir "$RUN"
 assert_eq "$rc" 0 "relative-runner-cdpath: rc"
 assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" A "relative-runner-cdpath: the answer"
+
+# A CLI found through a relative PATH element is started by an absolute name:
+# the directory of the lookup in front of its answer, so the same file runs
+# and no link is resolved. A run and its continue both start in the recorded
+# directory, where the element leads to the fakes; the suite's guard still
+# refuses a relative element that leads anywhere else.
+new_case relative-path-element
+mkdir "$CASE/real"
+printf '#!/bin/sh\n: > "%s/real-ran"\n' "$CASE" > "$CASE/real/codex"
+chmod +x "$CASE/real/codex"
+EXT_PATH="../real:../bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels"
+out="$( (ext run --cli codex --run-dir "$RUN") 2>&1 > /dev/null)"
+assert_eq "$?" 2 "relative-path-element: the suite stops on a relative element that leads elsewhere"
+assert_contains "$out" "has an empty or relative element" "relative-path-element: refused as a relative element"
+assert_nofile "$CASE/real-ran" "relative-path-element: the planted program did not run"
+EXT_PATH="./../bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels"
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "relative-path-element: rc"
+assert_contains "$(callf codex 1 parent)" " -k 1s 90m $WORK/../bin/codex exec " \
+    "relative-path-element: the run's directory in front of the lookup's answer"
+play codex 2 --stdout DONE --stderr "$(codex_err U2)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "relative-path-element continue: rc"
+assert_eq "$(st .outcome)" answered "relative-path-element continue: outcome"
+assert_contains "$(callf codex 2 parent)" " -k 1s 90m $WORK/../bin/codex exec " \
+    "relative-path-element continue: the recorded directory in front of the lookup's answer"
 
 new_case continue-foreign-prefix
 ul_first_run

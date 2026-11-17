@@ -1974,9 +1974,12 @@ do_run() {
     init_status
     OWNS_STATUS=1
     write_status
-    # Step 7: preflight that may write.
+    # Step 7: preflight that may write. A relative or empty PATH element gives
+    # a relative answer; the current directory in front of it makes it
+    # absolute and names the same file, with no link resolved.
     PROGRAM="$(type -P "$KIND")"
     [ -n "$PROGRAM" ] || end_as missing_cli "$KIND is not on PATH"
+    case "$PROGRAM" in /*) ;; *) PROGRAM="$PWD/${PROGRAM#./}" ;; esac
     case "$KIND" in
         codex) codex_probe ;;
         opencode) oc_version_guard preflight ;;
@@ -2142,8 +2145,10 @@ do_continue() {
     load_record
     # Step 6: preflight. Until step 7 nothing touches the saved status, so a
     # failure here leaves it as it was and the run can be continued again.
+    # The lookup runs in the recorded directory and is made absolute as in a run.
     PROGRAM="$(type -P "$KIND")"
     [ -n "$PROGRAM" ] || end_as missing_cli "$KIND is not on PATH"
+    case "$PROGRAM" in /*) ;; *) PROGRAM="$PWD/${PROGRAM#./}" ;; esac
     case "$KIND" in
         codex) codex_probe ;;
         opencode) oc_version_guard later ;;
