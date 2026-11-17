@@ -492,8 +492,9 @@ attempt that created the session left no session handle;
 later attempt reported another handle than the one it was passed. Six
 are decided around the CLI: `prerequisite_failed`, something the runner
 needs is missing or failed (a helper program, bash 5, its settings file,
-the Codex sandbox probe, git); `unsupported_version`, the OpenCode
-version guard refused; `cancelled`, a signal stopped the runner before or
+its follow-up texts, the Codex sandbox probe, git);
+`unsupported_version`, the OpenCode version guard refused; `cancelled`,
+a signal stopped the runner before or
 while the CLI ran, or before a resume; `runner_failure`, the runner could
 not write or read one of its own files or could not confirm that the CLI's
 processes had ended, or exited in a way nobody planned; `usage_error`,
@@ -519,7 +520,7 @@ with `outcomes`:
 | `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
 | `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
 | `handle_conflict` | 17 | the handles the message names; nothing further is resumed |
-| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, the settings file, git that did not answer or cannot be run, or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
+| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, the settings file, the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike), git that did not answer or cannot be run, or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
 | `unsupported_version` | 19 | the OpenCode version found and the tested one |
 | `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
 | `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below |

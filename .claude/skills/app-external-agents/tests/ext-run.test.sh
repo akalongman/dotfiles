@@ -1012,6 +1012,38 @@ assert_eq "$rc" 18 "missing-conf: rc"
 assert_contains "$ERR" "ext-run.conf" "missing-conf: the settings file named"
 assert_nofile "$RUN/codex.status" "missing-conf: no status"
 
+# The follow-up texts are read in step 2, before the claim, like the settings
+# file: a missing file stops a run that would have answered, and no CLI
+# command starts, the sandbox probe included.
+new_case followup-missing-run
+rm "$CASE/skill/prompts/followup.md"
+answering codex 1
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "followup-missing-run: rc"
+assert_begins "$OUT" "codex: prerequisite_failed (" "followup-missing-run: outcome"
+assert_ends "$OUT" "status: none" "followup-missing-run: no status named"
+assert_contains "$ERR" "the follow-up texts are missing or unreadable: $CASE/skill/scripts/../prompts/followup.md" \
+    "followup-missing-run: the file named"
+assert_eq "$(ncalls codex)" 0 "followup-missing-run: no call"
+assert_nofile "$CALLS/sandbox.started" "followup-missing-run: no sandbox probe"
+assert_nofile "$RUN/codex.status" "followup-missing-run: no status"
+assert_nofile "$RUN/codex.lock" "followup-missing-run: no lock"
+
+# A section that is there but empty stops it the same way, also one this run
+# would not have used.
+new_case followup-section-empty-run
+awk '$0 == "## empty" { print; skip = 1; next } /^## / { skip = 0 } !skip' "$SKILL/prompts/followup.md" \
+    > "$CASE/skill/prompts/followup.md"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 18 "followup-section-empty-run: rc"
+assert_begins "$OUT" "qwen: prerequisite_failed (" "followup-section-empty-run: outcome"
+assert_contains "$ERR" "the follow-up text for empty is missing or empty in $CASE/skill/scripts/../prompts/followup.md" \
+    "followup-section-empty-run: the section and the file named"
+assert_eq "$(ncalls qwen)" 0 "followup-section-empty-run: no call"
+assert_nofile "$CALLS/version.started" "followup-section-empty-run: no version command"
+assert_nofile "$RUN/qwen.status" "followup-section-empty-run: no status"
+
 new_case missing-cli
 rm "$CASE/bin/codex"
 EXT_PATH="$CASE/bin:$BIN_ROOT/utils"
@@ -2789,6 +2821,61 @@ play codex 2 --stdout DONE --stderr "$(codex_err U1)"
 ext continue --cli codex --run-dir "$RUN"
 assert_eq "$rc" 0 "continue-preflight-keeps: rc of the continue after the fix"
 assert_file "$RUN/codex.continue1.stdout" "continue-preflight-keeps: codex.continue1.stdout"
+
+# A continue reads the follow-up texts in step 2 as well: before the claim and
+# before the sandbox probe, so the saved status stays as it was and the run
+# can be continued once the file is back.
+new_case followup-missing-continue
+ul_first_run
+keep "$RUN/codex.status"
+rm "$CASE/skill/prompts/followup.md" "$CALLS/sandbox.started"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "followup-missing-continue: rc"
+assert_begins "$OUT" "codex: prerequisite_failed (" "followup-missing-continue: outcome"
+assert_ends "$OUT" "status: none" "followup-missing-continue: no status named"
+assert_contains "$ERR" "the follow-up texts are missing or unreadable: $CASE/skill/scripts/../prompts/followup.md" \
+    "followup-missing-continue: the file named"
+assert_nofile "$CALLS/sandbox.started" "followup-missing-continue: no sandbox probe"
+assert_eq "$(ncalls codex)" 1 "followup-missing-continue: no call after the run"
+unchanged "$RUN/codex.status" "followup-missing-continue"
+cp "$SKILL/prompts/followup.md" "$CASE/skill/prompts/followup.md"
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "followup-missing-continue: rc of the continue once the file is back"
+
+# An emptied section refuses a continue that starts afresh too, which would
+# send no follow-up text at all.
+new_case followup-section-empty-continue
+play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "followup-section-empty-continue: the run's rc"
+keep "$RUN/codex.status"
+awk '$0 == "## after-edit" { print; skip = 1; next } /^## / { skip = 0 } !skip' "$SKILL/prompts/followup.md" \
+    > "$CASE/skill/prompts/followup.md"
+rm "$CALLS/sandbox.started"
+play codex 2 --stdout DONE --stderr "$(codex_err U2)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "followup-section-empty-continue: rc"
+assert_nofile "$CALLS/sandbox.started" "followup-section-empty-continue: no sandbox probe"
+assert_ends "$OUT" "status: none" "followup-section-empty-continue: no status named"
+assert_contains "$ERR" "the follow-up text for after-edit is missing or empty in $CASE/skill/scripts/../prompts/followup.md" \
+    "followup-section-empty-continue: the section and the file named"
+assert_eq "$(ncalls codex)" 1 "followup-section-empty-continue: no call after the run"
+unchanged "$RUN/codex.status" "followup-section-empty-continue"
+
+# A run keeps the texts step 2 read: the file removed while the first attempt
+# runs no longer costs the resume.
+new_case followup-removed-during-run
+play codex 1 --hold --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --stdout LATE --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+rm "$CASE/skill/prompts/followup.md"
+release codex 1
+ext_wait
+assert_eq "$rc" 0 "followup-removed-during-run: rc"
+assert_eq "$(st .outcome)" answered_after_resume "followup-removed-during-run: outcome"
+assert_eq "$(callf codex 2 stdin)" "$EMPTY_TEXT" "followup-removed-during-run: the resume got the text read at the start"
 
 # ---------------------------------------------------------------------------
 # What an OpenCode run is given and may read: the injected config, the

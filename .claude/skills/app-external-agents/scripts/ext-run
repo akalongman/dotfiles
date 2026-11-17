@@ -99,6 +99,7 @@ ARGV_ENV=()                   # NAME=VALUE pairs for the next attempt's environm
 CMD_ENV=()                    # the same for the command run_cmd starts; run_attempt sets and clears it
 OC_AGENT=''                   # the OpenCode agent of the next attempt
 PROMPT_FILE=''                # the file the first attempt is given
+declare -A FOLLOWUP=()        # the four texts of prompts/followup.md by section, read once in step 2
 TEXT=''                       # what read_text read
 HANDLES=()                    # what read_handles read: the distinct session handles of one attempt
 # An agy or OpenCode trace as read_trace and trace_facts left it, for the attempt TRACE_OF.
@@ -137,8 +138,9 @@ case "${BASH_SOURCE[0]}" in
     *) SELF_DIR=. ;;
 esac
 # An absolute physical path, taken before anything is sourced or the
-# directory changes, so that a continue still finds the settings, the agent
-# files and the follow-up texts in the recorded working directory. CDPATH is
+# directory changes, so that step 2 reads the settings and the follow-up
+# texts from this directory and a continue still finds the agent files in
+# the recorded working directory. CDPATH is
 # ignored, so that a relative start finds this directory and no other. Empty
 # when the directory cannot be entered; check_ground then stops.
 if SELF_DIR="$(CDPATH='' cd -P -- "$SELF_DIR" 2>/dev/null && pwd -P && printf x)"; then
@@ -733,6 +735,8 @@ check_ground() {
         end_as prerequisite_failed "missing helper programs: ${missing[*]}"
     fi
     check_knobs
+    # After the knobs, whose check finds an awk that does not work.
+    followup_read
 }
 
 check_knobs() { # the test knobs: three durations and two plain numbers of seconds
@@ -1555,14 +1559,21 @@ followup_section() { # name: the lines of prompts/followup.md after "## <name>" 
         }' "$SELF_DIR/../prompts/followup.md" 2>/dev/null
 }
 
-followup_text() { # limit|empty|continue [after-edit]: prints that text, the after-edit sentence after one space when asked; 1 when a text is missing or empty
-    local t a
-    t="$(followup_section "$1")" && [ -n "$t" ] || return 1
-    if [ $# -ge 2 ]; then
-        [ "$2" = after-edit ] || return 1
-        a="$(followup_section after-edit)" && [ -n "$a" ] || return 1
-        t+=" $a"
+followup_read() { # step 2: the four texts into FOLLOWUP; a missing or unreadable file, or a text that is missing or empty, ends the run as prerequisite_failed
+    local file="$SELF_DIR/../prompts/followup.md" s t
+    if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+        end_as prerequisite_failed "the follow-up texts are missing or unreadable: $file"
     fi
+    for s in limit empty continue after-edit; do
+        t="$(followup_section "$s")" && [ -n "$t" ] ||
+            end_as prerequisite_failed "the follow-up text for $s is missing or empty in $file"
+        FOLLOWUP[$s]="$t"
+    done
+}
+
+followup_text() { # limit|empty|continue [after-edit]: prints that text as step 2 read it, the after-edit sentence after one space when asked
+    local t="${FOLLOWUP[$1]}"
+    if [ $# -ge 2 ]; then t+=" ${FOLLOWUP[after-edit]}"; fi
     printf '%s\n' "$t"
 }
 
@@ -1914,8 +1925,7 @@ do_resume() { # limit|empty: the one resume of the session, always at the read l
     end_if_cancelled "before the resume started"
     require_handle
     if [ "$LEVEL" = edit ]; then after=(after-edit); fi
-    text="$(followup_text "$1" "${after[@]}")" ||
-        end_as prerequisite_failed "cannot read the follow-up text for $1 in $SELF_DIR/../prompts/followup.md"
+    text="$(followup_text "$1" "${after[@]}")"
     # The version again, before a later attempt.
     if [ "$KIND" = opencode ]; then oc_version_guard later; fi
     build_later_argv read "$text"
@@ -2174,13 +2184,11 @@ do_continue() {
     else
         require_handle
         if [ "$CUT_OFF" = first ]; then
-            text="$(followup_text continue)" ||
-                end_as prerequisite_failed "cannot read the follow-up text for continue in $SELF_DIR/../prompts/followup.md"
+            text="$(followup_text continue)"
             build_later_argv "$LEVEL" "$text"
         else
             if [ "$LEVEL" = edit ]; then after=(after-edit); fi
-            text="$(followup_text "$RESUME_REASON" "${after[@]}")" ||
-                end_as prerequisite_failed "cannot read the follow-up text for $RESUME_REASON in $SELF_DIR/../prompts/followup.md"
+            text="$(followup_text "$RESUME_REASON" "${after[@]}")"
             build_later_argv read "$text"
         fi
     fi
