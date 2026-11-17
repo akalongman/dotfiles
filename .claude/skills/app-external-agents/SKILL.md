@@ -491,8 +491,8 @@ attempt that created the session left no session handle;
 `handle_conflict`, that attempt's files held more than one handle, or a
 later attempt reported another handle than the one it was passed. Six
 are decided around the CLI: `prerequisite_failed`, something the runner
-needs is missing or failed (a helper program, bash 5, its settings file,
-its follow-up texts, the Codex sandbox probe, git);
+needs is missing or failed (a helper program, bash 5, jq 1.7, its
+settings file, its follow-up texts, the Codex sandbox probe, git);
 `unsupported_version`, the OpenCode version guard refused; `cancelled`,
 a signal stopped the runner before or
 while the CLI ran, or before a resume; `runner_failure`, the runner could
@@ -520,7 +520,7 @@ with `outcomes`:
 | `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
 | `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
 | `handle_conflict` | 17 | the handles the message names; nothing further is resumed |
-| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, the settings file, the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike), git that did not answer or cannot be run, or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
+| `prerequisite_failed` | 18 | what the message names: a missing helper program, bash older than 5, a jq older than 1.7 (one that does not take `--raw-output0`), the settings file, the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike), git that did not answer or cannot be run, or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
 | `unsupported_version` | 19 | the OpenCode version found and the tested one |
 | `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
 | `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below |
@@ -548,8 +548,9 @@ fault the message names lies:
 - Outside the run's files: the command line (a run directory or `--cli`
   that names no status file, or a `--cli` other than the one the status
   file was written for), a claimed prefix, a missing CLI, a prerequisite
-  (a helper program, the settings file, the Codex sandbox probe, a
-  follow-up text, git that did not answer or cannot be run), an OpenCode
+  (a helper program, a jq older than 1.7, the settings file, the Codex
+  sandbox probe, a follow-up text, git that did not answer or cannot be
+  run), an OpenCode
   version the guard refused, a process group or session that outlived
   the kill, or a signal. A record that could be continued before still can be: once
   the fault is cleared, the same continue command is checked afresh.
@@ -661,10 +662,12 @@ against the evidence before repeating it.
 ## Platform
 
 The runner and every command here are bash. The runner needs bash 5 or
-later (its clock is `EPOCHREALTIME`) and `jq`, `timeout` (with `-k`),
-`setsid`, `realpath`, `ps`, `sha256sum` and `awk` on PATH; when bash is older or
-a program is missing, it ends `prerequisite_failed` and names what is
-missing. `timeout` and `realpath` may be GNU's or the Rust coreutils
+later (its clock is `EPOCHREALTIME`), `jq` 1.7 or later (it reads lists
+ended by NUL bytes with jq's `--raw-output0`, which jq 1.6, still shipped
+by Ubuntu 22.04 and Debian 12, lacks), and `timeout` (with `-k`),
+`setsid`, `realpath`, `ps`, `sha256sum` and `awk` on PATH; when bash is
+older, jq does not take `--raw-output0`, or a program is missing, it ends
+`prerequisite_failed` before anything starts and names what is missing. `timeout` and `realpath` may be GNU's or the Rust coreutils
 (uutils). git is asked for OpenCode's project boundary and the before
 snapshot; a git that cannot be run, or that does not answer within the
 preflight limit of one minute, is `prerequisite_failed` as well. The

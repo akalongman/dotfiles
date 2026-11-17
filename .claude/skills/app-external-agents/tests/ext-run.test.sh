@@ -979,6 +979,38 @@ assert_eq "$rc" 18 "missing-awk: rc"
 assert_contains "$ERR" "missing helper programs: awk" "missing-awk: awk named"
 assert_nofile "$RUN/codex.status" "missing-awk: no status"
 
+mk_old_jq() { # dir: a jq there that refuses --raw-output0 as jq 1.6 does, and runs the real jq otherwise
+    mk_tool "$1/jq" <<'EOF'
+for a in "$@"; do
+    if [ "$a" = --raw-output0 ]; then
+        printf '%s\n' 'jq: Unknown option: --raw-output0' 'Use jq --help for help with command-line options,' \
+            'or see the jq manpage, or online docs  at https://jqlang.github.io/jq' >&2
+        exit 2
+    fi
+done
+exec "$BIN_ROOT/utils/jq" "$@"
+EOF
+}
+
+# The runner needs jq 1.7 or later: step 2 checks once that jq takes
+# --raw-output0, so a jq that does not stops every kind before anything
+# starts, not later at a read that would name a file.
+new_case jq-without-raw-output0
+mk_old_jq "$CASE/oldjq"
+EXT_PATH="$CASE/oldjq:$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels"
+for cli in codex agy qwen; do
+    answering "$cli" 1
+    ext run --cli "$cli" --run-dir "$RUN"
+    assert_eq "$rc" 18 "jq-without-raw-output0 $cli: rc"
+    assert_eq "$OUT" \
+        "$cli: prerequisite_failed (jq 1.7 or later is needed: $CASE/oldjq/jq does not take --raw-output0); status: none" \
+        "jq-without-raw-output0 $cli: the summary names jq and the option"
+    assert_eq "$(ncalls "$cli")" 0 "jq-without-raw-output0 $cli: no call"
+    assert_nofile "$RUN/$cli.status" "jq-without-raw-output0 $cli: no status"
+done
+assert_nofile "$CALLS/sandbox.started" "jq-without-raw-output0: no sandbox probe"
+assert_nofile "$CALLS/version.started" "jq-without-raw-output0: no version command"
+
 # An awk that runs and prints nothing leaves the waits unconverted: the run
 # stops before it writes, instead of taking every wait as zero and every
 # status 124 as an expired deadline.
@@ -2941,6 +2973,24 @@ ext_wait
 assert_eq "$rc" 0 "followup-removed-during-run: rc"
 assert_eq "$(st .outcome)" answered_after_resume "followup-removed-during-run: outcome"
 assert_eq "$(callf codex 2 stdin)" "$EMPTY_TEXT" "followup-removed-during-run: the resume got the text read at the start"
+
+# A continue makes the same jq check in step 2: the saved status stays as it
+# was, where a later read of it would have ended as a runner failure.
+new_case jq-without-raw-output0-continue
+ul_first_run
+keep "$RUN/codex.status"
+rm "$CALLS/sandbox.started"
+mk_old_jq "$CASE/oldjq"
+EXT_PATH="$CASE/oldjq:$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels"
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "jq-without-raw-output0-continue: rc"
+assert_eq "$OUT" \
+    "codex: prerequisite_failed (jq 1.7 or later is needed: $CASE/oldjq/jq does not take --raw-output0); status: none" \
+    "jq-without-raw-output0-continue: the summary names jq and the option"
+assert_nofile "$CALLS/sandbox.started" "jq-without-raw-output0-continue: no sandbox probe"
+assert_eq "$(ncalls codex)" 1 "jq-without-raw-output0-continue: no call after the run"
+unchanged "$RUN/codex.status" "jq-without-raw-output0-continue"
 
 # ---------------------------------------------------------------------------
 # What an OpenCode run is given and may read: the injected config, the

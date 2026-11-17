@@ -736,6 +736,13 @@ check_ground() {
     if [ "${#missing[@]}" -gt 0 ]; then
         end_as prerequisite_failed "missing helper programs: ${missing[*]}"
     fi
+    # jq 1.7 or later: the runner reads lists ended by NULs with
+    # --raw-output0, which jq 1.6 refuses. One look at the option itself,
+    # so that such a jq stops every invocation here and not at a later read
+    # that would blame the file it was reading.
+    if ! jq -n --raw-output0 empty > /dev/null 2>&1; then
+        end_as prerequisite_failed "jq 1.7 or later is needed: $(type -P jq) does not take --raw-output0"
+    fi
     check_knobs
     # After the knobs, whose check finds an awk that does not work.
     followup_read
