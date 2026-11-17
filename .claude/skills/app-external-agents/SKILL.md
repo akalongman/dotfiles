@@ -31,6 +31,12 @@ works when the user names it in full (`provider/model`).
 | `kimi` | `kimi-code-plan-global/k3` | Kimi membership, the lowest tier whose benefits list the 1M-context `k3` |
 | `qwen` | `alibaba-token-plan/qwen3.8-max` | Alibaba Model Studio Token Plan |
 
+No `kimi` run has answered through the runner yet: both runs of the
+acceptance run of 2026-11-16 ended `cli_failure` on OpenCode's
+`UnknownError: Unexpected server error` before any model step, and the
+cause was not established. Run it when the user asks, and report a
+failure as the `cli_failure` row of "Outcomes" says.
+
 ## Levels
 
 A run is at the read level unless the user asked for changes to files;
@@ -83,9 +89,11 @@ symbolic link leads out: in the acceptance run of 2026-11-16 the read
 tool of two models (`deepseek`, `qwen`) read a file through a link
 inside the project whose target lay outside the project and every
 granted directory, so a project that holds such a link exposes its
-target. The runner does not look for such links; step 3 says how the
-session finds one that leads into a protected directory, and a bundle
-holds none, because its copies follow links. OpenCode's
+target. Whether the edit agent's edit and write tools also follow such
+a link out of the project, at the edit level, was not checked. The
+runner does not look for such links; step 3 says how the session finds
+one that leads into a protected directory, and a bundle built by step
+3's rules holds none, because its copies follow links. OpenCode's
 own tool-output directory (`~/.local/share/opencode/tool-output/`) stays
 readable in every run. The edit agent allows edits and shell commands
 inside the project. Its rule denies the direct `git commit` and
@@ -137,12 +145,18 @@ What stays unequal:
   So the prompt names the project's instruction files by path for every
   reviewer, whatever each CLI also loads.
 - Codex's skills are kept out by a configuration override that one probe
-  showed working. Whether the tools of its plugins are still offered was
-  not checked.
+  showed working. Asked for its tools in the acceptance run of
+  2026-11-16, Codex under the override listed 79 names, none of them
+  mentioning skills, among them 51 of its apps (`mcp__codex_apps__`) and
+  3 of `node_repl`: the tools of its apps and plugins seem to be still
+  offered, which rests on the model's own list, not on a resolved tool
+  set. Whether skills can still be found on demand through its
+  `skill_search` feature, which is on, was not checked.
 - agy's `--disable-slash-commands` rests on one short run on
   `gemini-3.8-flash-low`, because the default model was over its quota on
-  2026-11-15. A run on the default model with the flag, and a resume
-  with it, were not seen to answer.
+  2026-11-15, and again in the acceptance run of 2026-11-16. A run on the
+  default model with the flag, and a resume with it, were not seen to
+  answer.
 
 ## Steps
 
