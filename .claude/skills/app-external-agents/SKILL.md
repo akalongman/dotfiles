@@ -89,8 +89,12 @@ symbolic link leads out: in the acceptance run of 2026-11-16 the read
 tool of two models (`deepseek`, `qwen`) read a file through a link
 inside the project whose target lay outside the project and every
 granted directory, so a project that holds such a link exposes its
-target. Whether the edit agent's edit and write tools also follow such
-a link out of the project, at the edit level, was not checked. The
+target. The edit agent's write and edit tools follow such a link too:
+in the acceptance rerun of 2026-11-18 (OpenCode 1.19.0, `qwen`, edit
+level), the write tool created a file and the edit tool changed one
+through a link inside the project whose target lay outside the project
+and every granted directory; both calls completed without a permission
+being asked, and both files changed on disk. The
 runner does not look for such links; step 3 says how the session finds
 one that leads into a protected directory, and a bundle built by step
 3's rules holds none, because its copies follow links. OpenCode's
