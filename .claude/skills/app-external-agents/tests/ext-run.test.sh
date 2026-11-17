@@ -3325,6 +3325,24 @@ gate_count() { # the number of claimants that reached the gate
     echo "$n"
 }
 
+mk_jq_hold() { # glob: a jq in $CASE/slowjq that, the first time one of its arguments matches the glob, creates $CASE/jq-entered and waits (at most 10 s) for $CASE/jq-go before it runs
+    printf '%s' "$1" > "$CASE/jq-hold" || exit 2
+    mk_tool "$CASE/slowjq/jq" <<'EOF' || exit 2
+p="$(cat "$CASE/jq-hold")"
+for a in "$@"; do
+    if [[ $a == $p ]] && [ ! -e "$CASE/jq-entered" ]; then
+        : > "$CASE/jq-entered"
+        n=0
+        until [ -e "$CASE/jq-go" ] || [ "$n" -ge 100 ]; do
+            sleep 0.1
+            n=$((n + 1))
+        done
+    fi
+done
+exec "$BIN_ROOT/utils/jq" "$@"
+EOF
+}
+
 new_case term
 play codex 1 --hold --child 30 --stderr "$(codex_err U1)"
 ext_bg run --cli codex --run-dir "$RUN"
@@ -3368,6 +3386,28 @@ assert_eq "$rc" 20 "term-ignored: rc"
 assert_eq "$(st .outcome)" cancelled "term-ignored: outcome"
 assert_eq "$(alive_yn "$(callf codex 1 pid)")" no "term-ignored: the CLI is gone"
 
+# A signal while the CLI runs, and a process of its group outlives the kill:
+# the attempt is recorded as signalled and not classified, and the run ends
+# as a runner failure.
+new_case cancel-survivor
+mk_ghost_ps "$CASE/ghost"
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --hold --stdout "$(t_agy_answer C)"
+ext_bg run --cli agy --run-dir "$RUN"
+wait_for "$CALLS/agy.1/started"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 21 "cancel-survivor: rc"
+assert_eq "$(st .outcome)" runner_failure "cancel-survivor: outcome"
+assert_contains "$(st .message)" "could not stop process group" "cancel-survivor: message"
+assert_eq "$(st '.attempts | length')" 1 "cancel-survivor: the attempt is recorded"
+assert_eq "$(stj '.attempts[0] | [.signalled, .verdict, .rule]')" '[true,null,null]' \
+    "cancel-survivor: signalled, and not classified"
+assert_file "$RUN/agy.first1.exit" "cancel-survivor: agy.first1.exit"
+assert_nofile "$RUN/agy.out" "cancel-survivor: no answer published"
+assert_eq "$(ncalls agy)" 1 "cancel-survivor: one call"
+assert_nofile "$RUN/agy.lock" "cancel-survivor: no lock"
+
 new_case agy-denied-cancelled
 play agy 1 --stdout-early "$(t_agy_denied C)" --hold
 ext_bg run --cli agy --run-dir "$RUN"
@@ -3393,6 +3433,46 @@ assert_eq "$(st '.attempts | length')" 2 "term-in-resume: two attempts"
 assert_eq "$(st '.attempts[1].signalled')" true "term-in-resume: the resume was signalled"
 assert_eq "$(alive_yn "$(callf codex 2 pid)")" no "term-in-resume: the CLI is gone"
 
+# A signal after the CLI has exited, while the runner reads the attempt (a
+# jq stand-in holds the look at resume_used): the attempt's verdict stands,
+# and the resume that would have followed is not started.
+new_case term-before-resume
+mk_jq_hold .resume_used
+EXT_PATH="$CASE/slowjq:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout '' --stderr "$(codex_err U1)"
+play codex 2 --stdout LATE --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CASE/jq-entered"
+kill -TERM "$BG"
+: > "$CASE/jq-go"
+ext_wait
+assert_eq "$rc" 20 "term-before-resume: rc"
+assert_eq "$(st .outcome)" cancelled "term-before-resume: outcome"
+assert_eq "$(st .phase)" resume "term-before-resume: phase"
+assert_eq "$(st '.attempts | length')" 1 "term-before-resume: one attempt"
+assert_eq "$(stj '.attempts[0] | [.verdict, .signalled]')" '["empty",false]' "term-before-resume: its verdict stands"
+assert_eq "$(st .resume_used)" false "term-before-resume: the resume was not used"
+assert_eq "$(ncalls codex)" 1 "term-before-resume: no resume call"
+assert_nofile "$RUN/codex.lock" "term-before-resume: no lock"
+
+# The same when the attempt answered (the stand-in holds the attempt's
+# record): the run ends answered and publishes the answer.
+new_case term-after-answer
+# shellcheck disable=SC2016  # the runner's jq filter, as written
+mk_jq_hold '*rule: $rule, verdict: $verdict*'
+EXT_PATH="$CASE/slowjq:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout ANSWER --stderr "$(codex_err U1)"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CASE/jq-entered"
+kill -TERM "$BG"
+: > "$CASE/jq-go"
+ext_wait
+assert_eq "$rc" 0 "term-after-answer: rc"
+assert_eq "$(st .outcome)" answered "term-after-answer: outcome"
+assert_eq "$(stj '.attempts[0] | [.verdict, .signalled]')" '["answered",false]' "term-after-answer: the verdict stands"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" ANSWER "term-after-answer: the answer is published"
+assert_eq "$(ncalls codex)" 1 "term-after-answer: one call"
+
 new_case term-in-preflight
 : > "$SCN/codex.sandbox.hold"
 ext_bg run --cli codex --run-dir "$RUN"
@@ -3405,6 +3485,26 @@ assert_eq "$(st .phase)" preflight "term-in-preflight: phase"
 assert_eq "$(ncalls codex)" 0 "term-in-preflight: no call"
 assert_eq "$(alive_yn "$(cat "$CALLS/sandbox.pid" 2>/dev/null)")" no "term-in-preflight: the probe is gone"
 assert_nofile "$RUN/codex.lock" "term-in-preflight: no lock"
+
+# A signal during the part of step 7 that starts no command (a jq stand-in
+# holds the recording of the prompt's checksum): the run ends in the
+# preflight phase, before the first attempt is written as running.
+new_case term-before-first
+# shellcheck disable=SC2016  # the runner's jq filter, as written
+mk_jq_hold '.prompt_sha256 = $s'
+EXT_PATH="$CASE/slowjq:$CASE/bin:$BIN_ROOT/utils"
+answering codex 1
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CASE/jq-entered"
+kill -TERM "$BG"
+: > "$CASE/jq-go"
+ext_wait
+assert_eq "$rc" 20 "term-before-first: rc"
+assert_eq "$(st .outcome)" cancelled "term-before-first: outcome"
+assert_eq "$(st .phase)" preflight "term-before-first: phase"
+assert_eq "$(st '.attempts | length')" 0 "term-before-first: no attempt"
+assert_eq "$(ncalls codex)" 0 "term-before-first: no call"
+assert_nofile "$RUN/codex.lock" "term-before-first: no lock"
 
 new_case term-in-version
 : > "$SCN/opencode.version.hold"

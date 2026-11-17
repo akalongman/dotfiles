@@ -1974,8 +1974,10 @@ do_run() {
     if [ "$LEVEL" = edit ] || [ "$KIND" = agy ]; then take_snapshot; fi
     take_prompt_sum
     if [ "$KIND" = agy ]; then agy_configured_model; fi
-    # Step 8: the first attempt.
+    # Step 8: the first attempt. A signal that arrived during step 7 ends the
+    # run in the preflight phase, before the attempt is written as running.
     build_first_argv
+    end_if_cancelled "before the first attempt started"
     PHASE=first
     run_attempt first 1 "$LIMIT"
     classify first 1
