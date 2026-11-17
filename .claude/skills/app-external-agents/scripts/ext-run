@@ -851,10 +851,18 @@ claim() { # step 4: the lock directory of the prefix, then the pid in it
 }
 
 check_leftovers() { # step 5, under the claim
-    local f found=()
+    local f rest found=()
     shopt -s nullglob
     for f in "$RUN_DIR/$PREFIX".*; do
-        if [ "$f" != "$LOCK" ]; then found+=("${f##*/}"); fi
+        [ "$f" != "$LOCK" ] || continue
+        # A file that a longer prefix writes, one that begins with this prefix
+        # and a dot (qwen.x-y, from the model id qwen.x/y, beside qwen), is
+        # not this prefix's.
+        rest="${f##*/}"
+        rest="${rest#"$PREFIX".}"
+        [[ $rest =~ ^.+\.(lock|status|status\.tmp|out|out\.tmp|probe\.err|(first|resume|continue)[1-9][0-9]*\.(stdout|stderr|time|exit|earlier\.txt|config\.json))$ ]] &&
+            continue
+        found+=("${f##*/}")
     done
     shopt -u nullglob
     if [ "${#found[@]}" -gt 0 ]; then

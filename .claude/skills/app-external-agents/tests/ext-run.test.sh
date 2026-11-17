@@ -1078,6 +1078,25 @@ assert_contains "$ERR" "already exist" "leftovers: message"
 assert_nofile "$RUN/codex.status" "leftovers: no status"
 assert_nofile "$RUN/codex.lock" "leftovers: the claim is released"
 
+# The files of a longer prefix that begins with this one and a dot (qwen.x-y,
+# the prefix of the model id qwen.x/y) are not leftovers of this prefix; any
+# other file that begins with it still is.
+new_case leftovers-longer-prefix
+play qwen.x-y 1 --stdout "$(t_oc_only S)"
+ext run --cli qwen.x/y --run-dir "$RUN"
+assert_eq "$rc" 0 "leftovers-longer-prefix: the run of qwen.x/y"
+play qwen 1 --stdout "$(t_oc_only S A)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "leftovers-longer-prefix: rc of the run of qwen beside it"
+assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" A "leftovers-longer-prefix: its answer"
+RUN="$CASE/run2"
+make_run "$RUN"
+: > "$RUN/qwen.x-y.notes"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "leftovers-longer-prefix: rc with a file no prefix writes"
+assert_contains "$ERR" "already exist in $RUN: qwen.x-y.notes" "leftovers-longer-prefix: that file named"
+assert_eq "$(ncalls qwen)" 1 "leftovers-longer-prefix: one call of qwen"
+
 new_case old-status-kept
 echo '{"outcome":"answered"}' > "$RUN/codex.status"
 keep "$RUN/codex.status"
