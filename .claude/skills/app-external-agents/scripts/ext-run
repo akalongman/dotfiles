@@ -244,11 +244,15 @@ last_line() { # file: sets LAST to its last line that is not blank, made fit for
     return "$st"
 }
 
-one_line() { # text: sets ONE_LINE to the words of its first 16000 characters joined by single spaces, at most 300 characters, fit for a one-line message
-    local w=() t="${1:0:16000}"
-    # 16000 characters are at most 64000 bytes, which bash passes through a
-    # pipe; a longer here-string goes through a temporary file (see
-    # tail_lines), and when that cannot be made or written nothing is read.
+one_line() { # text: sets ONE_LINE to the words of its first 10000 characters joined by single spaces, at most 300 characters, fit for a one-line message
+    local w=() t="${1:0:10000}"
+    # No locale on this machine counts more than 6 bytes as one character
+    # (UTF-8, where bash takes a five- or six-byte form for one), so 10000
+    # characters are at most 60000 bytes, and a space in place of each
+    # control character makes them no longer. A pipe of the default 65536
+    # bytes holds that; bash writes a longer here-string to a temporary file
+    # (see tail_lines), and when that cannot be made or written nothing is
+    # read.
     read -r -d '' -a w <<< "${t//[[:cntrl:]]/ }"
     ONE_LINE="${w[*]}"
     ONE_LINE="${ONE_LINE:0:300}"

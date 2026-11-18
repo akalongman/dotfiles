@@ -2517,8 +2517,9 @@ fi
 # cannot list the processes (a claim's owner running, a stop's group or
 # session alive), and the session handles and the status object as a runner
 # failure named after the read. The reason in a git message is taken from a
-# text short enough to need no temporary file. Each case first reads the
-# same long text under a usable TMPDIR.
+# text short enough for a pipe of the default size, in any locale this
+# machine has. Each case first reads the same long text under a usable
+# TMPDIR.
 #
 # Step 2's look at the process table already refuses one it cannot read, as
 # it refuses a ps that fails (ps-cannot-list).
@@ -2703,9 +2704,11 @@ if nosearch_ok resume-temp-file-fails; then
 fi
 
 # git's standard error reaches a message as its words on one line, taken
-# from a here-string. Only its first 16,000 characters are read, at most
-# 64,000 bytes, which a pipe holds, so a long one still gives git's reason
-# where bash could not make a temporary file.
+# from a here-string. Only its first 10,000 characters are read, at most
+# 60,000 bytes in any locale this machine has (none counts more than six
+# bytes as one character), which a pipe of the default 65,536 bytes holds,
+# so a long one still gives git's reason where bash could not make a
+# temporary file.
 new_case git-reason-temp-file-fails
 mk_tool "$CASE/failgit/git" <<'EOF'
 printf 'fatal: VARS-REASON\n' >&2
@@ -2728,6 +2731,34 @@ if nosearch_ok git-reason-temp-file-fails; then
     chmod 700 "$CASE/nosearch"
 fi
 assert_eq "$(ncalls qwen)" 0 "git-reason-temp-file-fails: no call"
+
+# The same in a UTF-8 locale, where bash counts a six-byte form as one
+# character: git's reason followed by 16,000 such forms. Its first 10,000
+# characters are about 60,000 bytes; 16,000 would be about 96,000, more than
+# a pipe holds.
+new_case git-reason-six-byte-temp-file-fails
+mk_tool "$CASE/failgit/git" <<'EOF'
+printf 'fatal: SIX-REASON\n' >&2
+printf '\xfc\x84\x80\x80\x80\x80%.0s' {1..16000} >&2
+exit 1
+EOF
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+mkdir -m 700 "$CASE/tmp"
+l='git-reason-six-byte-temp-file-fails'
+assert_eq "$(LC_ALL=C.UTF-8 && s=$'\xfc\x84\x80\x80\x80\x80' && printf %s "${#s}")" 1 "$l: C.UTF-8 counts a six-byte form as one character"
+EXT_VARS=("TMPDIR=$CASE/tmp" LC_ALL=C.UTF-8)
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "$l: a usable TMPDIR: rc"
+assert_contains "$OUT" "failed with status 1 (fatal: SIX-REASON " "$l: a usable TMPDIR: git's reason"
+if nosearch_ok "$l"; then
+    EXT_VARS=("TMPDIR=$CASE/nosearch" LC_ALL=C.UTF-8)
+    ext run --cli qwen --run-dir "$RUN"
+    assert_eq "$rc" 64 "$l: rc"
+    assert_contains "$OUT" "failed with status 1 (fatal: SIX-REASON " "$l: git's reason"
+    assert_lacks "$ERR" 'cannot create temp file' "$l: no temporary file was needed"
+    chmod 700 "$CASE/nosearch"
+fi
+assert_eq "$(ncalls qwen)" 0 "$l: no call"
 
 new_case one-handle-repeated
 play agy 1 --stdout "$(agy_init C; agy_cmd C ls; agy_result C SUCCESS '')"
