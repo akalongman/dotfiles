@@ -755,6 +755,25 @@ exit "$st"
 EOF
 }
 
+mk_pad_ps() { # dir listing...: a ps there that adds 12,500 lines "0 0 0 S" (100,000 bytes) to each listing named by its arguments, so that table is longer than a pipe holds; pid, group and session 0 are none that a reader asks about
+    local l
+    mkdir -p "$1" && printf '0 0 0 S\n%.0s' {1..12500} > "$1/pad" || return 1
+    # shellcheck disable=SC2016  # the stand-in's own text, expanded when it runs
+    {
+        printf '%s\n' '"$BIN_ROOT/utils/ps" "$@"' 'st=$?' 'case "$*" in'
+        for l in "${@:2}"; do printf "    '%s') cat %q ;;\n" "$l" "$1/pad"; done
+        printf '%s\n' 'esac' 'exit "$st"'
+    } | mk_tool "$1/ps"
+}
+
+nosearch_ok() { # case-name: makes $CASE/nosearch, a TMPDIR that bash takes as writable (its write bit set) and cannot make a file in (its search bit cleared); 1 as root, which needs no search bit, with a line on standard error
+    if [ "$(id -u)" = 0 ]; then
+        printf 'ext-run.test: %s skipped in part: as root a directory without its search bit can be searched\n' "$1" >&2
+        return 1
+    fi
+    mkdir -m 700 "$CASE/nosearch" && chmod 600 "$CASE/nosearch"
+}
+
 worker_placed() { # key k label: the invocation's worker led a process group of its own inside the invocation's session
     assert_ne "$(callf "$1" "$2" worker.pgid)" "$(callf "$1" "$2" pgid)" "$3: the worker leads a group of its own"
     assert_eq "$(callf "$1" "$2" worker.sid)" "$(callf "$1" "$2" pgid)" "$3: the worker is in the session the group leads"
@@ -2490,6 +2509,225 @@ else
     chmod 700 "$CASE/nosearch"
     assert_eq "$(ncalls codex)" 3 "tail-temp-file-fails: one call per Codex run"
 fi
+
+# The other reads that take a text whose length the runner does not bound
+# from a here-string meet the same failure (see tail-temp-file-fails). Each
+# read that decides something counts a text it could not read as the run
+# already counts a failure of that read: the process table as a ps that
+# cannot list the processes (a claim's owner running, a stop's group or
+# session alive), and the session handles and the status object as a runner
+# failure named after the read. The reason in a git message is taken from a
+# text short enough to need no temporary file. Each case first reads the
+# same long text under a usable TMPDIR.
+#
+# Step 2's look at the process table already refuses one it cannot read, as
+# it refuses a ps that fails (ps-cannot-list).
+new_case ps-probe-temp-file-fails
+mkdir -m 700 "$CASE/tmp"
+mk_pad_ps "$CASE/padps" "$PS_PROBE"
+EXT_PATH="$CASE/padps:$CASE/bin:$BIN_ROOT/utils"
+EXT_VARS=("TMPDIR=$CASE/tmp")
+answering agy 1
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "ps-probe-temp-file-fails: a usable TMPDIR: rc"
+if nosearch_ok ps-probe-temp-file-fails; then
+    EXT_VARS=("TMPDIR=$CASE/nosearch")
+    RUN="$CASE/run2"
+    make_run "$RUN"
+    ext run --cli agy --run-dir "$RUN"
+    l='ps-probe-temp-file-fails'
+    assert_eq "$rc" 18 "$l: rc"
+    assert_eq "$OUT" \
+        "agy: prerequisite_failed (a ps that lists the processes is needed: $CASE/padps/ps $PS_PROBE does not show the runner's own process); status: none" \
+        "$l: the summary names ps"
+    assert_contains "$ERR" 'cannot create temp file for here-document' "$l: the table could not be read"
+    assert_nofile "$RUN/agy.status" "$l: no status"
+    assert_nofile "$RUN/agy.lock" "$l: no claim"
+    chmod 700 "$CASE/nosearch"
+    assert_eq "$(ncalls agy)" 1 "$l: no call after the first run's"
+fi
+
+# A claim's owner that is running, behind a table bash cannot read, is taken
+# to be running, with no removal command (as in claimed-ps-fails).
+new_case claimed-temp-file-fails
+mkdir -m 700 "$CASE/tmp"
+mk_pad_ps "$CASE/padps" '-A -o pid=,stat='
+EXT_PATH="$CASE/padps:$CASE/bin:$BIN_ROOT/utils"
+EXT_VARS=("TMPDIR=$CASE/tmp")
+mkdir "$RUN/codex.lock"
+echo "$$" > "$RUN/codex.lock/pid"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "claimed-temp-file-fails: a usable TMPDIR: rc"
+assert_contains "$ERR" "pid $$ is running" "claimed-temp-file-fails: a usable TMPDIR: the owner is running"
+if nosearch_ok claimed-temp-file-fails; then
+    EXT_VARS=("TMPDIR=$CASE/nosearch")
+    ext run --cli codex --run-dir "$RUN"
+    l='claimed-temp-file-fails'
+    assert_eq "$rc" 64 "$l: rc"
+    assert_contains "$ERR" "pid $$ is running" "$l: the owner taken to be running"
+    assert_lacks "$ERR" "rm -r" "$l: no removal command"
+    assert_contains "$ERR" 'cannot create temp file for here-document' "$l: the table could not be read"
+    assert_file "$RUN/codex.lock/pid" "$l: the claim stays"
+    chmod 700 "$CASE/nosearch"
+fi
+
+# A stop's look at a group behind a table bash cannot read: the group is
+# taken to be alive, so the stop goes on to the kill and the run ends as a
+# runner failure naming the group and ps (as in ps-fails). The attempt
+# leaves a child in its group. With the session's table readable, the
+# session stop would reach the child anyway; with both tables unreadable,
+# the group's kill is the only one that reaches it.
+new_case group-temp-file-fails
+mkdir -m 700 "$CASE/tmp"
+mk_pad_ps "$CASE/padg" '-A -o pgid= -o stat='
+mk_pad_ps "$CASE/padgs" '-A -o pgid= -o stat=' '-A -o pid=,sid=,stat='
+EXT_PATH="$CASE/padgs:$CASE/bin:$BIN_ROOT/utils"
+EXT_VARS=("TMPDIR=$CASE/tmp")
+play agy 1 --stdout "$(t_agy_answer C)" --child 300
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "group-temp-file-fails: a usable TMPDIR: rc"
+assert_eq "$(alive "$(callf agy 1 child)" && echo yes || echo no)" no "group-temp-file-fails: a usable TMPDIR: the child is gone"
+if nosearch_ok group-temp-file-fails; then
+    EXT_VARS=("TMPDIR=$CASE/nosearch")
+    for k in 2:padg 3:padgs; do
+        IFS=: read -r n d <<< "$k"
+        EXT_PATH="$CASE/$d:$CASE/bin:$BIN_ROOT/utils"
+        RUN="$CASE/run$n"
+        make_run "$RUN"
+        play agy "$n" --stdout "$(t_agy_answer C)" --child 300
+        ext run --cli agy --run-dir "$RUN"
+        l="group-temp-file-fails $d"
+        assert_eq "$rc" 21 "$l: rc"
+        assert_eq "$(st .outcome)" runner_failure "$l: outcome"
+        assert_contains "$(st .message)" "could not stop process group" "$l: the group named"
+        assert_contains "$(st .message)" "ps could not list the processes" "$l: the cause named"
+        assert_eq "$(st '.attempts[0].verdict')" null "$l: the attempt is not classified"
+        assert_nofile "$RUN/agy.out" "$l: no answer published"
+        assert_eq "$(alive "$(callf agy "$n" child)" && echo yes || echo no)" no "$l: the child is gone"
+    done
+    chmod 700 "$CASE/nosearch"
+fi
+
+# The same for a stop's look at the session, with a worker that leads a
+# process group of its own inside the attempt's session: the session is
+# taken to be alive, and the run ends as a runner failure naming the session
+# and ps. Without a table the stop has no process to send the kill to, so
+# here the case stops the worker itself.
+new_case session-temp-file-fails
+mkdir -m 700 "$CASE/tmp"
+mk_pad_ps "$CASE/pads" '-A -o pid=,sid=,stat='
+EXT_PATH="$CASE/pads:$CASE/bin:$BIN_ROOT/utils"
+EXT_VARS=("TMPDIR=$CASE/tmp")
+play agy 1 --stdout "$(t_agy_answer C)" --worker 300
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "session-temp-file-fails: a usable TMPDIR: rc"
+worker_placed agy 1 "session-temp-file-fails: a usable TMPDIR"
+assert_eq "$(alive "$(callf agy 1 worker)" && echo yes || echo no)" no "session-temp-file-fails: a usable TMPDIR: the worker is gone"
+if nosearch_ok session-temp-file-fails; then
+    EXT_VARS=("TMPDIR=$CASE/nosearch")
+    RUN="$CASE/run2"
+    make_run "$RUN"
+    play agy 2 --stdout "$(t_agy_answer C)" --worker 300
+    ext run --cli agy --run-dir "$RUN"
+    l='session-temp-file-fails'
+    assert_eq "$rc" 21 "$l: rc"
+    assert_eq "$(st .outcome)" runner_failure "$l: outcome"
+    assert_contains "$(st .message)" "could not stop session" "$l: the session named"
+    assert_contains "$(st .message)" "ps could not list the processes" "$l: the cause named"
+    assert_eq "$(st '.attempts[0].verdict')" null "$l: the attempt is not classified"
+    assert_nofile "$RUN/agy.out" "$l: no answer published"
+    w="$(callf agy 2 worker)"
+    if alive "$w"; then kill -KILL "$w"; fi
+    chmod 700 "$CASE/nosearch"
+fi
+
+# A list of session handles bash cannot read is not "no handle": the run
+# ends as a runner failure named after the read, as for a list that cannot
+# be taken from the attempt's files. Here the one handle is 70,000 bytes.
+new_case handles-temp-file-fails
+big="$(printf 's%.0s' {1..70000})"
+mkdir -m 700 "$CASE/tmp"
+EXT_VARS=("TMPDIR=$CASE/tmp")
+play qwen 1 --stdout "$(t_oc_only "$big" A)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "handles-temp-file-fails: a usable TMPDIR: rc"
+assert_eq "$(st '.handle | length')" 70000 "handles-temp-file-fails: a usable TMPDIR: the handle is read"
+if nosearch_ok handles-temp-file-fails; then
+    EXT_VARS=("TMPDIR=$CASE/nosearch")
+    RUN="$CASE/run2"
+    make_run "$RUN"
+    play qwen 2 --stdout "$(t_oc_only "$big" A)"
+    ext run --cli qwen --run-dir "$RUN"
+    l='handles-temp-file-fails'
+    assert_eq "$rc" 21 "$l: rc"
+    assert_eq "$(st .outcome)" runner_failure "$l: outcome"
+    assert_eq "$(st .message)" "cannot read the session handles of attempt first1" "$l: message"
+    assert_contains "$ERR" 'cannot create temp file for here-document' "$l: the temporary file could not be made"
+    assert_nofile "$RUN/qwen.out" "$l: no answer published"
+    chmod 700 "$CASE/nosearch"
+    assert_eq "$(ncalls qwen)" 2 "$l: one call per run"
+fi
+
+# Whether the one resume is still unused is read from the status object,
+# which a denied call's command of 70,000 bytes makes longer than a pipe
+# holds once the attempt is recorded. The attempt has no session handle, so
+# with a usable TMPDIR the resume is due and ends as no handle. A status
+# object bash cannot read leaves the resume neither used nor unused: the run
+# ends as a runner failure named after the read, and no resume starts. The
+# final status needs the same read of the object, so with a TMPDIR that
+# stays unusable it cannot be written either: the summary names no status
+# file, and the read's own message is on standard error.
+new_case resume-temp-file-fails
+big="$(printf 'x%.0s' {1..70000})"
+mkdir -m 700 "$CASE/tmp"
+EXT_VARS=("TMPDIR=$CASE/tmp")
+play qwen 1 --stdout "$(oc_start ''; oc_bash '' "$big" error "$RULE_TEXT"; oc_finish '' stop)"
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 16 "resume-temp-file-fails: a usable TMPDIR: rc"
+assert_eq "$(st .phase)" resume "resume-temp-file-fails: a usable TMPDIR: the resume was due"
+assert_eq "$(st '.attempts[0].verdict')" empty "resume-temp-file-fails: a usable TMPDIR: the attempt ended empty"
+assert_eq "$(st '.denied[0].input | length')" 70000 "resume-temp-file-fails: a usable TMPDIR: the command is recorded"
+if nosearch_ok resume-temp-file-fails; then
+    EXT_VARS=("TMPDIR=$CASE/nosearch")
+    RUN="$CASE/run2"
+    make_run "$RUN"
+    play qwen 2 --stdout "$(oc_start ''; oc_bash '' "$big" error "$RULE_TEXT"; oc_finish '' stop)"
+    ext run --cli qwen --run-dir "$RUN"
+    l='resume-temp-file-fails'
+    assert_eq "$rc" 21 "$l: rc"
+    assert_contains "$ERR" "cannot read resume_used from the status object" "$l: the read named"
+    assert_begins "$OUT" "qwen: runner_failure (" "$l: the outcome"
+    assert_ends "$OUT" "status: none" "$l: no status file"
+    chmod 700 "$CASE/nosearch"
+    assert_eq "$(ncalls qwen)" 2 "$l: no resume started"
+fi
+
+# git's standard error reaches a message as its words on one line, taken
+# from a here-string. Only its first 16,000 characters are read, at most
+# 64,000 bytes, which a pipe holds, so a long one still gives git's reason
+# where bash could not make a temporary file.
+new_case git-reason-temp-file-fails
+mk_tool "$CASE/failgit/git" <<'EOF'
+printf 'fatal: VARS-REASON\n' >&2
+printf 'w %.0s' {1..40000} >&2
+exit 1
+EOF
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+mkdir -m 700 "$CASE/tmp"
+EXT_VARS=("TMPDIR=$CASE/tmp")
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "git-reason-temp-file-fails: a usable TMPDIR: rc"
+assert_contains "$OUT" "failed with status 1 (fatal: VARS-REASON w w w" "git-reason-temp-file-fails: a usable TMPDIR: git's reason"
+if nosearch_ok git-reason-temp-file-fails; then
+    EXT_VARS=("TMPDIR=$CASE/nosearch")
+    ext run --cli qwen --run-dir "$RUN"
+    l='git-reason-temp-file-fails'
+    assert_eq "$rc" 64 "$l: rc"
+    assert_contains "$OUT" "failed with status 1 (fatal: VARS-REASON w w w" "$l: git's reason"
+    assert_lacks "$ERR" 'cannot create temp file' "$l: no temporary file was needed"
+    chmod 700 "$CASE/nosearch"
+fi
+assert_eq "$(ncalls qwen)" 0 "git-reason-temp-file-fails: no call"
 
 new_case one-handle-repeated
 play agy 1 --stdout "$(agy_init C; agy_cmd C ls; agy_result C SUCCESS '')"

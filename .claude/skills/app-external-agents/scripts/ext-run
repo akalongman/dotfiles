@@ -115,7 +115,7 @@ CANCEL_SIG=''                 # the signal that set CANCEL: TERM, HUP or INT
 C_EXIT='' C_WALL='' C_WALL_US=0 C_END_US=0 C_PGID='' C_SIGNALLED=false # the last command run_cmd ran; C_END_US is when it ended
 C_STUCK=false C_STUCK_MSG=''  # a process of its group or session outlived the kill, and the message that says so
 STOP_WHAT='' SESSION_PIDS=()  # where stop_cmd found a survivor; the live processes session_alive found
-STOP_WHY='' PS_FAILED=0       # why that stop failed; 1 once ps could not list the processes during it
+STOP_WHY='' PS_FAILED=0       # why that stop failed; 1 once ps could not list the processes, or its table could not be read, during it
 STOP_FAILED=''                # the finalizer's first step: the message of a stop that failed
 A_BASE='' A_CREATES=0         # the running attempt's file base; 1 when it creates the session (first1, or a continue that starts afresh)
 LIVE_HANDLE=''                # the handle the running attempt's files showed; only a running status carries it
@@ -244,9 +244,12 @@ last_line() { # file: sets LAST to its last line that is not blank, made fit for
     return "$st"
 }
 
-one_line() { # text: sets ONE_LINE to its words joined by single spaces, at most 300 characters, fit for a one-line message
-    local w=()
-    read -r -d '' -a w <<< "${1//[[:cntrl:]]/ }"
+one_line() { # text: sets ONE_LINE to the words of its first 16000 characters joined by single spaces, at most 300 characters, fit for a one-line message
+    local w=() t="${1:0:16000}"
+    # 16000 characters are at most 64000 bytes, which bash passes through a
+    # pipe; a longer here-string goes through a temporary file (see
+    # tail_lines), and when that cannot be made or written nothing is read.
+    read -r -d '' -a w <<< "${t//[[:cntrl:]]/ }"
     ONE_LINE="${w[*]}"
     ONE_LINE="${ONE_LINE:0:300}"
 }
@@ -271,19 +274,21 @@ alias_model() { # alias: prints the OpenCode model id it stands for
     esac
 }
 
-pid_alive() { # pid: the process exists and is not a zombie; a ps that cannot list the processes counts it as alive
+pid_alive() { # pid: the process exists and is not a zombie; a ps that cannot list the processes, or a table that cannot be read, counts it as alive
     local out p s
     case "${1:-}" in '' | *[!0-9]* | 0) return 1 ;; esac
     # ps -p fails alike for a pid that is gone and for a ps that cannot list
     # processes, so the whole table is read; one that cannot be read shows
-    # nothing gone.
+    # nothing gone. A table longer than a pipe holds goes through a temporary
+    # file (see tail_lines); when that cannot be made or written, the loop
+    # does not run, and its redirection fails.
     if ! out="$(ps -A -o pid=,stat= 2>/dev/null)" || [ -z "$out" ]; then return 0; fi
     while read -r p s; do
         if [ "$p" = "$1" ]; then
             [ "${s#Z}" = "$s" ]
             return
         fi
-    done <<< "$out"
+    done <<< "$out" || return 0
     return 1
 }
 
@@ -416,15 +421,20 @@ publish_answer() { # the answer to <p>.out through <p>.out.tmp
 # ---------------------------------------------------------------------------
 # Starting and stopping a command.
 
-group_alive() { # pgid: ps shows a process of that group whose state does not begin with Z; a ps that cannot list the processes counts as one (PS_FAILED)
+group_alive() { # pgid: ps shows a process of that group whose state does not begin with Z; a ps that cannot list the processes, or a table that cannot be read, counts as one (PS_FAILED)
     local out g s
     if ! out="$(ps -A -o pgid= -o stat= 2>/dev/null)" || [ -z "$out" ]; then
         PS_FAILED=1
         return 0
     fi
+    # The redirection fails when a table longer than a pipe holds cannot go
+    # through a temporary file (see tail_lines).
     while read -r g s; do
         if [ "$g" = "$1" ] && [ "${s#Z}" = "$s" ]; then return 0; fi
-    done <<< "$out"
+    done <<< "$out" || {
+        PS_FAILED=1
+        return 0
+    }
     return 1
 }
 
@@ -452,16 +462,21 @@ stop_group() { # pgid [term]: TERM when asked, the grace period, KILL, the wait 
 # The started shell calls setsid, so the group it leads also leads a session
 # of the same id, and the kernel does not reuse that id while a member lives.
 # A worker that moved to a process group of its own stays in that session.
-session_alive() { # sid: ps shows a process of that session whose state does not begin with Z; sets SESSION_PIDS to them; a ps that cannot list the processes counts as one (PS_FAILED)
+session_alive() { # sid: ps shows a process of that session whose state does not begin with Z; sets SESSION_PIDS to them; a ps that cannot list the processes, or a table that cannot be read, counts as one (PS_FAILED)
     local out p s st
     SESSION_PIDS=()
     if ! out="$(ps -A -o pid=,sid=,stat= 2>/dev/null)" || [ -z "$out" ]; then
         PS_FAILED=1
         return 0
     fi
+    # The redirection fails when a table longer than a pipe holds cannot go
+    # through a temporary file (see tail_lines).
     while read -r p s st; do
         if [ "$s" = "$1" ] && [ "${st#Z}" = "$st" ]; then SESSION_PIDS+=("$p"); fi
-    done <<< "$out"
+    done <<< "$out" || {
+        PS_FAILED=1
+        return 0
+    }
     [ "${#SESSION_PIDS[@]}" -gt 0 ]
 }
 
@@ -1856,10 +1871,14 @@ attempt_tokens() { # attempt-base: the attempt's tokens as compact JSON
 
 read_handles() { # attempt-base id: sets HANDLES to the distinct handles in the attempt's files; a read that fails ends the run as runner_failure
     local out
-    # A failed read is not "no handle": the command substitution keeps its status.
+    # A failed read is not "no handle": the command substitution keeps its
+    # status, and so does a list longer than a pipe holds whose temporary
+    # file cannot be made or written (see tail_lines).
     out="$(attempt_handles "$1")" || end_as runner_failure "cannot read the session handles of attempt $2"
     HANDLES=()
-    if [ -n "$out" ]; then mapfile -t HANDLES <<< "$out"; fi
+    if [ -n "$out" ]; then
+        mapfile -t HANDLES <<< "$out" || end_as runner_failure "cannot read the session handles of attempt $2"
+    fi
 }
 
 agy_usage_limit() { # attempt-base: true when the attempt ended in agy's quota error; sets A_REASON and A_AT_DOOR; a read of standard error that fails ends the run as runner_failure
@@ -2060,9 +2079,15 @@ require_handle() { # sets HANDLE from the files of the attempt handle_source nam
     esac
 }
 
-resume_due() { # the attempt just classified ended without an answer, and the one resume is still unused
+resume_due() { # the attempt just classified ended without an answer, and the one resume is still unused; a status object that cannot be read ends the run as runner_failure
+    local used
     case "$VERDICT" in limit | empty) ;; *) return 1 ;; esac
-    [ "$(jq -r .resume_used <<< "$ST" 2>/dev/null)" = false ]
+    # A failed read is neither a used resume nor an unused one. A status
+    # object longer than a pipe holds goes through a temporary file (see
+    # tail_lines), and jq does not run when that cannot be made or written.
+    used="$(jq -r .resume_used <<< "$ST" 2>/dev/null)" ||
+        end_as runner_failure "cannot read resume_used from the status object"
+    [ "$used" = false ]
 }
 
 do_resume() { # limit|empty: the one resume of the session, always at the read level, under the resume limit
