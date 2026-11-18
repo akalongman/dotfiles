@@ -213,15 +213,20 @@ to_us() { # decimal seconds: sets US to them in whole microseconds (at most 10^1
 }
 
 tail_lines() { # file: sets TAIL to its last lines, with carriage returns, trailing blanks and trailing blank lines dropped; 1 when the file cannot be read
-    local l st
+    local l out st=0
     TAIL=()
-    while IFS= read -r l || [ -n "$l" ]; do
-        [[ $l =~ ^(.*[^[:space:]])?[[:space:]]*$ ]] && l="${BASH_REMATCH[1]}"
-        TAIL+=("$l")
-    done < <(tail -n 20 -- "$1" 2>/dev/null)
-    # The status of tail, which the loop's redirection does not keep.
-    wait "$!"
-    st=$?
+    # A command substitution keeps tail's status, and a signal the runner
+    # traps does not cut its wait short, as it would cut the wait builtin's:
+    # a TERM that arrives once the lines are read leaves the read whole. The
+    # redirection keeps bash's warning about a NUL byte off standard error;
+    # the lines lose such a byte, as read drops it.
+    { out="$(tail -n 20 -- "$1" 2>/dev/null)"; } 2>/dev/null || st=1
+    if [ -n "$out" ]; then
+        while IFS= read -r l; do
+            [[ $l =~ ^(.*[^[:space:]])?[[:space:]]*$ ]] && l="${BASH_REMATCH[1]}"
+            TAIL+=("$l")
+        done <<< "$out"
+    fi
     while [ "${#TAIL[@]}" -gt 0 ] && [ -z "${TAIL[-1]}" ]; do unset 'TAIL[-1]'; done
     [ "$st" = 0 ]
 }

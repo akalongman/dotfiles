@@ -4407,6 +4407,81 @@ assert_eq "$(stj '.attempts[0] | [.verdict, .signalled]')" '["answered",false]' 
 assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" ANSWER "term-after-answer: the answer is published"
 assert_eq "$(ncalls codex)" 1 "term-after-answer: one call"
 
+# A tail whose first read of a file whose path matches the glob prints the
+# file's last lines, closes its output and then lingers until the case
+# creates tail-go: the runner has every line by then and waits only for the
+# status, which is when the case sends its signal.
+mk_hold_tail() { # dir glob
+    mk_tool "$1/tail" <<'EOF' &&
+read -r glob < "${0%/*}/tail.hold"
+for a in "$@"; do last="$a"; done
+if [[ $last == $glob ]] && mkdir "$CASE/tail-held" 2>/dev/null; then
+    "$BIN_ROOT/utils/tail" "$@"
+    st=$?
+    exec >&-
+    : > "$CASE/tail-entered"
+    n=0
+    until [ -e "$CASE/tail-go" ] || [ "$n" -ge 100 ]; do
+        sleep 0.1
+        n=$((n + 1))
+    done
+    exit "$st"
+fi
+exec "$BIN_ROOT/utils/tail" "$@"
+EOF
+        printf '%s\n' "$2" > "$1/tail.hold"
+}
+
+# The same when the signal arrives while the runner takes the status of a
+# read of the ended attempt's files: the read is whole, not a failed one, so
+# the verdict stands. For an answer that read is the tokens used lines,
+# taken in a command substitution of its own.
+new_case term-in-tail-answer
+mk_hold_tail "$CASE/holdtail" '*/codex.first1.stderr'
+EXT_PATH="$CASE/holdtail:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout ANSWER --stderr "$(codex_err U1 'tokens used' '8,834')"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CASE/tail-entered"
+sleep 0.5
+kill -TERM "$BG"
+: > "$CASE/tail-go"
+ext_wait
+assert_eq "$rc" 0 "term-in-tail-answer: rc"
+assert_eq "$(st .outcome)" answered "term-in-tail-answer: outcome"
+assert_eq "$(stj '.attempts[0].tokens')" '{"reported":8834}' "term-in-tail-answer: the tokens, read whole"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" ANSWER "term-in-tail-answer: the answer is published"
+
+# For an attempt that a usage limit ended, it is the usage-limit error: the
+# run ends usage_limit, a record a continue accepts.
+new_case term-in-tail-usage-limit
+mk_hold_tail "$CASE/holdtail" '*/codex.first1.stderr'
+EXT_PATH="$CASE/holdtail:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --exit 1 --stderr "$(codex_err U1 "$ul_line" 'tokens used' '131,586')"
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CASE/tail-entered"
+sleep 0.5
+kill -TERM "$BG"
+: > "$CASE/tail-go"
+ext_wait
+assert_eq "$rc" 13 "term-in-tail-usage-limit: rc"
+assert_eq "$(st .outcome)" usage_limit "term-in-tail-usage-limit: outcome"
+assert_eq "$(st '.attempts[0].rule')" 5 "term-in-tail-usage-limit: rule"
+
+# For a CLI that failed it is rule 8's reason, which the message keeps.
+new_case term-in-tail-rule8
+mk_hold_tail "$CASE/holdtail" '*/agy.first1.stderr'
+EXT_PATH="$CASE/holdtail:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --exit 3 --stdout "$(t_agy_answer C)" --stderr 'agy: boom'
+ext_bg run --cli agy --run-dir "$RUN"
+wait_for "$CASE/tail-entered"
+sleep 0.5
+kill -TERM "$BG"
+: > "$CASE/tail-go"
+ext_wait
+assert_eq "$rc" 14 "term-in-tail-rule8: rc"
+assert_eq "$(st '.attempts[0].rule')" 8 "term-in-tail-rule8: rule"
+assert_eq "$(st .message)" "agy exited with status 3: agy: boom" "term-in-tail-rule8: the reason, read whole"
+
 new_case term-in-preflight
 : > "$SCN/codex.sandbox.hold"
 ext_bg run --cli codex --run-dir "$RUN"
