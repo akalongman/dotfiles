@@ -609,11 +609,15 @@ Files in the run directory, under the prefix `<p>`:
   ignore file has `/*` followed by `!/.claude` and the like),
   `~/Downloads/proj` has no repository of its own, so git places it in
   the home directory's work tree, which ignores `Downloads`. An
-  edit-level run started there takes no snapshot, records the note
+  edit-level Codex run, or an agy run at either level, started there
+  takes no snapshot, records the note
   `the working directory is ignored by its git work tree: no before snapshot`,
   and starts the CLI; a snapshot there would have held only the other
-  edits to the dotfiles. A run in `~/.claude/skills/x`, which the ignore
-  file lets in, keeps its snapshot of the home directory's work tree.
+  edits to the dotfiles. Such a run in `~/.claude/skills/x`, which the
+  ignore file lets in, keeps its snapshot of the home directory's work
+  tree. An OpenCode run is refused in both directories before any
+  snapshot, because its project boundary is the home directory (see
+  step 6).
   git's answer comes from `git check-ignore`; one that fails ends the
   run `prerequisite_failed`, as above.
 - `<p>.lock/`: the claim on the prefix, present while the runner runs.
