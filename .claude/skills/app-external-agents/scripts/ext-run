@@ -121,6 +121,7 @@ A_BASE='' A_CREATES=0         # the running attempt's file base; 1 when it creat
 LIVE_HANDLE=''                # the handle the running attempt's files showed; only a running status carries it
 A_EXIT='' A_WALL='' A_PGID='' A_SIGNALLED=false A_DEADLINE=false A_END_US=0 # the last attempt
 A_ANSWER='' A_REASON='' A_HANDLE_SEEN='' A_LIMIT=''
+A_UNREAD=''                   # rule 8: the standard error whose last line could not be read for the reason
 A_PHASE='' A_ID=''            # the last attempt's phase and id (<phase><n>)
 A_AT_DOOR=false               # rule 5 matched: the limit refused the attempt before its first model turn
 IN_RESUME=0                   # 1 while the attempt is the resume: an answer is then answered_after_resume
@@ -231,11 +232,13 @@ tail_lines() { # file: sets TAIL to its last lines, with carriage returns, trail
     [ "$st" = 0 ]
 }
 
-last_line() { # file: sets LAST to its last line that is not blank, made fit for a one-line message
+last_line() { # file: sets LAST to its last line that is not blank, made fit for a one-line message; 1 when the file cannot be read
+    local st=0
     LAST=''
-    tail_lines "$1"
+    tail_lines "$1" || st=1
     if [ "${#TAIL[@]}" -gt 0 ]; then LAST="${TAIL[-1]//[[:cntrl:]]/ }"; fi
     LAST="${LAST:0:300}"
+    return "$st"
 }
 
 one_line() { # text: sets ONE_LINE to its words joined by single spaces, at most 300 characters, fit for a one-line message
@@ -1071,7 +1074,10 @@ codex_probe() { # step 7: codex sandbox true, in a group of its own under the pr
                 "the Codex sandbox probe timed out after $EXT_RUN_PREFLIGHT_LIMIT (status $C_EXIT); its standard error is in $err"
             ;;
     esac
-    last_line "$err"
+    # The probe's status decides; a standard error that cannot be read only
+    # leaves the reason unknown, and the message says so.
+    last_line "$err" ||
+        end_as prerequisite_failed "the Codex sandbox probe failed with status $C_EXIT; its standard error could not be read: $err"
     end_as prerequisite_failed \
         "the Codex sandbox probe failed with status $C_EXIT${LAST:+: $LAST}; its standard error is in $err"
 }
@@ -1560,7 +1566,9 @@ oc_version_guard() { # preflight|later: reads OpenCode's version, records it, an
         0) ;;
         124 | 137) end_as unsupported_version "opencode --version timed out after $EXT_RUN_PREFLIGHT_LIMIT (status $C_EXIT)" ;;
         *)
-            last_line "$LOCK/cmd.err"
+            last_line "$LOCK/cmd.err" ||
+                end_as unsupported_version \
+                    "opencode --version failed with status $C_EXIT; its standard error could not be read: $LOCK/cmd.err"
             end_as unsupported_version "opencode --version failed with status $C_EXIT${LAST:+: $LAST}"
             ;;
     esac
@@ -1864,7 +1872,7 @@ usage_limit_seen() { # attempt-base: the attempt ended in its CLI's usage-limit 
 
 classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules that matches
     local base="$RUN_DIR/$PREFIX.$1$2" h
-    RULE='' VERDICT='' A_REASON='' A_ANSWER='' A_AT_DOOR=false
+    RULE='' VERDICT='' A_REASON='' A_ANSWER='' A_AT_DOOR=false A_UNREAD=''
     if [ "$A_SIGNALLED" = true ]; then
         RULE=1 VERDICT=cancelled A_REASON="the runner received SIG$CANCEL_SIG while $KIND ran"
         return
@@ -1902,9 +1910,12 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
         RULE=7 VERDICT=cli_failure A_REASON="agy's result has status ${T_STATUS:-(none)}"
         return
     fi
+    # The exit status decides rule 8. Its reason is the last line of standard
+    # error; one that cannot be read leaves the outcome as it is, and the
+    # message says that the reason could not be read.
     if [ "$A_EXIT" != 0 ]; then
-        last_line "$base.stderr"
-        RULE=8 VERDICT=cli_failure A_REASON="$LAST"
+        RULE=8 VERDICT=cli_failure
+        if last_line "$base.stderr"; then A_REASON="$LAST"; else A_UNREAD="$base.stderr"; fi
         return
     fi
     if [ "$KIND" != codex ]; then
@@ -2102,6 +2113,9 @@ end_with_verdict() { # ends the run under the verdict of the attempt just classi
             ;;
         cli_failure)
             # Rule 8 is the exit status; rules 6, 7 and 10 name what the trace said.
+            if [ "$RULE" = 8 ] && [ -n "$A_UNREAD" ]; then
+                end_as cli_failure "$KIND exited with status $A_EXIT; its standard error could not be read: $A_UNREAD"
+            fi
             if [ "$RULE" = 8 ]; then end_as cli_failure "$KIND exited with status $A_EXIT${A_REASON:+: $A_REASON}"; fi
             end_as cli_failure "$A_REASON"
             ;;

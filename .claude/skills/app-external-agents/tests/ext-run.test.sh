@@ -2321,15 +2321,21 @@ done
 
 # The tokens used lines and the usage-limit error: a tail that cannot read
 # the first attempt's standard error.
-mk_fail_tail() { # dir: a tail there that fails on a file named *.first1.stderr and runs the real tail otherwise
-    mk_tool "$1/tail" <<'EOF'
+mk_fail_tail() { # dir [glob [n]]: a tail there that fails on a file whose path matches the glob (*.first1.stderr by default), on every read of one or on the nth only, and runs the real tail otherwise
+    mk_tool "$1/tail" <<'EOF' &&
+read -r glob nth < "${0%/*}/tail.fail"
 for a in "$@"; do last="$a"; done
-if [[ $last == *.first1.stderr ]]; then
-    printf 'tail: cannot open %s for reading\n' "$last" >&2
-    exit 1
+if [[ $last == $glob ]]; then
+    k=$(($(cat "${0%/*}/tail.count" 2>/dev/null || echo 0) + 1))
+    echo "$k" > "${0%/*}/tail.count"
+    if [ "$nth" = all ] || [ "$nth" = "$k" ]; then
+        printf 'tail: cannot open %s for reading\n' "$last" >&2
+        exit 1
+    fi
 fi
 exec "$BIN_ROOT/utils/tail" "$@"
 EOF
+        printf '%s %s\n' "${2:-*.first1.stderr}" "${3:-all}" > "$1/tail.fail"
 }
 
 new_case codex-tokens-unreadable
@@ -2373,6 +2379,64 @@ assert_eq "$rc" 21 "agy-quota-stderr-unreadable: rc"
 assert_eq "$(st .outcome)" runner_failure "agy-quota-stderr-unreadable: outcome"
 assert_eq "$(st .message)" "cannot read the quota error in $RUN/agy.first1.stderr" "agy-quota-stderr-unreadable: message"
 assert_eq "$(ncalls agy)" 1 "agy-quota-stderr-unreadable: one call"
+
+# Rule 8 rests on the exit status, which was read; its reason is the last
+# line of standard error. A standard error that cannot be read leaves the
+# outcome a CLI failure, and the message says that the reason could not be
+# read and names the file. For Codex the usage-limit check reads the same
+# file first, so its tail fails on the second read only.
+new_case rule8-stderr-unreadable
+mk_fail_tail "$CASE/failtail"
+mk_fail_tail "$CASE/failtail2" '*.first1.stderr' 2
+play agy 1 --exit 3 --stdout "$(t_agy_answer C)" --stderr 'agy: boom'
+play qwen 1 --exit 3 --stdout "$(t_oc_only S)" --stderr 'opencode: boom'
+play codex 1 --exit 3 --stderr "$(codex_err U1 boom)"
+for k in agy:agy:failtail qwen:opencode:failtail codex:codex:failtail2; do
+    IFS=: read -r p kind d <<< "$k"
+    EXT_PATH="$CASE/$d:$CASE/bin:$BIN_ROOT/utils"
+    ext run --cli "$p" --run-dir "$RUN"
+    l="rule8-stderr-unreadable $p"
+    assert_eq "$rc" 14 "$l: rc"
+    assert_eq "$(st .outcome)" cli_failure "$l: outcome"
+    assert_eq "$(st '.attempts[0].rule')" 8 "$l: rule"
+    assert_eq "$(st .message)" "$kind exited with status 3; its standard error could not be read: $RUN/$p.first1.stderr" \
+        "$l: message"
+    assert_eq "$(ncalls "$p")" 1 "$l: one call"
+done
+assert_eq "$(cat "$CASE/failtail2/tail.count")" 3 "rule8-stderr-unreadable: Codex's usage-limit check, rule 8 and the tokens read the file"
+
+# The same for the reason of a failed Codex sandbox probe: the probe's own
+# exit status decides, and the message says its standard error could not be
+# read. A readable one gives its last line.
+new_case probe-stderr-unreadable
+echo 1 > "$SCN/codex.sandbox.exit"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$(st .message)" "the Codex sandbox probe failed with status 1: probe-stderr; its standard error is in $RUN/codex.probe.err" \
+    "probe-stderr-unreadable: a readable standard error gives the reason"
+RUN="$CASE/run2"
+make_run "$RUN"
+mk_fail_tail "$CASE/failtail" '*/codex.probe.err'
+EXT_PATH="$CASE/failtail:$CASE/bin:$BIN_ROOT/utils"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "probe-stderr-unreadable: rc"
+assert_eq "$(st .outcome)" prerequisite_failed "probe-stderr-unreadable: outcome"
+assert_eq "$(st .message)" "the Codex sandbox probe failed with status 1; its standard error could not be read: $RUN/codex.probe.err" \
+    "probe-stderr-unreadable: message"
+assert_eq "$(ncalls codex)" 0 "probe-stderr-unreadable: no call"
+
+# And for the reason of a failed opencode --version, whose standard error is
+# in the lock directory.
+new_case version-stderr-unreadable
+mk_fail_tail "$CASE/failtail" '*/qwen.lock/cmd.err'
+EXT_PATH="$CASE/failtail:$CASE/bin:$BIN_ROOT/utils"
+echo 1 > "$SCN/opencode.version.exit"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 19 "version-stderr-unreadable: rc"
+assert_eq "$(st .outcome)" unsupported_version "version-stderr-unreadable: outcome"
+assert_eq "$(st .message)" "opencode --version failed with status 1; its standard error could not be read: $RUN/qwen.lock/cmd.err" \
+    "version-stderr-unreadable: message"
+assert_eq "$(ncalls qwen)" 0 "version-stderr-unreadable: no call"
 
 new_case one-handle-repeated
 play agy 1 --stdout "$(agy_init C; agy_cmd C ls; agy_result C SUCCESS '')"
