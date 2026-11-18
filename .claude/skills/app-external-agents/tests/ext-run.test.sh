@@ -2438,6 +2438,59 @@ assert_eq "$(st .message)" "opencode --version failed with status 1; its standar
     "version-stderr-unreadable: message"
 assert_eq "$(ncalls qwen)" 0 "version-stderr-unreadable: no call"
 
+# The last lines of a standard error are split from a here-string. bash
+# writes one longer than a pipe holds (about 64 KiB) to a temporary file in
+# TMPDIR, else /tmp; when that file cannot be made or written (a full or
+# unusable temporary directory), the lines are not read, and the read fails
+# as one that cannot open the file does. Here the last lines hold a line of
+# 100,000 bytes, and TMPDIR names a directory that bash takes as writable,
+# its write bit set, and cannot make a file in, its search bit cleared. With
+# a usable TMPDIR the same lines are read whole. Each of the three readers
+# of those lines fails as it does for a file it cannot open: Codex's
+# usage-limit error, Codex's tokens used lines and rule 8's reason.
+new_case tail-temp-file-fails
+printf -v long '%*s' 100000 ''
+long="${long// /x}"
+mkdir -m 700 "$CASE/tmp" "$CASE/nosearch"
+EXT_VARS=("TMPDIR=$CASE/tmp")
+play codex 1 --exit 1 --stderr "$(codex_err U1 "$long" "$ul_line" 'tokens used' '131,586')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "tail-temp-file-fails: a usable TMPDIR: rc"
+assert_eq "$(st '.attempts[0].rule')" 5 "tail-temp-file-fails: a usable TMPDIR: the usage limit is read"
+if [ "$(id -u)" = 0 ]; then
+    printf 'ext-run.test: tail-temp-file-fails skipped in part: as root a directory without its search bit can be searched\n' >&2
+else
+    chmod 600 "$CASE/nosearch"
+    EXT_VARS=("TMPDIR=$CASE/nosearch")
+    RUN="$CASE/run2"
+    make_run "$RUN"
+    play codex 2 --exit 1 --stderr "$(codex_err U2 "$long" "$ul_line" 'tokens used' '131,586')"
+    ext run --cli codex --run-dir "$RUN"
+    l='tail-temp-file-fails usage limit'
+    assert_eq "$rc" 21 "$l: rc"
+    assert_eq "$(st .outcome)" runner_failure "$l: outcome"
+    assert_eq "$(st .message)" "cannot read the usage-limit error in $RUN/codex.first1.stderr" "$l: message"
+    assert_contains "$ERR" 'cannot create temp file for here-document' "$l: the temporary file could not be made"
+    RUN="$CASE/run3"
+    make_run "$RUN"
+    play codex 3 --stdout ANSWER --stderr "$(codex_err U3 "$long" 'tokens used' '8,834')"
+    ext run --cli codex --run-dir "$RUN"
+    l='tail-temp-file-fails tokens'
+    assert_eq "$rc" 21 "$l: rc"
+    assert_eq "$(st .message)" "cannot read the tokens of attempt first1" "$l: message"
+    assert_nofile "$RUN/codex.out" "$l: no answer"
+    RUN="$CASE/run4"
+    make_run "$RUN"
+    play agy 1 --exit 3 --stdout "$(t_agy_answer C)" --stderr "$(printf '%s\n' "$long" 'agy: boom')"
+    ext run --cli agy --run-dir "$RUN"
+    l='tail-temp-file-fails rule 8'
+    assert_eq "$rc" 14 "$l: rc"
+    assert_eq "$(st '.attempts[0].rule')" 8 "$l: rule"
+    assert_eq "$(st .message)" "agy exited with status 3; its standard error could not be read: $RUN/agy.first1.stderr" "$l: message"
+    chmod 700 "$CASE/nosearch"
+    assert_eq "$(ncalls codex)" 3 "tail-temp-file-fails: one call per Codex run"
+fi
+
 new_case one-handle-repeated
 play agy 1 --stdout "$(agy_init C; agy_cmd C ls; agy_result C SUCCESS '')"
 play agy 2 --stdout "$(t_agy_answer C)"

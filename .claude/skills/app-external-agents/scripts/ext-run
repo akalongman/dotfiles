@@ -222,11 +222,14 @@ tail_lines() { # file: sets TAIL to its last lines, with carriage returns, trail
     # redirection keeps bash's warning about a NUL byte off standard error;
     # the lines lose such a byte, as read drops it.
     { out="$(tail -n 20 -- "$1" 2>/dev/null)"; } 2>/dev/null || st=1
+    # bash writes a here-string longer than a pipe holds to a temporary
+    # file; when that file cannot be made or written, the loop does not run
+    # and the read has failed.
     if [ -n "$out" ]; then
         while IFS= read -r l; do
             [[ $l =~ ^(.*[^[:space:]])?[[:space:]]*$ ]] && l="${BASH_REMATCH[1]}"
             TAIL+=("$l")
-        done <<< "$out"
+        done <<< "$out" || st=1
     fi
     while [ "${#TAIL[@]}" -gt 0 ] && [ -z "${TAIL[-1]}" ]; do unset 'TAIL[-1]'; done
     [ "$st" = 0 ]
