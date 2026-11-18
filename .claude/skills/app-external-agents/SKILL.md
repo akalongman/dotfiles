@@ -237,10 +237,23 @@ find -H <dir> -type l -exec sh -c 'for l do printf "%s -> %s\n" "$l" "$(realpath
 
 `-H` makes `find` descend also when `<dir>` is itself a link, as an
 outside directory may be; the runner grants such a directory by the
-path it leads to. Compare each target with the protected directories by
-their canonical paths, as the runner does, because a protected directory
-may itself be a link into another directory: `realpath -m -- ~/.ssh`
-gives the path to compare with for `~/.ssh`, and so on for each. A
+path it leads to. The command does not descend into the directories the
+links it prints lead to, while a path through them goes on through the
+links met there, for a copy that follows links as for a file OpenCode's
+read tool opens: with `proj/a` a link to `other` and `other/b` a link
+to a protected directory, it prints `proj/a` only, and a copy of `proj`
+holds `a/b` with the protected directory's files. So run it again on
+each target it prints that is a directory outside `<dir>`, then on each
+such directory those runs print, and so on, each directory once, until
+no new one appears; a target that already calls for a bundle (below)
+needs no listing of its own. `find -L` would list every depth in one command,
+but it walks a linked directory again for every path of links that
+leads to it: a test tree of 23 package directories, each holding links
+to the next two, gave 57,313 lines. Compare each target with the
+protected directories by their canonical paths, as the runner does,
+because a protected directory may itself be a link into another
+directory: `realpath -m -- ~/.ssh` gives the path to compare with for
+`~/.ssh`, and so on for each. A
 target that is, lies inside or contains a protected directory (the home
 directory, for example) calls for a bundle. At the edit level, which
 never runs from a bundle, the session names the link to the owner
@@ -262,9 +275,13 @@ Rules for building it:
 - copy files and directories following symbolic links, so that no link
   leads out of the bundle;
 - before copying a directory whole, list its links with the command
-  above, and leave out each link whose target is, lies inside or
-  contains a protected directory, or is a credential file: the copy
-  follows the link and would carry what it leads to into the bundle;
+  above, in turn under each directory outside it that they lead to as
+  well, and leave out each link whose target is, lies inside or
+  contains a protected directory, or is a credential file, at any
+  depth: the copy follows links at every depth and would carry what
+  they lead to into the bundle. A link met in a linked directory is left
+  out by copying that directory, without it, in place of the link that
+  leads there;
 - never copy a credential file, and never a whole protected directory;
 - never copy a `.git` directory or file, which would lead back to the
   original repository. A review of a git range or of uncommitted changes
