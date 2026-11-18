@@ -249,8 +249,9 @@ such directory those runs print, and so on, each directory once, until
 no new one appears; a target that already calls for a bundle (below)
 needs no listing of its own. `find -L` would list every depth in one command,
 but it walks a linked directory again for every path of links that
-leads to it: a test tree of 23 package directories, each holding links
-to the next two, gave 57,313 lines. Compare each target with the
+leads to it: from a link to the first of 23 directories, each holding
+links to the next two, it lists tens of thousands of lines, where the
+command above lists one. Compare each target with the
 protected directories by their canonical paths, as the runner does,
 because a protected directory may itself be a link into another
 directory: `realpath -m -- ~/.ssh` gives the path to compare with for
