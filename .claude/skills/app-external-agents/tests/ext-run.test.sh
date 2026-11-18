@@ -4231,6 +4231,131 @@ done
 assert_eq "$(ncalls codex)" 0 "snap-git-fails-in-repo: no call of codex"
 assert_eq "$(ncalls agy)" 0 "snap-git-fails-in-repo: no call of agy"
 
+# A working directory that its git work tree ignores gets no before snapshot,
+# only a note, and the run goes on: git status shows nothing of what a CLI
+# writes there. The stand-in is a home directory that is a git work tree as
+# the dotfiles make it: the repository is reached through a link named .git
+# (core.worktree the home directory, untracked files hidden), and the ignore
+# file ignores every top-level entry ("/*") except a few ("!/"). git
+# check-ignore reports a directory below an ignored top-level entry as ignored
+# (~/Downloads/proj, ~/.cache/external-agents) and one below an exception as
+# not ignored (~/.claude/skills/x), which keeps its snapshot of the work tree.
+# A directory a project's own ignore file names gets the note too.
+new_case snap-ignored
+D="$HOME/.local/share/yadm/repo.git"
+mkdir -p "$HOME/Downloads/proj" "$HOME/.cache/external-agents" "$HOME/.claude/skills/x" "${D%/*}"
+if ! { git init -q --bare --template="$ROOT/tpl" "$D" &&
+    git -C "$D" config core.bare false &&
+    git -C "$D" config core.worktree "$HOME" &&
+    git -C "$D" config status.showUntrackedFiles no &&
+    git -C "$D" config user.name Fixture &&
+    git -C "$D" config user.email fixture@example.invalid &&
+    git -C "$D" config core.hooksPath "$ROOT/tpl" &&
+    ln -s .local/share/yadm/repo.git "$HOME/.git" &&
+    printf '%s\n' '/*' '!/.gitignore' '!/.claude' > "$HOME/.gitignore" &&
+    printf 'skill\n' > "$HOME/.claude/skills/x/SKILL.md" &&
+    git -C "$HOME" add .gitignore .claude/skills/x/SKILL.md &&
+    git -C "$HOME" commit -q -m dotfiles; }; then
+    printf 'ext-run.test: snap-ignored: the stand-in home could not be made\n' >&2
+    exit 2
+fi
+git -C "$HOME/Downloads/proj" check-ignore -q .
+assert_eq "$?" 0 "snap-ignored: git reports a directory below an ignored top-level entry as ignored"
+git -C "$HOME/.cache/external-agents" check-ignore -q .
+assert_eq "$?" 0 "snap-ignored: and another"
+git -C "$HOME/.claude/skills/x" check-ignore -q .
+assert_eq "$?" 1 "snap-ignored: and one below an exception as not ignored"
+# Changes the snapshot of the work tree would hold, as another session leaves them.
+echo more >> "$HOME/.claude/skills/x/SKILL.md"
+echo x > "$HOME/.claude/skills/x/untracked"
+mkdir "$CASE/work/build"
+printf 'build/\n' > "$CASE/work/.gitignore"
+note='the working directory is ignored by its git work tree: no before snapshot'
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+play codex 2 --stdout A --stderr "$(codex_err U1)"
+play codex 3 --stdout A --stderr "$(codex_err U1)"
+play agy 1 --stdout "$(t_agy_answer C)"
+k=0
+for a in "codex $HOME/Downloads/proj note" "agy $HOME/.cache/external-agents note" \
+    "codex $HOME/.claude/skills/x snapshot" "codex $CASE/work/build note"; do
+    read -r cli WORK want <<< "$a"
+    k=$((k + 1))
+    RUN="$CASE/run$k"
+    make_run "$RUN"
+    if [ "$cli" = codex ]; then
+        ext run --cli codex --run-dir "$RUN" --level edit
+    else
+        ext run --cli agy --run-dir "$RUN"
+    fi
+    l="snap-ignored $cli in ${WORK#"$CASE/"}"
+    assert_eq "$rc" 0 "$l: rc"
+    assert_eq "$(st .outcome)" answered "$l: outcome"
+    if [ "$want" = note ]; then
+        assert_eq "$(stj .notes)" "$(jq -cn --arg n "$note" '[$n]')" "$l: the note"
+        assert_eq "$OUT" "$cli: answered ($note); status: $RUN/$cli.status" "$l: the note in the summary"
+        assert_nofile "$RUN/before.txt" "$l: no before.txt"
+        assert_nofile "$RUN/before.diff" "$l: no before.diff"
+    else
+        assert_eq "$(stj .notes)" '[]' "$l: no note"
+        assert_line "$(cat "$RUN/before.txt" 2>/dev/null)" ' M SKILL.md' "$l: before.txt, the change"
+        assert_line "$(cat "$RUN/before.txt" 2>/dev/null)" '?? untracked' "$l: before.txt, the untracked file"
+        assert_line "$(cat "$RUN/before.diff" 2>/dev/null)" '+more' "$l: before.diff"
+    fi
+done
+assert_eq "$(callf codex 1 cwd)" "$HOME/Downloads/proj" "snap-ignored: the CLI ran in the ignored directory"
+assert_eq "$(ncalls codex) $(ncalls agy)" "3 1" "snap-ignored: every run made its call"
+
+# The query runs without the repository variables the runner inherited, as
+# the snapshot's other queries do: an inherited repository whose exclude file
+# names the working directory does not make it ignored.
+new_case snap-ignored-own-repo
+fixture_repo "$CASE/other"
+mkdir -p "$CASE/other/.git/info"
+printf '/work/\n' > "$CASE/other/.git/info/exclude"
+EXT_VARS=("GIT_DIR=$CASE/other/.git" "GIT_WORK_TREE=$CASE")
+env "${EXT_VARS[@]}" git -C "$WORK" check-ignore -q .
+assert_eq "$?" 0 "snap-ignored-own-repo: the inherited repository calls the working directory ignored"
+echo changed >> "$WORK/README.md"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN" --level edit
+assert_eq "$rc" 0 "snap-ignored-own-repo: rc"
+assert_eq "$(stj .notes)" '[]' "snap-ignored-own-repo: no note"
+assert_line "$(cat "$RUN/before.diff" 2>/dev/null)" '+changed' "snap-ignored-own-repo: the working directory's own snapshot"
+
+# Only status 0 (ignored) and 1 (not ignored) are check-ignore's answers. Any
+# other is a git failure, never "not ignored": with a .git above, the run
+# ends as a missing prerequisite before the CLI starts, with git's reason, as
+# for the snapshot's other queries.
+new_case snap-check-ignore-fails
+mk_tool "$CASE/failgit/git" <<'EOF'
+case " $* " in *' check-ignore '*) echo 'fatal: IGNORE-REASON' >&2; exit "$(cat "$CASE/ignore-rc")" ;; esac
+exec "$BIN_ROOT/utils/git" "$@"
+EOF
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout A --stderr "$(codex_err U1)"
+play agy 1 --stdout "$(t_agy_answer C)"
+k=0
+for r in 128 2; do
+    echo "$r" > "$CASE/ignore-rc"
+    for a in "codex --level edit" agy; do
+        k=$((k + 1))
+        RUN="$CASE/run$k"
+        make_run "$RUN"
+        read -r -a w <<< "$a"
+        ext run --cli "${w[0]}" --run-dir "$RUN" "${w[@]:1}"
+        l="snap-check-ignore-fails $r ${w[0]}"
+        assert_eq "$rc" 18 "$l: rc"
+        assert_eq "$(st .outcome)" prerequisite_failed "$l: outcome"
+        assert_eq "$(st .phase)" preflight "$l: phase"
+        assert_eq "$(st .message)" \
+            "git check-ignore failed with status $r in $WORK (fatal: IGNORE-REASON), so no before snapshot was taken" \
+            "$l: the query and git's reason named"
+        assert_eq "$(stj .notes)" '[]' "$l: no note"
+        assert_nofile "$RUN/before.txt" "$l: no before.txt"
+    done
+done
+assert_eq "$(ncalls codex) $(ncalls agy)" "0 0" "snap-check-ignore-fails: no call"
+
 # A run that would take the before snapshot (the edit level, agy at either
 # level) refuses a run directory that holds one already, decided under the
 # claim without asking git, so also outside a git work tree: no status, no

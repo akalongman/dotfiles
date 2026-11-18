@@ -952,7 +952,7 @@ take_prompt_sum() { # step 7: prompt_sha256 of the file the first attempt is giv
     st_update '.prompt_sha256 = $s' --arg s "$SUM"
 }
 
-take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt and before.diff of the git work tree that holds the working directory; outside one, a note; a git that fails under a .git ends the run
+take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt and before.diff of the git work tree that holds the working directory; outside one, or in a directory it ignores, a note; a git that fails under a .git ends the run
     local txt="$RUN_DIR/before.txt" dif="$RUN_DIR/before.diff"
     # Only "true" is a work tree. A failing query is git's answer outside one
     # only when no .git lies on the way up; with one there, git failed on a
@@ -970,6 +970,22 @@ take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt a
         note "not a git repository: no before snapshot"
         return 0
     fi
+    # git status shows nothing of what a CLI writes in a directory the work
+    # tree ignores, so a snapshot there would show only changes elsewhere in
+    # the work tree: a run in ~/Downloads/proj, where the home directory is a
+    # work tree that ignores Downloads, would hold the other edits to the
+    # home directory's tracked files. No snapshot is taken there. Only 0
+    # (ignored) and 1 (not ignored) are check-ignore's answers; any other
+    # status is a git failure under a .git, and the run stops as above.
+    own_git "$CWD" check-ignore -q .
+    case "$GIT_RC" in
+        0)
+            note "the working directory is ignored by its git work tree: no before snapshot"
+            return 0
+            ;;
+        1) ;;
+        *) end_as prerequisite_failed "git check-ignore failed with status $GIT_RC in $CWD${GIT_ERR:+ ($GIT_ERR)}, so no before snapshot was taken" ;;
+    esac
     # Each file is made first, so that a failed write is told apart from a
     # failed query; git then writes into it.
     { : > "$txt"; } 2>/dev/null || end_as runner_failure "cannot write $txt"

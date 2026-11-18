@@ -65,7 +65,8 @@ agy has no read-only setting. Its allow-rules gate shell commands, not
 its file-writing tool, and `--mode plan` is not a boundary, so it is not
 used. At the read level the prompt's read-level line (step 5 of
 "Steps") is all that stops a write. In a git repository the runner
-therefore takes the before snapshot for every agy run, and the report
+therefore takes the before snapshot for every agy run, unless the
+repository ignores the working directory (see step 7), and the report
 compares the working tree with it.
 
 OpenCode has no sandbox flag: its permissions are per-agent config, so
@@ -599,7 +600,21 @@ Files in the run directory, under the prefix `<p>`:
   (no `.git` on the way up from the working directory) the run writes
   neither and notes it; where a `.git` lies above and git fails there (a
   `.git` file it cannot read, a repository it refuses to trust), the run
-  ends `prerequisite_failed` before the CLI starts.
+  ends `prerequisite_failed` before the CLI starts. In a working
+  directory that its work tree ignores the run also writes neither and
+  notes why, because `git status` shows nothing a CLI writes there.
+  Worked example: on a machine whose home directory is a git work tree
+  that ignores every top-level entry but a few (the dotfiles, whose
+  ignore file has `/*` followed by `!/.claude` and the like),
+  `~/Downloads/proj` has no repository of its own, so git places it in
+  the home directory's work tree, which ignores `Downloads`. An
+  edit-level run started there takes no snapshot, records the note
+  `the working directory is ignored by its git work tree: no before snapshot`,
+  and starts the CLI; a snapshot there would have held only the other
+  edits to the dotfiles. A run in `~/.claude/skills/x`, which the ignore
+  file lets in, keeps its snapshot of the home directory's work tree.
+  git's answer comes from `git check-ignore`; one that fails ends the
+  run `prerequisite_failed`, as above.
 - `<p>.lock/`: the claim on the prefix, present while the runner runs.
 
 The claim. Each invocation claims its prefix in the run directory before
@@ -775,7 +790,7 @@ otherwise left out.
 | handle | `handle` | the same | the same |
 | version | none | none | `versions.preflight`, followed by "untested" when `version_untested` is true |
 | outside directories (after the first line) | `allow_dirs` is `[]`: Codex is given none and reads anywhere | `allow_dirs`: exactly the directories its prompt copy names to be read with shell commands, by their real paths; one inside the working directory or under a file-reading directory is not named and not listed | `allow_dirs`: the directories it was granted, by their canonical paths |
-| snapshot notes (after the first line) | `notes`: the before snapshot's notes, `not a git repository: no before snapshot` or `no commit yet: before.diff is empty`, also joined after the message; a continue keeps them and repeats them after its own message; empty when there are none | the same | the same |
+| snapshot notes (after the first line) | `notes`: the before snapshot's notes, `not a git repository: no before snapshot`, `the working directory is ignored by its git work tree: no before snapshot` or `no commit yet: before.diff is empty`, also joined after the message; a continue keeps them and repeats them after its own message; empty when there are none | the same | the same |
 
 After the first line, as they apply:
 
@@ -804,8 +819,10 @@ After the first line, as they apply:
   status does not show that nothing was written: a change to a file that
   was already changed or untracked, to an ignored file, or outside the
   repository does not show in it. When `notes` says there was no git
-  repository (no `.git` above the working directory), say that there is
-  no snapshot, also after a continue;
+  repository (no `.git` above the working directory), or that the work
+  tree ignores the working directory, say that there is no snapshot and
+  why, also after a continue; in an ignored working directory
+  `git status` shows nothing the CLI wrote there, so it is not compared;
 - paths into a bundle, mapped back to the originals.
 
 When more than one answered, compare them all: where they agree, where
