@@ -212,14 +212,18 @@ to_us() { # decimal seconds: sets US to them in whole microseconds (at most 10^1
     US=$((10#$i * 1000000 + 10#${f:0:6}))
 }
 
-tail_lines() { # file: sets TAIL to its last lines, with carriage returns, trailing blanks and trailing blank lines dropped
-    local l
+tail_lines() { # file: sets TAIL to its last lines, with carriage returns, trailing blanks and trailing blank lines dropped; 1 when the file cannot be read
+    local l st
     TAIL=()
     while IFS= read -r l || [ -n "$l" ]; do
         [[ $l =~ ^(.*[^[:space:]])?[[:space:]]*$ ]] && l="${BASH_REMATCH[1]}"
         TAIL+=("$l")
     done < <(tail -n 20 -- "$1" 2>/dev/null)
+    # The status of tail, which the loop's redirection does not keep.
+    wait "$!"
+    st=$?
     while [ "${#TAIL[@]}" -gt 0 ] && [ -z "${TAIL[-1]}" ]; do unset 'TAIL[-1]'; done
+    [ "$st" = 0 ]
 }
 
 last_line() { # file: sets LAST to its last line that is not blank, made fit for a one-line message
@@ -1002,21 +1006,24 @@ codex_handles() { # stderr-file [closed]: the distinct session handles of the he
     codex_header "$1" 'session id' "${2:-}" | LC_ALL=C awk 'NF && !seen[$0]++'
 }
 
-codex_answer() { # stdout-file: the answer is the attempt's standard output
+codex_answer() { # stdout-file: the answer is the attempt's standard output; 1 when it cannot be read
     cat -- "$1" 2>/dev/null
 }
 
-codex_reported() { # stderr-file: {model, effort} of the header as compact JSON, null where a line is absent
-    local m='' e=''
-    IFS= read -r m < <(codex_header "$1" model)
-    IFS= read -r e < <(codex_header "$1" 'reasoning effort')
+codex_reported() { # stderr-file: {model, effort} of the header as compact JSON, null where a line is absent; 1 when the file cannot be read
+    local m e
+    # Each value with its status, which a read from a process substitution
+    # would drop; the first line of each is the header's.
+    m="$(codex_header "$1" model)" || return 1
+    e="$(codex_header "$1" 'reasoning effort')" || return 1
+    m="${m%%$'\n'*}" e="${e%%$'\n'*}"
     jq -cn --arg m "$m" --arg e "$e" 'def named: if . == "" then null else . end;
         {model: ($m | named), effort: ($e | named)}'
 }
 
-codex_tokens() { # stderr-file: the number after the closing "tokens used" line, commas removed; nothing when absent
+codex_tokens() { # stderr-file: the number after the closing "tokens used" line, commas removed; nothing when absent; 1 when the file cannot be read
     local n
-    tail_lines "$1"
+    tail_lines "$1" || return 1
     n="${#TAIL[@]}"
     if [ "$n" -ge 2 ] && [ "${TAIL[n - 2]}" = 'tokens used' ] && [[ ${TAIL[n - 1]} =~ ^[0-9][0-9,]*$ ]]; then
         printf '%s\n' "${TAIL[n - 1]//,/}"
@@ -1027,9 +1034,11 @@ codex_ul_line() { # line: Codex's usage-limit error (its apostrophe is typograph
     [[ $1 == ERROR:* && $1 == *'hit your usage limit'* ]]
 }
 
-codex_usage_limit() { # stderr-file: true when its end is Codex's usage-limit error; sets A_REASON to that line and A_AT_DOOR
+codex_usage_limit() { # stderr-file: true when its end is Codex's usage-limit error; sets A_REASON to that line and A_AT_DOOR; a read that fails ends the run as runner_failure
     local n
-    tail_lines "$1"
+    # A file that cannot be read is not one without the error: taken for
+    # that, a usage limit would end as rule 8, a record no continue accepts.
+    tail_lines "$1" || end_as runner_failure "cannot read the usage-limit error in $1"
     n="${#TAIL[@]}"
     # After work was done the error stands right before "tokens used" and the
     # number; when the limit refused the run at the door it is the last line.
@@ -1804,7 +1813,7 @@ attempt_tokens() { # attempt-base: the attempt's tokens as compact JSON
     local t
     case "$KIND" in
         codex)
-            t="$(codex_tokens "$1.stderr")"
+            t="$(codex_tokens "$1.stderr")" || return 1
             jq -cn --arg t "$t" '{reported: (if $t == "" then null else ($t | tonumber) end)}'
             ;;
         agy) load_trace "$1" && agy_tokens "$T_EVENTS" ;;
@@ -1820,16 +1829,18 @@ read_handles() { # attempt-base id: sets HANDLES to the distinct handles in the 
     if [ -n "$out" ]; then mapfile -t HANDLES <<< "$out"; fi
 }
 
-agy_usage_limit() { # attempt-base: true when the attempt ended in agy's quota error; sets A_REASON and A_AT_DOOR
+agy_usage_limit() { # attempt-base: true when the attempt ended in agy's quota error; sets A_REASON and A_AT_DOOR; a read of standard error that fails ends the run as runner_failure
     local line=''
     [ "$T_DAMAGED" = false ] && [ "$T_RESULT" = true ] && [ "$T_STATUS" != SUCCESS ] || return 1
     if [ -n "$AGY_QUOTA_ERROR_TEXT" ] && [[ $T_RESULT_ERROR == *"$AGY_QUOTA_ERROR_TEXT"* ]]; then
         A_REASON="$T_RESULT_ERROR"
     else
-        if [ -n "$AGY_QUOTA_STDERR_TEXT" ] && [ -f "$1.stderr" ]; then
+        # A standard error that cannot be read is not one without the text:
+        # taken for that, a quota error would end as rule 7.
+        if [ -n "$AGY_QUOTA_STDERR_TEXT" ]; then
             # shellcheck disable=SC2016  # jq variables
             line="$(jq -nRr --arg t "$AGY_QUOTA_STDERR_TEXT" 'first(inputs | select(contains($t))) // empty' \
-                "$1.stderr" 2>/dev/null)"
+                "$1.stderr" 2>/dev/null)" || end_as runner_failure "cannot read the quota error in $1.stderr"
         fi
         [ -n "$line" ] || return 1
         A_REASON="${line//[[:cntrl:]]/ }"
@@ -1909,7 +1920,9 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
         RULE=10 VERDICT=cli_failure A_REASON="opencode's last step ended with reason ${T_REASON:-(none)}"
         return
     fi
-    if ! A_ANSWER="$(attempt_answer "$base")" && [ "$KIND" != codex ]; then
+    # A failed read is not an empty answer: the command substitution keeps its status.
+    if ! A_ANSWER="$(attempt_answer "$base")"; then
+        if [ "$KIND" = codex ]; then end_as runner_failure "cannot read the answer in $base.stdout"; fi
         end_as runner_failure "cannot read the answer in the events $T_EVENTS"
     fi
     if [[ $A_ANSWER == *[![:space:]]* ]]; then
@@ -1981,7 +1994,7 @@ take_session() { # phase n: the handle and what the CLI reported, from the attem
         st_update '.handle = $h' --arg h "$HANDLE"
     fi
     case "$KIND" in
-        codex) r="$(codex_reported "$base.stderr")" ;;
+        codex) r="$(codex_reported "$base.stderr")" || end_as runner_failure "cannot read the header in $base.stderr" ;;
         agy)
             load_trace "$base"
             r="$(agy_reported "$T_EVENTS")" || end_as runner_failure "cannot read the first event in $T_EVENTS"

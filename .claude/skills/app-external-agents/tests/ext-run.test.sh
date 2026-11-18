@@ -2277,6 +2277,103 @@ assert_eq "$(st .phase)" resume "handles-unreadable-resume: phase"
 assert_eq "$(st .message)" "cannot read the session handles of attempt resume1" "handles-unreadable-resume: message"
 assert_nofile "$RUN/codex.out" "handles-unreadable-resume: no answer"
 
+# Codex's other reads of its files, and agy's quota text on standard error,
+# fail the same way: a read that fails is never taken for an empty answer,
+# no header, no tokens or no usage limit. Codex's standard output, made
+# unreadable while the attempt runs, would otherwise be an empty answer and
+# a resume.
+new_case codex-answer-unreadable
+play codex 1 --stdout A --stderr "$(codex_err U1)" --hold
+ext_bg run --cli codex --run-dir "$RUN"
+wait_for "$CALLS/codex.1/started"
+chmod 000 "$RUN/codex.first1.stdout"
+release codex 1
+ext_wait
+assert_eq "$rc" 21 "codex-answer-unreadable: rc"
+assert_eq "$(st .outcome)" runner_failure "codex-answer-unreadable: outcome"
+assert_eq "$(st .message)" "cannot read the answer in $RUN/codex.first1.stdout" "codex-answer-unreadable: message"
+assert_nofile "$RUN/codex.out" "codex-answer-unreadable: no answer"
+assert_eq "$(ncalls codex)" 1 "codex-answer-unreadable: no resume"
+chmod 600 "$RUN/codex.first1.stdout"
+
+# The header's model and effort: an awk that cannot read the first
+# attempt's standard error when it looks for that key there.
+for key in model 'reasoning effort'; do
+    new_case "codex-header-unreadable-${key// /-}"
+    mk_tool "$CASE/failawk/awk" <<EOF
+for a in "\$@"; do last="\$a"; done
+for a in "\$@"; do
+    if [ "\$a" = 'k=$key: ' ] && [[ \$last == *.first1.stderr ]]; then
+        printf 'awk: cannot open "%s"\n' "\$last" >&2
+        exit 2
+    fi
+done
+exec "\$BIN_ROOT/utils/awk" "\$@"
+EOF
+    EXT_PATH="$CASE/failawk:$CASE/bin:$BIN_ROOT/utils"
+    answering codex 1
+    ext run --cli codex --run-dir "$RUN"
+    assert_eq "$rc" 21 "$CASE_NAME: rc"
+    assert_eq "$(st .outcome)" runner_failure "$CASE_NAME: outcome"
+    assert_eq "$(st .message)" "cannot read the header in $RUN/codex.first1.stderr" "$CASE_NAME: message"
+    assert_nofile "$RUN/codex.out" "$CASE_NAME: no answer"
+done
+
+# The tokens used lines and the usage-limit error: a tail that cannot read
+# the first attempt's standard error.
+mk_fail_tail() { # dir: a tail there that fails on a file named *.first1.stderr and runs the real tail otherwise
+    mk_tool "$1/tail" <<'EOF'
+for a in "$@"; do last="$a"; done
+if [[ $last == *.first1.stderr ]]; then
+    printf 'tail: cannot open %s for reading\n' "$last" >&2
+    exit 1
+fi
+exec "$BIN_ROOT/utils/tail" "$@"
+EOF
+}
+
+new_case codex-tokens-unreadable
+mk_fail_tail "$CASE/failtail"
+EXT_PATH="$CASE/failtail:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --stdout ANSWER --stderr "$(codex_err U1 'tokens used' '8,834')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "codex-tokens-unreadable: rc"
+assert_eq "$(st .message)" "cannot read the tokens of attempt first1" "codex-tokens-unreadable: message"
+assert_nofile "$RUN/codex.out" "codex-tokens-unreadable: no answer"
+
+# Taken for no usage limit, the attempt would fall to rule 8, a record that
+# cannot be continued.
+new_case codex-usage-limit-unreadable
+mk_fail_tail "$CASE/failtail"
+EXT_PATH="$CASE/failtail:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --exit 1 --stderr "$(codex_err U1 "$ul_line" "$ul_line" 'tokens used' '131,586')"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "codex-usage-limit-unreadable: rc"
+assert_eq "$(st .outcome)" runner_failure "codex-usage-limit-unreadable: outcome"
+assert_eq "$(st .message)" "cannot read the usage-limit error in $RUN/codex.first1.stderr" \
+    "codex-usage-limit-unreadable: message"
+assert_eq "$(ncalls codex)" 1 "codex-usage-limit-unreadable: one call"
+
+# agy's quota text on standard error, when the result's error does not hold
+# its own: a jq that cannot read the first attempt's standard error.
+new_case agy-quota-stderr-unreadable
+mk_tool "$CASE/failjq/jq" <<'EOF'
+for a in "$@"; do last="$a"; done
+if [[ $last == *agy.first1.stderr ]]; then
+    printf 'jq: error: Could not open %s: Permission denied\n' "$last" >&2
+    exit 2
+fi
+exec "$BIN_ROOT/utils/jq" "$@"
+EOF
+EXT_PATH="$CASE/failjq:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --exit 3 --stdout "$(t_agy_quota_door C1 45m | jq -c 'if .event == "result" then .result.error = "" else . end')" \
+    --stderr "$(agy_quota_err 45m)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 21 "agy-quota-stderr-unreadable: rc"
+assert_eq "$(st .outcome)" runner_failure "agy-quota-stderr-unreadable: outcome"
+assert_eq "$(st .message)" "cannot read the quota error in $RUN/agy.first1.stderr" "agy-quota-stderr-unreadable: message"
+assert_eq "$(ncalls agy)" 1 "agy-quota-stderr-unreadable: one call"
+
 new_case one-handle-repeated
 play agy 1 --stdout "$(agy_init C; agy_cmd C ls; agy_result C SUCCESS '')"
 play agy 2 --stdout "$(t_agy_answer C)"
