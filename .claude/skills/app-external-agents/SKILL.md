@@ -319,7 +319,11 @@ It prints nothing for a link whose target lies inside the project or
 holds nothing writable by the owner. Inside a linked directory the
 search stops at the first entry writable by the owner, so a large tree
 the owner cannot write (a link to `/usr`, for example) is searched
-whole. A link that cannot be resolved, a loop for example, is named by
+whole. The search does not follow the links it meets inside a linked
+directory: one of them counts only when its own target is writable by
+the owner, so a writable directory below an unwritable directory it
+leads to, or a missing target it names, is missed. A link that cannot be
+resolved, a loop for example, is named by
 `realpath` on standard error and skipped, since nothing can be written
 through it. When the command prints nothing, the run starts without the
 question; otherwise it starts only when the owner says so, and what the
