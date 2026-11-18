@@ -723,6 +723,10 @@ mk_tool() { # path: an executable bash script whose body is standard input
     mkdir -p "${1%/*}" && { printf '#!%s\n' "$BIN_ROOT/utils/bash" && cat; } > "$1" && chmod +x "$1"
 }
 
+# The arguments of the listing step 2 asks ps for; a ps stand-in that fails
+# elsewhere lets this one through to the real ps.
+PS_PROBE='-A -o pid=,pgid=,sid=,stat='
+
 mk_ghost_ps() { # dir: a ps there that also shows, with -A, a live process in every group a lock's gid file of the case's run names
     mk_tool "$1/ps" <<'EOF'
 "$BIN_ROOT/utils/ps" "$@"
@@ -1039,6 +1043,38 @@ done
 assert_nofile "$CALLS/sandbox.started" "jq-without-raw-output0: no sandbox probe"
 assert_nofile "$CALLS/version.started" "jq-without-raw-output0: no version command"
 
+# Every stop of a started command reads the process table, so step 2 checks
+# once that ps lists the runner's own process: a ps that fails, or prints
+# nothing, stops every kind before anything starts, instead of after agy's
+# whole first attempt (no preflight command) or Codex's and OpenCode's
+# preflight command.
+new_case ps-cannot-list
+mk_tool "$CASE/failps/ps" <<'EOF'
+printf 'ps: cannot list the processes\n' >&2
+exit 1
+EOF
+mk_tool "$CASE/mutps/ps" <<'EOF'
+exit 0
+EOF
+for bad in failps mutps; do
+    EXT_PATH="$CASE/$bad:$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels"
+    for cli in codex agy qwen; do
+        RUN="$CASE/run-$bad-$cli"
+        make_run "$RUN" || exit 2
+        answering "$cli" 1
+        ext run --cli "$cli" --run-dir "$RUN"
+        assert_eq "$rc" 18 "ps-cannot-list $bad $cli: rc"
+        assert_eq "$OUT" \
+            "$cli: prerequisite_failed (a ps that lists the processes is needed: $CASE/$bad/ps $PS_PROBE does not show the runner's own process); status: none" \
+            "ps-cannot-list $bad $cli: the summary names ps and what it did not show"
+        assert_eq "$(ncalls "$cli")" 0 "ps-cannot-list $bad $cli: no call"
+        assert_nofile "$RUN/$cli.status" "ps-cannot-list $bad $cli: no status"
+        assert_nofile "$RUN/$cli.lock" "ps-cannot-list $bad $cli: no claim"
+    done
+done
+assert_nofile "$CALLS/sandbox.started" "ps-cannot-list: no sandbox probe"
+assert_nofile "$CALLS/version.started" "ps-cannot-list: no version command"
+
 # For OpenCode, step 2 also refuses a tested version in the settings file
 # that is not a version, which does not stop a Codex run, and a HOME that
 # is not absolute, since the protected directories are found from it.
@@ -1151,12 +1187,14 @@ assert_file "$RUN/codex.lock" "claimed: the lock stays"
 assert_nofile "$RUN/codex.status" "claimed: no status"
 
 # A ps that cannot list the processes cannot show the claim's owner gone, so
-# the refusal takes it to be running and offers no removal command.
+# the refusal takes it to be running and offers no removal command. The
+# stand-in lets step 2's listing through, so the claim's look is what fails.
 new_case claimed-ps-fails
 mkdir "$RUN/codex.lock"
 d="$(dead_pid)"
 echo "$d" > "$RUN/codex.lock/pid"
-mk_tool "$CASE/badps/ps" <<'EOF'
+mk_tool "$CASE/badps/ps" <<EOF
+if [ "\$*" = '$PS_PROBE' ]; then exec "\$BIN_ROOT/utils/ps" "\$@"; fi
 printf 'ps: cannot list the processes\n' >&2
 exit 1
 EOF
@@ -1480,14 +1518,15 @@ assert_eq "$(ncalls codex)" 0 "survivor-probe: no model attempt after it"
 
 # A ps that cannot list the processes confirms nothing: the stop goes on to
 # the kill and ends the run as a runner failure, instead of reading the
-# failure as "no process is alive".
+# failure as "no process is alive". The stand-in lets step 2's listing
+# through, so the stop is what meets the failure.
 new_case ps-fails
-mk_tool "$CASE/badps/ps" <<'EOF'
-if [ "${1:-}" = -A ]; then
+mk_tool "$CASE/badps/ps" <<EOF
+if [ "\${1:-}" = -A ] && [ "\$*" != '$PS_PROBE' ]; then
     printf 'ps: cannot list the processes\n' >&2
     exit 1
 fi
-exec "$BIN_ROOT/utils/ps" "$@"
+exec "\$BIN_ROOT/utils/ps" "\$@"
 EOF
 EXT_PATH="$CASE/badps:$CASE/bin:$BIN_ROOT/utils"
 answering codex 1
@@ -3045,6 +3084,31 @@ assert_eq "$OUT" \
 assert_nofile "$CALLS/sandbox.started" "jq-without-raw-output0-continue: no sandbox probe"
 assert_eq "$(ncalls codex)" 1 "jq-without-raw-output0-continue: no call after the run"
 unchanged "$RUN/codex.status" "jq-without-raw-output0-continue"
+
+# A continue makes the same ps check in step 2, before its claim: the saved
+# status stays as it was, and the run can be continued once ps works.
+new_case ps-cannot-list-continue
+ul_first_run
+keep "$RUN/codex.status"
+rm "$CALLS/sandbox.started"
+mk_tool "$CASE/failps/ps" <<'EOF'
+printf 'ps: cannot list the processes\n' >&2
+exit 1
+EOF
+EXT_PATH="$CASE/failps:$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels"
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 18 "ps-cannot-list-continue: rc"
+assert_eq "$OUT" \
+    "codex: prerequisite_failed (a ps that lists the processes is needed: $CASE/failps/ps $PS_PROBE does not show the runner's own process); status: none" \
+    "ps-cannot-list-continue: the summary names ps"
+assert_nofile "$CALLS/sandbox.started" "ps-cannot-list-continue: no sandbox probe"
+assert_eq "$(ncalls codex)" 1 "ps-cannot-list-continue: no call after the run"
+assert_nofile "$RUN/codex.lock" "ps-cannot-list-continue: no claim"
+unchanged "$RUN/codex.status" "ps-cannot-list-continue"
+unset EXT_PATH
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "ps-cannot-list-continue: with ps working the same continue answers"
 
 # ---------------------------------------------------------------------------
 # What an OpenCode run is given and may read: the injected config, the

@@ -760,9 +760,23 @@ check_ground() {
     if ! jq -n --raw-output0 empty > /dev/null 2>&1; then
         end_as prerequisite_failed "jq 1.7 or later is needed: $(type -P jq) does not take --raw-output0"
     fi
+    # Every stop of a started command reads the process table, and one that
+    # cannot be read counts as a process still alive. One look here, with
+    # the columns the stops read, so that such a ps stops every invocation
+    # before anything starts and not after the first command it started.
+    ps_lists || end_as prerequisite_failed "a ps that lists the processes is needed: $(type -P ps) -A -o pid=,pgid=,sid=,stat= does not show the runner's own process"
     check_knobs
     # After the knobs, whose check finds an awk that does not work.
     followup_read
+}
+
+ps_lists() { # step 2: ps lists the processes, the runner's own among them, with every column the stops read
+    local out p st
+    out="$(ps -A -o pid=,pgid=,sid=,stat= 2>/dev/null)" || return 1
+    while read -r p _ _ st; do
+        if [ "$p" = "$$" ] && [ -n "$st" ]; then return 0; fi
+    done <<< "$out"
+    return 1
 }
 
 check_knobs() { # the test knobs: three durations and two plain numbers of seconds

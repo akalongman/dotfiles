@@ -609,8 +609,9 @@ attempt that created the session left no session handle;
 later attempt reported another handle than the one it was passed. Six
 are decided around the CLI: `prerequisite_failed`, something the runner
 needs is missing or failed (among them a helper program, bash 5, jq
-1.7, its settings file, its follow-up texts, agy's settings file, the
-Codex sandbox probe, git; the table below names each);
+1.7, a `ps` that lists the processes, its settings file, its follow-up
+texts, agy's settings file, the Codex sandbox probe, git; the table
+below names each);
 `unsupported_version`, the OpenCode version guard refused (a major
 version other than the tested one, or a version command that failed,
 did not answer or printed no version); `cancelled`,
@@ -645,7 +646,7 @@ with `outcomes`:
 | `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
 | `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
 | `handle_conflict` | 17 | the handles the message names; nothing further is resumed |
-| `prerequisite_failed` | 18 | what the message names, one of these: bash older than 5; a missing helper program; a jq older than 1.7 (one that does not take `--raw-output0`); the settings file `scripts/ext-run.conf` missing or unreadable (or the runner's own directory, where it is looked for, not found), and for OpenCode an empty `OC_SKILL_DENY_KEY` or an `OC_TESTED_VERSION` in it that is not a version, or a `HOME` that is not an absolute path; a test setting of the runner (`EXT_RUN_GRACE`, `EXT_RUN_KILL_WAIT`, `EXT_RUN_PREFLIGHT_LIMIT`, `EXT_RUN_POLL`, `EXT_RUN_START_WAIT`) set in the environment to a value it refuses, or an `awk` that cannot convert one; the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike); agy's settings file that cannot be read or is not one JSON object (an agy run, refused before it writes anything); the OpenCode agent files, when the config to inject cannot be built from them; git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` answered (status 0) with what is not a list of variable names or without `GIT_DIR`; git that failed in the before snapshot where a `.git` lies above the working directory, and, for Codex and agy, which ask git only there, a `git rev-parse --local-env-vars` call that failed, whether or not a `.git` lies above the working directory (git's reason is in the message, and the CLI was not started; for OpenCode, which asks git first for the project boundary, such a call that failed is a `usage_error`); or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
+| `prerequisite_failed` | 18 | what the message names, one of these: bash older than 5; a missing helper program; a jq older than 1.7 (one that does not take `--raw-output0`); a `ps` that does not list the processes (its `ps -A -o pid=,pgid=,sid=,stat=` fails or does not show the runner's own process, checked once before anything starts, in a run and a continue alike, because every stop of a started command reads that table); the settings file `scripts/ext-run.conf` missing or unreadable (or the runner's own directory, where it is looked for, not found), and for OpenCode an empty `OC_SKILL_DENY_KEY` or an `OC_TESTED_VERSION` in it that is not a version, or a `HOME` that is not an absolute path; a test setting of the runner (`EXT_RUN_GRACE`, `EXT_RUN_KILL_WAIT`, `EXT_RUN_PREFLIGHT_LIMIT`, `EXT_RUN_POLL`, `EXT_RUN_START_WAIT`) set in the environment to a value it refuses, or an `awk` that cannot convert one; the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike); agy's settings file that cannot be read or is not one JSON object (an agy run, refused before it writes anything); the OpenCode agent files, when the config to inject cannot be built from them; git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` answered (status 0) with what is not a list of variable names or without `GIT_DIR`; git that failed in the before snapshot where a `.git` lies above the working directory, and, for Codex and agy, which ask git only there, a `git rev-parse --local-env-vars` call that failed, whether or not a `.git` lies above the working directory (git's reason is in the message, and the CLI was not started; for OpenCode, which asks git first for the project boundary, such a call that failed is a `usage_error`); or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
 | `unsupported_version` | 19 | the OpenCode version found and the tested one; when `opencode --version` failed, did not answer within the preflight limit or printed what is not a version, the message says so instead |
 | `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
 | `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below |
@@ -796,9 +797,12 @@ The runner and every command here are bash. The runner needs bash 5 or
 later (its clock is `EPOCHREALTIME`), `jq` 1.7 or later (it reads lists
 ended by NUL bytes with jq's `--raw-output0`, which jq 1.6, still shipped
 by Ubuntu 22.04 and Debian 12, lacks), and `timeout` (with `-k`),
-`setsid`, `realpath`, `ps`, `sha256sum` and `awk` on PATH; when bash is
-older, jq does not take `--raw-output0`, or a program is missing, it ends
-`prerequisite_failed` before anything starts and names what is missing. `timeout` and `realpath` may be GNU's or the Rust coreutils
+`setsid`, `realpath`, `ps`, `sha256sum` and `awk` on PATH, with a `ps`
+that lists the processes with their group and session (procps's does);
+when bash is older, jq does not take `--raw-output0`,
+`ps -A -o pid=,pgid=,sid=,stat=` does not show the runner's own process,
+or a program is missing, it ends `prerequisite_failed` before anything
+starts and names what is missing. `timeout` and `realpath` may be GNU's or the Rust coreutils
 (uutils). git is asked for OpenCode's project boundary and the before
 snapshot; a git that cannot be run, that does not answer within the
 preflight limit of one minute, or whose `git rev-parse --local-env-vars`
