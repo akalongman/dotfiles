@@ -312,9 +312,11 @@ the owner, a directory holding something writable by the owner, or a
 missing target whose nearest existing directory above it is writable by
 the owner, because the write tool can create the missing target through
 the link. A link to a file the owner cannot write, such as a
-virtualenv's link to the system python, is not such a link. This prints
-each such link under `<boundary>`, the project boundary of step 6, as
-`<link path> -> <target>`:
+virtualenv's link to the system python, is not such a link. A
+virtualenv's link to an interpreter that uv manages, under
+`~/.local/share/uv/python`, which the owner can write, is such a link.
+This prints each such link under `<boundary>`, the project boundary of
+step 6, as `<link path> -> <target>`:
 
 ```
 top=<boundary>
@@ -348,9 +350,15 @@ run writes through such a link does not show in the snapshot comparison
 (see "Report"). Worked example: in the acceptance rerun of 2026-11-18
 the project `edit-proj` held `link`, a link to the scratch directory
 `edit-outside`, which the owner can write, and the command prints
-`.../edit-proj/link -> .../edit-outside`. A link to `/usr/bin/python3`,
-as a virtualenv's `bin/python` is, resolves on this machine to
-`/usr/bin/python3.14`, which the owner cannot write, and prints nothing.
+`.../edit-proj/link -> .../edit-outside`. A virtualenv's `bin/python`
+that links to the system python, `/usr/bin/python3`, resolves on this
+machine to `/usr/bin/python3.14`, which the owner cannot write, and
+prints nothing. One that uv made with an interpreter it manages links to
+`~/.local/share/uv/python/...`, which the owner can write, so the
+command prints it and the other interpreter links beside it (`python3`,
+`python3.14`), and the session asks before every edit-level OpenCode run
+in that project: on 2026-11-18, 10 of the 16 virtualenvs under
+`~/projects` were of that kind.
 
 ### 4. Write `<run>/prompt.md`
 
