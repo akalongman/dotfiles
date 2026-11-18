@@ -1424,6 +1424,7 @@ protected_dirs() { # prints the protected directories, each made canonical and e
     if [ -n "${XDG_DATA_HOME:-}" ]; then list+=("$XDG_DATA_HOME/opencode"); fi
     if [ -n "${GH_CONFIG_DIR:-}" ]; then list+=("$GH_CONFIG_DIR"); fi
     if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then list+=("$CLAUDE_CONFIG_DIR"); fi
+    if [ -n "${GNUPGHOME:-}" ]; then list+=("$GNUPGHOME"); fi
     for p in "${list[@]}"; do
         # The part of the path that exists is resolved, so a symbolic link
         # above a directory that does not exist yet cannot hide it.

@@ -90,7 +90,7 @@ teardown() { # the suite's one EXIT trap; runs whatever failed
 clean_env() { # drops what could point git or the runner at the owner's setup
     local v vars
     unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_TEMPLATE_DIR \
-        GIT_CEILING_DIRECTORIES XDG_CONFIG_HOME XDG_DATA_HOME CODEX_HOME GH_CONFIG_DIR CLAUDE_CONFIG_DIR OPENCODE_CONFIG_CONTENT \
+        GIT_CEILING_DIRECTORIES XDG_CONFIG_HOME XDG_DATA_HOME CODEX_HOME GH_CONFIG_DIR CLAUDE_CONFIG_DIR GNUPGHOME OPENCODE_CONFIG_CONTENT \
         OPENCODE_DISABLE_CLAUDE_CODE_PROMPT OPENCODE_DISABLE_CLAUDE_CODE_SKILLS \
         EXT_RUN_GRACE EXT_RUN_KILL_WAIT EXT_RUN_PREFLIGHT_LIMIT EXT_RUN_POLL EXT_RUN_START_WAIT \
         EXT_PATH EXT_CWD EXT_RUNNER PRE_LIMIT
@@ -3636,6 +3636,18 @@ new_case refuse-claude-config-default
 mkdir -p "$HOME/.claude/skills"
 EXT_VARS=("CLAUDE_CONFIG_DIR=$CASE/cc")
 refused protected "$HOME/.claude/skills"
+
+# GNUPGHOME moves the owner's GnuPG key store; the default ~/.gnupg stays
+# protected beside it.
+new_case refuse-gnupghome
+mkdir -p "$CASE/gpg/private-keys-v1.d"
+EXT_VARS=("GNUPGHOME=$CASE/gpg")
+refused protected "$CASE/gpg/private-keys-v1.d"
+
+new_case refuse-gnupghome-default
+mkdir -p "$HOME/.gnupg/sub"
+EXT_VARS=("GNUPGHOME=$CASE/gpg")
+refused protected "$HOME/.gnupg/sub"
 
 new_case refuse-edit-level
 mkdir "$CASE/out"
