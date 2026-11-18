@@ -244,8 +244,8 @@
     },
     "akalongman": {
       "source": {
-        "source": "directory",
-        "path": "/home/longman/projects/akalongman/claude-laterbox"
+        "source": "github",
+        "repo": "akalongman/claude-plugins"
       }
     }
   },
