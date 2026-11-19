@@ -43,9 +43,9 @@ lists no provider `kimi-code-plan-global`, and so not the alias's model
 `KIMI_API_KEY` was unset or empty in the environment of the session
 that made the check on 2026-11-20, and so was
 `ALIBABA_TOKEN_PLAN_API_KEY`. That test exercises the environment only,
-not a key entered with `opencode auth login`, which is how the Alibaba
-Token Plan key that `deepseek` and `qwen` use was entered on
-2026-10-02, so an empty variable alone does not show a missing key.
+not a key entered with `opencode auth login`, which is how a key for
+the Alibaba Token Plan, the plan of `deepseek` and `qwen`, was entered
+on 2026-10-02, so an empty variable alone does not show a missing key.
 Whether the provider was missing on 2026-11-16 too was not established.
 `kimi` was not run again, because OpenCode does not list its model. Run
 it when the user asks, and report a failure as the `cli_failure` row of
