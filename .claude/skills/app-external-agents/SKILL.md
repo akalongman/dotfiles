@@ -31,11 +31,23 @@ works when the user names it in full (`provider/model`).
 | `kimi` | `kimi-code-plan-global/k3` | Kimi membership, the lowest tier whose benefits list the 1M-context `k3` |
 | `qwen` | `alibaba-token-plan/qwen3.8-max` | Alibaba Model Studio Token Plan |
 
-No `kimi` run has answered through the runner yet: both runs of the
+No `kimi` run has answered through the runner yet. Both runs of the
 acceptance run of 2026-11-16 ended `cli_failure` on OpenCode's
-`UnknownError: Unexpected server error` before any model step, and the
-cause was not established. Run it when the user asks, and report a
-failure as the `cli_failure` row of "Outcomes" says.
+`UnknownError: Unexpected server error` before any model step. A
+read-only check on 2026-11-20 (OpenCode 1.19.0, the runner of
+public-dotfiles commit 14f78bd) found that `opencode models --pure`
+lists no provider `kimi-code-plan-global`, and so not the alias's model
+`kimi-code-plan-global/k3`; it lists `alibaba-token-plan`,
+`github-copilot`, `google`, `opencode` and `vllm`. OpenCode's log holds
+2026-11-16 but no line of either failed run, so it names no cause.
+`KIMI_API_KEY` is unset or empty in the session's environment, which a
+run inherits, and so is `ALIBABA_TOKEN_PLAN_API_KEY`, although
+`deepseek` and `qwen`, which use the Alibaba plan, answered on
+2026-11-18, so an empty variable alone does not show a missing key.
+Whether the provider was missing on 2026-11-16 too was not established.
+`kimi` was not run again, because OpenCode does not list its model. Run
+it when the user asks, and report a failure as the `cli_failure` row of
+"Outcomes" says.
 
 ## Levels
 
