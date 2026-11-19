@@ -40,10 +40,12 @@ lists no provider `kimi-code-plan-global`, and so not the alias's model
 `kimi-code-plan-global/k3`; it lists `alibaba-token-plan`,
 `github-copilot`, `google`, `opencode` and `vllm`. OpenCode's log holds
 2026-11-16 but no line of either failed run, so it names no cause.
-`KIMI_API_KEY` is unset or empty in the session's environment, which a
-run inherits, and so is `ALIBABA_TOKEN_PLAN_API_KEY`, although
-`deepseek` and `qwen`, which use the Alibaba plan, answered on
-2026-11-18, so an empty variable alone does not show a missing key.
+`KIMI_API_KEY` was unset or empty in the environment of the session
+that made the check on 2026-11-20, and so was
+`ALIBABA_TOKEN_PLAN_API_KEY`. That test exercises the environment only,
+not a key entered with `opencode auth login`, which is how the Alibaba
+Token Plan key that `deepseek` and `qwen` use was entered on
+2026-10-02, so an empty variable alone does not show a missing key.
 Whether the provider was missing on 2026-11-16 too was not established.
 `kimi` was not run again, because OpenCode does not list its model. Run
 it when the user asks, and report a failure as the `cli_failure` row of
