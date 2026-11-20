@@ -257,7 +257,16 @@ links it prints lead to, while a path through them goes on through the
 links met there, for a copy that follows links as for a file OpenCode's
 read tool opens: with `proj/a` a link to `other` and `other/b` a link
 to a protected directory, it prints `proj/a` only, and a copy of `proj`
-holds `a/b` with the protected directory's files. So run it again on
+holds `a/b` with the protected directory's files. On 2026-11-20
+(OpenCode 1.19.0, `qwen`, read level, the runner of public-dotfiles
+commit e453297, whose runner code is that of 14f78bd) OpenCode's read
+tool was seen to go on through two links in a row: in a bundle whose
+link `chain` leads to a scratch directory outside the project and every
+granted directory, in which a link `next` leads to a second such
+directory, it completed a read of `chain/next/deep.txt` with no
+permission asked, and the answer gave that file's line; the listing
+command of step 3 printed `chain` on the bundle, and `next` only when
+run again on the directory `chain` leads to. So run it again on
 each target it prints that is a directory outside `<dir>`, then on each
 such directory those runs print, and so on, each directory once, until
 no new one appears; a target that already calls for a bundle (below)
