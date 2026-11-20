@@ -1,7 +1,7 @@
 ---
 name: app-external-agents
-description: 'Use when the user asks to run Codex, Antigravity (agy, Gemini) or OpenCode with DeepSeek, Kimi or Qwen from this session: a second opinion or review from another model, a question put to it, or a task handed to it. Also before any Bash command that runs the codex, agy or opencode CLI. Triggers: "ask codex", "ask agy", "ask gemini", "ask deepseek", "ask kimi", "ask qwen", "ask the chinese models", "ask everyone", "second opinion", "what does codex think", "let codex do it", "run this through agy", "run agy", "run codex", "run opencode". Only on request, never on your own initiative.'
-argument-hint: '[codex|agy|deepseek|kimi|qwen|all] <what to ask or do>'
+description: 'Use when the user asks to run Codex, Antigravity (agy, Gemini) or OpenCode with DeepSeek or Qwen from this session: a second opinion or review from another model, a question put to it, or a task handed to it. Also before any Bash command that runs the codex, agy or opencode CLI. Triggers: "ask codex", "ask agy", "ask gemini", "ask deepseek", "ask qwen", "ask the chinese models", "ask everyone", "second opinion", "what does codex think", "let codex do it", "run this through agy", "run agy", "run codex", "run opencode". Only on request, never on your own initiative.'
+argument-hint: '[codex|agy|deepseek|qwen|all] <what to ask or do>'
 user-invocable: true
 ---
 
@@ -22,34 +22,19 @@ itself.
 
 ## Aliases
 
-OpenCode carries three fixed model aliases. Any other OpenCode model id
+OpenCode carries two fixed model aliases. Any other OpenCode model id
 works when the user names it in full (`provider/model`).
 
 | Alias | `--model` | Plan behind it |
 |---|---|---|
 | `deepseek` | `alibaba-token-plan/deepseek-v4-pro-0813` | Alibaba Model Studio Token Plan |
-| `kimi` | `kimi-code-plan-global/k3` | Kimi membership, the lowest tier whose benefits list the 1M-context `k3` |
 | `qwen` | `alibaba-token-plan/qwen3.8-max` | Alibaba Model Studio Token Plan |
 
-No `kimi` run has answered through the runner yet. Both runs of the
-acceptance run of 2026-11-16 ended `cli_failure` on OpenCode's
-`UnknownError: Unexpected server error` before any model step. A
-read-only check on 2026-11-20 (OpenCode 1.19.0, the runner of
-public-dotfiles commit 14f78bd) found that `opencode models --pure`
-lists no provider `kimi-code-plan-global`, and so not the alias's model
-`kimi-code-plan-global/k3`; it lists `alibaba-token-plan`,
-`github-copilot`, `google`, `opencode` and `vllm`. OpenCode's log holds
-2026-11-16 but no line of either failed run, so it names no cause.
-`KIMI_API_KEY` was unset or empty in the environment of the session
-that made the check on 2026-11-20, and so was
-`ALIBABA_TOKEN_PLAN_API_KEY`. That test exercises the environment only,
-not a key entered with `opencode auth login`, which is how a key for
-the Alibaba Token Plan, the plan of `deepseek` and `qwen`, was entered
-on 2026-10-02, so an empty variable alone does not show a missing key.
-Whether the provider was missing on 2026-11-16 too was not established.
-`kimi` was not run again, because OpenCode does not list its model. Run
-it when the user asks, and report a failure as the `cli_failure` row of
-"Outcomes" says.
+`kimi` is not a name the runner accepts: the alias was removed on
+2026-11-20, because OpenCode on this machine lists no provider for its
+model. When the user asks for Kimi, say so; a full OpenCode model id
+that the user names can be run like any other, with no promise that it
+answers.
 
 ## Levels
 
@@ -146,7 +131,7 @@ Hard rules:
 
 ## What each CLI is given
 
-The five reviewers do not start equal. "Loaded" below means that the CLI
+The four reviewers do not start equal. "Loaded" below means that the CLI
 puts the item in front of the model without the prompt asking for it.
 
 | | Codex | agy | OpenCode |
@@ -194,11 +179,10 @@ syntax (a number greater than zero, then `s`, `m`, `h` or `d` if wanted),
 
 ### 1. Choose the CLIs
 
-The ones the user named: `codex`, `agy`, an OpenCode alias (`deepseek`,
-`kimi`, `qwen`) or a full OpenCode model id. "All" or "everyone" means
-all five. When the user names none, ask which to run, as a numbered list
-(1 codex, 2 agy, 3 deepseek, 4 kimi, 5 qwen, 6 all), and wait for the
-answer.
+The ones the user named: `codex`, `agy`, an OpenCode alias (`deepseek`
+or `qwen`) or a full OpenCode model id. "All" or "everyone" means all
+four. When the user names none, ask which to run, as a numbered list
+(1 codex, 2 agy, 3 deepseek, 4 qwen, 5 all), and wait for the answer.
 
 ### 2. Create the run directory
 
@@ -224,7 +208,7 @@ example, that holds copies of everything the task needs: the material
 under review, the files it is checked against, and the evidence. Make it
 a git work tree of its own (`git init`, nothing committed) and start the
 runs from it, so that the bundle is the project boundary wherever the
-run directory lies. One bundle serves all five reviewers, which also puts
+run directory lies. One bundle serves all four reviewers, which also puts
 them on the same files.
 
 Use one when the material lives in the dotfiles work tree (its top is the
@@ -813,7 +797,7 @@ otherwise left out.
 |---|---|---|---|
 | model | `reported.model`; else `requested.model` followed by "(requested, not reported)" | `reported.model`, which agy reports only when `--model` was passed; else `requested.model` followed by "(requested, not reported)"; without `--model`, `configured_model` followed by "(configured default, not reported)" | `oc_model` followed by "(requested, not reported)" |
 | effort | `reported.effort`; else `requested.effort` followed by "(requested, not reported)" | none: the model id carries it | `requested.effort` as ", variant <value>" after the version, only when it was named |
-| tokens | `tokens.reported`, one value per attempt as Codex printed it, never added up, because whether Codex counts across a resume is not established | `tokens`: `total`, `input`, `output`, `thinking` and `turns`, from the last result event (agy reports a conversation's running total) | `tokens`: `total`, `input`, `output`, `reasoning`, `cached`, `cost` and `steps`, summed over the attempts; the three aliases always report cost 0, written `$0 (plan)` |
+| tokens | `tokens.reported`, one value per attempt as Codex printed it, never added up, because whether Codex counts across a resume is not established | `tokens`: `total`, `input`, `output`, `thinking` and `turns`, from the last result event (agy reports a conversation's running total) | `tokens`: `total`, `input`, `output`, `reasoning`, `cached`, `cost` and `steps`, summed over the attempts; the two aliases always report cost 0, written `$0 (plan)` |
 | wall | `attempts[].wall`, one value per attempt with its phase when there is more than one | the same | the same |
 | handle | `handle` | the same | the same |
 | version | none | none | `versions.preflight`, followed by "untested" when `version_untested` is true |
@@ -922,11 +906,9 @@ that file. What the sandbox needs:
 
 OpenCode needs no sandbox; the runner checks its version instead and
 refuses a major version other than the tested one
-(`unsupported_version`). The three aliases need two subscriptions, each
-entered once with `opencode auth login`: the Alibaba Model Studio Token
-Plan (provider "Alibaba Token Plan", key `ALIBABA_TOKEN_PLAN_API_KEY`)
-for `deepseek` and `qwen`, and a Kimi membership (provider "Kimi For
-Coding (kimi.ai)", key `KIMI_API_KEY`) on the lowest tier whose benefits
-list the 1M-context `k3` for `kimi`. A run without its key ends
+(`unsupported_version`). The two aliases, `deepseek` and `qwen`, need
+one subscription, entered once with `opencode auth login`: the Alibaba
+Model Studio Token Plan (provider "Alibaba Token Plan", key
+`ALIBABA_TOKEN_PLAN_API_KEY`). A run without its key ends
 `cli_failure` with OpenCode's own error; report it and point the user to
 this section. Never enter, read or print a key.
