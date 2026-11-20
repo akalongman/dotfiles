@@ -272,7 +272,6 @@ outcome_code() { # outcome: sets CODE to its exit status
 alias_model() { # alias: prints the OpenCode model id it stands for
     case "$1" in
         deepseek) printf '%s\n' alibaba-token-plan/deepseek-v4-pro-0813 ;;
-        kimi) printf '%s\n' kimi-code-plan-global/k3 ;;
         qwen) printf '%s\n' alibaba-token-plan/qwen3.8-max ;;
         *) return 1 ;;
     esac
@@ -323,7 +322,7 @@ derive_name() { # name: sets KIND, PREFIX and OC_MODEL when it is a valid --cli 
         codex | agy)
             KIND="$1" PREFIX="$1" OC_MODEL=''
             ;;
-        deepseek | kimi | qwen)
+        deepseek | qwen)
             KIND=opencode PREFIX="$1"
             OC_MODEL="$(alias_model "$1")"
             ;;

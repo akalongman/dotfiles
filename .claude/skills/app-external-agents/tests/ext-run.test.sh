@@ -388,7 +388,7 @@ ext_prefix() { # args...: PREFIX from the --cli value, derived as the runner der
     done
     PREFIX=""
     case "$cli" in
-        codex | agy | deepseek | kimi | qwen) PREFIX="$cli" ;;
+        codex | agy | deepseek | qwen) PREFIX="$cli" ;;
         *)
             # A full model id, as the runner's valid_model_id accepts it.
             if [[ $cli =~ ^[A-Za-z0-9][A-Za-z0-9._:@+-]*(/[A-Za-z0-9._:@+-]+)+$ ]]; then PREFIX="${cli//\//-}"; fi
@@ -944,6 +944,15 @@ new_case unknown-cli
 ext run --cli nope --run-dir "$RUN"
 assert_eq "$rc" 64 "unknown-cli: rc"
 assert_eq "$OUT" "ext-run: usage_error (unknown cli: nope); status: none" "unknown-cli: summary"
+
+# kimi is no alias and holds no /, so it is refused as any unknown name is
+new_case kimi-not-a-name
+ext run --cli kimi --run-dir "$RUN"
+assert_eq "$rc" 64 "kimi-not-a-name: rc"
+assert_eq "$OUT" "ext-run: usage_error (unknown cli: kimi); status: none" "kimi-not-a-name: summary"
+assert_nofile "$RUN/kimi.status" "kimi-not-a-name: no status"
+assert_nofile "$RUN/kimi.lock" "kimi-not-a-name: no claim"
+assert_eq "$(ls -A "$CALLS")" "" "kimi-not-a-name: no CLI started"
 
 new_case default-action
 ext --cli codex --run-dir "$RUN"
@@ -1981,6 +1990,19 @@ assert_file "$RUN/a-b.out" "oc-full-id: the answer file"
 assert_contains "$(argv a-b 1)" '"--model","a/b"' "oc-full-id: the model id as given"
 assert_eq "$(st .oc_model)" a/b "oc-full-id: oc_model"
 assert_eq "$(st .name)" a/b "oc-full-id: name"
+
+# the model id that a removed alias stood for is still taken as a full model id: the runner does not judge model ids
+new_case oc-full-id-former-alias
+play kimi-code-plan-global-k3 1 --stdout "$(t_oc_only S)"
+ext run --cli kimi-code-plan-global/k3 --run-dir "$RUN"
+assert_eq "$rc" 0 "oc-full-id-former-alias: rc"
+assert_begins "$OUT" "kimi-code-plan-global-k3: answered" "oc-full-id-former-alias: the summary line names the prefix"
+assert_eq "$(st .kind)" opencode "oc-full-id-former-alias: kind"
+assert_eq "$(st .prefix)" kimi-code-plan-global-k3 "oc-full-id-former-alias: prefix"
+assert_eq "$(st .name)" kimi-code-plan-global/k3 "oc-full-id-former-alias: name"
+assert_eq "$(st .oc_model)" kimi-code-plan-global/k3 "oc-full-id-former-alias: oc_model"
+assert_contains "$(argv kimi-code-plan-global-k3 1)" '"--model","kimi-code-plan-global/k3"' "oc-full-id-former-alias: the model id as given"
+assert_eq "$(cat "$RUN/kimi-code-plan-global-k3.out" 2>/dev/null)" ONLY "oc-full-id-former-alias: the answer"
 
 # ---------------------------------------------------------------------------
 # agy traces: the result event, denied actions, damaged lines, tokens.
@@ -5486,12 +5508,15 @@ assert_eq "$(printf '%s\n' "$r1" "$rc" | LC_ALL=C sort | tr '\n' ' ')" "0 64 " "
 assert_eq "$(ncalls codex)" 2 "two-continues: the run's call and one continue's"
 assert_eq "$(no_locks)" none "two-continues: no lock"
 
+# Five prefixes share one run directory at once: two kinds without a config
+# file, and three OpenCode prefixes with one each, two aliases and a full model id.
 new_case five-at-once
-five=(codex agy deepseek kimi qwen)
+clis=(codex agy deepseek qwen a/b)
+five=(codex agy deepseek qwen a-b)
 play codex 1 --hold --stdout codex --stderr "$(codex_err U1)"
 play agy 1 --hold --stdout "$(t_agy_answer C agy)"
-for a in deepseek kimi qwen; do play "$a" 1 --hold --stdout "$(t_oc_only S "$a")"; done
-for a in "${five[@]}"; do ext_bg run --cli "$a" --run-dir "$RUN"; done
+for a in deepseek qwen a-b; do play "$a" 1 --hold --stdout "$(t_oc_only S "$a")"; done
+for c in "${clis[@]}"; do ext_bg run --cli "$c" --run-dir "$RUN"; done
 for a in "${five[@]}"; do wait_for "$CALLS/$a.1/started" 300; done
 for a in "${five[@]}"; do release "$a" 1; done
 for i in 1 2 3 4 5; do
@@ -5503,7 +5528,7 @@ for a in "${five[@]}"; do
     assert_file "$RUN/$a.status" "five-at-once: $a.status"
     for x in stdout stderr time exit; do assert_file "$RUN/$a.first1.$x" "five-at-once: $a.first1.$x"; done
 done
-for a in deepseek kimi qwen; do assert_file "$RUN/$a.first1.config.json" "five-at-once: $a.first1.config.json"; done
+for a in deepseek qwen a-b; do assert_file "$RUN/$a.first1.config.json" "five-at-once: $a.first1.config.json"; done
 assert_eq "$(no_locks)" none "five-at-once: no lock is left"
 
 # ---------------------------------------------------------------------------

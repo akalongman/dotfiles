@@ -103,7 +103,6 @@ case "$me" in
         done
         case "$model" in
             alibaba-token-plan/deepseek-v4-pro-0813) key=deepseek ;;
-            kimi-code-plan-global/k3) key=kimi ;;
             alibaba-token-plan/qwen3.8-max) key=qwen ;;
             '') key=opencode ;;
             *) key="${model//\//-}" ;;
