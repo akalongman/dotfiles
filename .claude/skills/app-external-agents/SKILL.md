@@ -172,10 +172,12 @@ What stays unequal:
   "No capacity available for model gemini-4-argon-high" (code 503),
   after four error steps in the middle of the run. The runner ended
   it `cli_failure`, wrote no `agy.out`, and the answer stayed in the
-  trace (`agy.first1.stdout`). That run's trace named no slash command
-  and no skill, which is the evidence of one run. A run on the default
-  model that answers through the runner, and a resume with the flag,
-  were not seen.
+  trace (`agy.first1.stdout`); the runner now also keeps such a response
+  as the attempt's earlier text (`agy.first1.earlier.txt`), unpublished,
+  and its message carries agy's error. That run's trace named no slash
+  command and no skill, which is the evidence of one run. A run on the
+  default model that answers through the runner, and a resume with the
+  flag, were not seen.
 
 ## Steps
 
@@ -422,7 +424,11 @@ Write your complete answer as your final message, after your last tool call. Tex
   prompt (a diff goes into a bundle as a file).
 - `# What to return` ends with the closing instruction shown above, word
   for word: OpenCode's answer is the text of its final step, and earlier
-  text is kept apart.
+  text is kept apart. agy's answer is the response of its last result
+  when the attempt answers; the response of an agy attempt that ended
+  any other way (a result whose status is not `SUCCESS`, a denial, a
+  usage limit, an error exit, a reached limit) is kept apart as its
+  earlier text too, unpublished text of a failed attempt.
 - A shape the user asked for takes precedence over any template.
 - For a review (a plan, a spec, a design, a diff, code), read
   `prompts/review.md` and add its parts. No sentence of a review prompt
@@ -607,8 +613,12 @@ Files in the run directory, under the prefix `<p>`:
   trace), wall seconds and exit status. The phase is `first`, `resume`
   or `continue`, and `<n>` counts from 1 within a phase, so `qwen.first1`
   and `qwen.resume1`. No attempt file is overwritten.
-- `<p>.<phase><n>.earlier.txt` (OpenCode): the text that attempt wrote
-  in steps before its final one, absent when there is none.
+- `<p>.<phase><n>.earlier.txt`: for OpenCode, the text that attempt
+  wrote in steps before its final one; for agy, byte for byte, the
+  response of that attempt's last result when the attempt did not
+  answer, never published as the answer. Absent when there is none: for
+  agy, when the response is missing, not a string or blank, when the
+  attempt answered, or when its trace is damaged.
 - `<p>.<phase><n>.config.json` (OpenCode): the config injected into that
   attempt.
 - `codex.probe.err`: the standard error of the last Codex sandbox probe.
@@ -703,12 +713,12 @@ with `outcomes`:
 | `answered_after_resume` | 0 | the answer, that it came from the resume, the resume's reason (`resume_reason`: `limit` or `empty`) and both wall times |
 | `limit` | 10 | that the limit was reached without an answer (the message names which limit), the attempts' wall times, and any earlier text |
 | `empty` | 11 | that the CLI ended without an answer, also after the resume, and any earlier text |
-| `denied` | 12 | the denied actions from `denied`, and the last lines of the attempt's standard error verbatim, including where agy says an allow-rule goes; for a refused file read, the rule shape agy's message gives. The skill never adds the rule: the owner decides, and a bundle is the way that needs none |
-| `usage_limit` | 13 | the message, the reset time (`reset_at`) and the continue command. For Codex the limit is its `hit your usage limit` error and `reset_at` the time it states; for agy it is its quota error (`Individual quota reached` in the result's error, or `RESOURCE_EXHAUSTED (code 429)` on standard error) and `reset_at` the attempt's end plus the `Resets in` duration it states, as a local time. `continue` waits for the owner's word: the runner never waits for a reset, and the session continues only when the owner says so. Before continuing an edit-level run whose status says `fresh_start: true`, compare the working tree with the before snapshot |
-| `cli_failure` | 14 | the message, which carries the CLI's own error, and the last lines of the attempt's standard error verbatim. When that standard error cannot be read, the outcome still rests on the CLI's exit status, and the message says that the reason could not be read and names the file. After an OpenCode start-up failure nothing is started again by itself: a read-level run may be started again under a new prefix (the full model id in place of the alias, or a new run directory); before an edit-level run is started again, compare the working tree with the before snapshot. A missing or rejected key ends here too: point the user to "Prerequisite" |
+| `denied` | 12 | the denied actions from `denied`, and the last lines of the attempt's standard error verbatim, including where agy says an allow-rule goes; for a refused file read, the rule shape agy's message gives. The skill never adds the rule: the owner decides, and a bundle is the way that needs none. Any earlier text, as the text of a failed attempt |
+| `usage_limit` | 13 | the message, the reset time (`reset_at`) and the continue command. For Codex the limit is its `hit your usage limit` error and `reset_at` the time it states; for agy it is its quota error (`Individual quota reached` in the result's error, or `RESOURCE_EXHAUSTED (code 429)` on standard error) and `reset_at` the attempt's end plus the `Resets in` duration it states, as a local time. `continue` waits for the owner's word: the runner never waits for a reset, and the session continues only when the owner says so. Before continuing an edit-level run whose status says `fresh_start: true`, compare the working tree with the before snapshot. Any earlier text, as the text of a failed attempt |
+| `cli_failure` | 14 | the message, which carries the CLI's own error, and the last lines of the attempt's standard error verbatim. For agy's result whose status is not `SUCCESS` the message is `agy's result has status <status>: <agy's error>`, the error made one line of at most 300 characters (the status alone when the result holds no error text); agy can end so with exit status 0 and an empty standard error, and the message is then the only place outside the trace that holds its error. Any earlier text of the attempt (for agy the result's response, which can be a complete answer) is reported as the text of a failed attempt, never as an answer: unpublished, and possibly cut off. When that standard error cannot be read, the outcome still rests on the CLI's exit status, and the message says that the reason could not be read and names the file. After an OpenCode start-up failure nothing is started again by itself: a read-level run may be started again under a new prefix (the full model id in place of the alias, or a new run directory); before an edit-level run is started again, compare the working tree with the before snapshot. A missing or rejected key ends here too: point the user to "Prerequisite" |
 | `trace_unreadable` | 15 | the message and the attempt's standard output file, which holds the trace |
 | `no_handle` | 16 | that the run could not be resumed or continued, and the attempt files |
-| `handle_conflict` | 17 | the handles the message names; nothing further is resumed |
+| `handle_conflict` | 17 | the handles the message names; nothing further is resumed. Any earlier text, as the text of a failed attempt |
 | `prerequisite_failed` | 18 | what the message names, one of these: bash older than 5; a missing helper program; a jq older than 1.7 (one that does not take `--raw-output0`); a `ps` that does not list the processes (its `ps -A -o pid=,pgid=,sid=,stat=` fails or does not show the runner's own process, checked once before anything starts, in a run and a continue alike, because every stop of a started command reads that table); the settings file `scripts/ext-run.conf` missing or unreadable (or the runner's own directory, where it is looked for, not found), and for OpenCode an empty `OC_SKILL_DENY_KEY` or an `OC_TESTED_VERSION` in it that is not a version, or a `HOME` that is not an absolute path; a test setting of the runner (`EXT_RUN_GRACE`, `EXT_RUN_KILL_WAIT`, `EXT_RUN_PREFLIGHT_LIMIT`, `EXT_RUN_POLL`, `EXT_RUN_START_WAIT`) set in the environment to a value it refuses, or an `awk` that cannot convert one; the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike); agy's settings file that cannot be read or is not one JSON object (an agy run, refused before it writes anything); the OpenCode agent files, when the config to inject cannot be built from them; git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` answered (status 0) with what is not a list of variable names or without `GIT_DIR`; git that failed in the before snapshot where a `.git` lies above the working directory, and, for Codex and agy, which ask git only there, a `git rev-parse --local-env-vars` call that failed, whether or not a `.git` lies above the working directory (git's reason is in the message, and the CLI was not started; for OpenCode, which asks git first for the project boundary, such a call that failed is a `usage_error`); or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
 | `unsupported_version` | 19 | the OpenCode version found and the tested one; when `opencode --version` failed, did not answer within the preflight limit or printed what is not a version, the message says so instead, and when it failed and its standard error could not be read, the message says that too and names the file |
 | `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
@@ -824,7 +834,10 @@ After the first line, as they apply:
 - earlier text, per attempt (`attempts[].earlier_text`, a file in the
   run directory, and `earlier_text_bytes`): say that it exists and where.
   Read it before relaying the answer, because a model may have written
-  findings in a step before its final one;
+  findings in a step before its final one. agy's earlier text is the
+  response of an attempt that did not answer, and it can be a complete
+  answer, as in the run of 2026-11-21: name it as unpublished text of a
+  failed attempt, which may be cut off, never as the answer;
 - denied calls, verbatim from `denied` (the attempt, the tool, its input
   and the error), and that the edit level or an outside directory is
   needed if the task required them;
