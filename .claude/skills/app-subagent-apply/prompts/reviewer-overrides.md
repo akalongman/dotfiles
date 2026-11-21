@@ -9,6 +9,10 @@ template your dispatch was composed from, wherever they differ.
 - Write the full report to REVIEW_FILE (the dispatch names the path).
   Writing that one file is the only write you make; the read-only rule
   still binds the checkout.
+- Never open a secrets file (a real `*.tfvars`, a `.env`, anything under
+  `~/.secrets`) except to count the names it sets; a fact the review
+  needs from one goes to the controller as a cannot-verify item
+  (2026-11-19, a reviewer read a real tfvars to settle a doc's claim).
 - Number every Critical and Important finding in the order you list them:
   C1, C2 for Critical, I1, I2 for Important, M1, M2 for Minor, CV1, CV2
   for items you could not verify.
