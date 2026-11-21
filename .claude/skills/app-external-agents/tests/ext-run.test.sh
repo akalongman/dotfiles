@@ -3111,6 +3111,289 @@ assert_eq "$(st '.attempts[0].rule')" 7 "agy-error-not-quota: rule"
 assert_eq "$(st .reset_at)" null "agy-error-not-quota: reset_at"
 assert_eq "$(st .fresh_start)" false "agy-error-not-quota: fresh_start"
 
+# ---------------------------------------------------------------------------
+# An agy result that did not succeed, in the shape of the trace of
+# 2026-11-21 (agy on its default model, a/agy.first1.stdout): agy exited 0
+# with an empty standard error, and its last event was a result with status
+# ERROR, finished_reason error, the server's capacity error, and the model's
+# complete answer as its response. Rule 7's message carries the error, made
+# one line and bounded as rule 6's is, and the response of an agy attempt
+# that was not answered is kept as that attempt's earlier text, never
+# published. A damaged trace, a result without a response that is a string
+# that is not blank, and an answered attempt keep no earlier text.
+
+AGY_503='API error (attempt 4): UNAVAILABLE (code 503): No capacity available for model gemini-4-argon-high on the server'
+R_LINES=$'The first lines:\n\n1. `alpha.txt`: alpha one  \n2. "beta.txt": beta \\ two\n\nThey share a token.\n'
+R_NO_NL=$'one\ttab  \nnot ASCII: \xc3\xa9 \xe6\xbc\xa2\r\nno newline at the end'
+
+jstr() { jq -cn --arg t "$1" '$t'; } # text: the text as a JSON string
+
+agy_failed_result() { # cid status response error: a result in the shape of the trace of 2026-11-21; response and error are JSON values, or - to leave the key out
+    jq -cn --arg c "$1" --arg s "$2" --arg r "$3" --arg e "$4" '{conversation_id: $c, status: $s}
+        + (if $r == "-" then {} else {response: ($r | fromjson)} end)
+        + (if $e == "-" then {} else {error: ($e | fromjson)} end)
+        + {finished_reason: "error", num_turns: 1, duration_seconds: 460.226,
+           usage: {input_tokens: 37057, output_tokens: 5120, thinking_tokens: 4437, total_tokens: 42177}}
+        | {event: "result", result: .}'
+}
+
+t_agy_failed() { # cid response error [status]: two model turns and a shell step, four error steps, a last turn, then that result (status ERROR by default)
+    jq -cn --arg c "$1" '{event: "init", conversation_id: $c, init: {cwd: "/w", permission_mode: "request-review"}}'
+    agy_step "$1" 0 user_input
+    agy_step "$1" 1 agent_response
+    agy_cmd "$1" ls
+    agy_step "$1" 3 agent_response
+    agy_step "$1" 4 error_message
+    agy_step "$1" 5 error_message
+    agy_step "$1" 6 error_message
+    agy_step "$1" 7 error_message
+    agy_step "$1" 8 agent_response
+    agy_failed_result "$1" "${4:-ERROR}" "$2" "$3"
+}
+
+earlier_is() { # index attempt label text: <p>.<attempt>.earlier.txt holds exactly the text, and attempt <index>'s two fields name it and its size
+    local f="$RUN/$PREFIX.$2.earlier.txt" n
+    printf '%s' "$4" > "$CASE/earlier.want"
+    if cmp -s "$CASE/earlier.want" "$f"; then _pass; else _fail "$3: $PREFIX.$2.earlier.txt does not hold the response byte for byte"; fi
+    n="$(wc -c < "$CASE/earlier.want")"
+    assert_eq "$(stj ".attempts[$1] | [.earlier_text, .earlier_text_bytes]")" "[\"$PREFIX.$2.earlier.txt\",${n//[[:space:]]/}]" \
+        "$3: earlier_text and earlier_text_bytes of $2"
+}
+
+no_earlier() { # index attempt label: no earlier text for that attempt
+    assert_nofile "$RUN/$PREFIX.$2.earlier.txt" "$3: no $PREFIX.$2.earlier.txt"
+    assert_eq "$(stj ".attempts[$1] | [.earlier_text, .earlier_text_bytes]")" '[null,null]' "$3: earlier_text and its size null for $2"
+}
+
+# The shape of the trace of 2026-11-21, with a response of several lines
+# that ends with a newline (as that one did) and one that does not.
+for x in lines no-nl; do
+    name="agy-error-text-$x"
+    r="$R_LINES"
+    if [ "$x" = no-nl ]; then r="$R_NO_NL"; fi
+    new_case "$name"
+    play agy 1 --stdout "$(t_agy_failed C "$(jstr "$r")" "$(jstr "$AGY_503")")"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$rc" 14 "$name: rc"
+    assert_eq "$(stj '[.outcome, .phase, .attempts[0].rule, .attempts[0].verdict]')" '["cli_failure","first",7,"cli_failure"]' \
+        "$name: cli_failure by rule 7 in the first phase"
+    assert_eq "$(st .message)" "agy's result has status ERROR: $AGY_503" "$name: the message carries agy's error"
+    assert_eq "$OUT" "agy: cli_failure (agy's result has status ERROR: $AGY_503); status: $RUN/agy.status" "$name: summary"
+    assert_line "$ERR" "ext-run: agy's result has status ERROR: $AGY_503" "$name: the message on standard error"
+    earlier_is 0 first1 "$name" "$r"
+    assert_eq "$(st .answer)" null "$name: answer"
+    assert_nofile "$RUN/agy.out" "$name: no answer file"
+    assert_eq "$(ncalls agy)" 1 "$name: no resume"
+    assert_eq "$(st .resume_used)" false "$name: resume_used"
+done
+
+# The worked example of the trace of 2026-11-21: a repository with no
+# commit, so the snapshot's note follows the message.
+new_case agy-error-no-commit
+WORK="$CASE/unborn"
+mkdir "$WORK"
+git init -q --template="$ROOT/tpl" "$WORK"
+printf 'alpha\n' > "$WORK/alpha.txt"
+play agy 1 --stdout "$(t_agy_failed C "$(jstr "$R_LINES")" "$(jstr "$AGY_503")")"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 14 "agy-error-no-commit: rc"
+assert_eq "$(st .message)" "agy's result has status ERROR: $AGY_503; no commit yet: before.diff is empty" \
+    "agy-error-no-commit: the error, then the note"
+assert_eq "$OUT" \
+    "agy: cli_failure (agy's result has status ERROR: $AGY_503; no commit yet: before.diff is empty); status: $RUN/agy.status" \
+    "agy-error-no-commit: summary"
+earlier_is 0 first1 agy-error-no-commit "$R_LINES"
+
+# No error text, an empty one, a blank one and one that is not a string:
+# the message is the status alone, with no ": " after it.
+x=0
+for e in - '""' "$(jstr $' \t\n ')" '{"code":503}' 503; do
+    x=$((x + 1))
+    name="agy-error-no-text-$x"
+    new_case "$name"
+    play agy 1 --stdout "$(t_agy_failed C "$(jstr "$R_LINES")" "$e")"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$rc" 14 "$name ($e): rc"
+    assert_eq "$(st .message)" "agy's result has status ERROR" "$name ($e): the message names the status only"
+    assert_eq "$OUT" "agy: cli_failure (agy's result has status ERROR); status: $RUN/agy.status" "$name ($e): summary"
+    earlier_is 0 first1 "$name ($e)" "$R_LINES"
+done
+
+# No response, an empty or blank one, and one that is not a string: no
+# earlier text, and the error is still in the message.
+x=0
+for r in - '""' "$(jstr $' \n\t ')" null '["x"]' '{"text":"x"}' 42; do
+    x=$((x + 1))
+    name="agy-error-no-response-$x"
+    new_case "$name"
+    play agy 1 --stdout "$(t_agy_failed C "$r" "$(jstr "$AGY_503")")"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$rc" 14 "$name ($r): rc"
+    assert_eq "$(st '.attempts[0].rule')" 7 "$name ($r): rule"
+    assert_eq "$(st .message)" "agy's result has status ERROR: $AGY_503" "$name ($r): message"
+    no_earlier 0 first1 "$name ($r)"
+    assert_nofile "$RUN/agy.out" "$name ($r): no answer file"
+done
+
+# An error text with control characters, runs of white space and more than
+# 300 characters is one line in the message: its words joined by single
+# spaces, the first 300 characters of them, as one_line makes rule 6's
+# error and every other text a CLI supplies to a message.
+new_case agy-error-long-text
+long="$(printf 'abcdefghij%.0s' {1..40})"
+play agy 1 --stdout "$(t_agy_failed C "$(jstr "$R_LINES")" "$(jstr $'  E1\nE2\r\n\tE3\x01E4   E5 '"$long"$'\x7f end\n')")"
+ext run --cli agy --run-dir "$RUN"
+want="E1 E2 E3 E4 E5 $long end"
+want="${want:0:300}"
+assert_eq "$rc" 14 "agy-error-long-text: rc"
+assert_eq "$(st .message)" "agy's result has status ERROR: $want" "agy-error-long-text: the error made one line, 300 characters"
+assert_eq "$(st '.message | ltrimstr("agy'"'"'s result has status ERROR: ") | length')" 300 \
+    "agy-error-long-text: the error's part is 300 characters"
+assert_eq "$(st '.message | test("[[:cntrl:]]")')" false "agy-error-long-text: no control character in the message"
+assert_eq "$OUT" "agy: cli_failure (agy's result has status ERROR: $want); status: $RUN/agy.status" \
+    "agy-error-long-text: the summary is one line"
+earlier_is 0 first1 agy-error-long-text "$R_LINES"
+
+# An answered attempt keeps no earlier text: its response is the answer.
+new_case agy-answer-no-earlier
+play agy 1 --stdout "$(t_agy_answer C)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-answer-no-earlier: rc"
+assert_eq "$(cat "$RUN/agy.out" 2>/dev/null)" ANSWER "agy-answer-no-earlier: the answer published"
+assert_eq "$(st .answer)" "$RUN/agy.out" "agy-answer-no-earlier: answer"
+no_earlier 0 first1 agy-answer-no-earlier
+
+# Denied actions (rule 4), with a response before the denial, and with a
+# status ERROR and an error text too: the response is the earlier text, and
+# the message is rule 4's.
+x=0
+for s in SUCCESS ERROR; do
+    x=$((x + 1))
+    name="agy-denied-earlier-$x"
+    new_case "$name"
+    play agy 1 --stdout "$(t_agy_failed C "$(jstr 'a note before the denial')" "$(jstr "$AGY_503")" "$s" |
+        jq -c --argjson d "$DENIED_JSON" 'if .event == "result" then .result.denied_actions = $d else . end')"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$rc" 12 "$name ($s): rc"
+    assert_eq "$(stj '[.outcome, .attempts[0].rule]')" '["denied",4]' "$name ($s): denied by rule 4"
+    assert_eq "$(st .message)" "agy ended on denied actions: read_file" "$name ($s): message"
+    earlier_is 0 first1 "$name ($s)" 'a note before the denial'
+    assert_nofile "$RUN/agy.out" "$name ($s): no answer file"
+done
+
+# A non-zero exit with a result that succeeded (rule 8): the response is the
+# earlier text. With a damaged line in the trace there is none, and the same
+# with exit 0 (rule 9).
+new_case agy-exit-earlier
+play agy 1 --exit 1 --stderr 'error: the CLI broke' \
+    --stdout "$(t_agy_failed C "$(jstr 'a partial answer')" - SUCCESS)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 14 "agy-exit-earlier: rc"
+assert_eq "$(st '.attempts[0].rule')" 8 "agy-exit-earlier: rule 8"
+assert_eq "$(st .message)" "agy exited with status 1: error: the CLI broke" "agy-exit-earlier: message"
+earlier_is 0 first1 agy-exit-earlier 'a partial answer'
+assert_nofile "$RUN/agy.out" "agy-exit-earlier: no answer file"
+for x in 1 0; do
+    name="agy-damaged-no-earlier-$x"
+    new_case "$name"
+    play agy 1 --exit "$x" --stdout "$(t_agy_failed C "$(jstr "$R_LINES")" "$(jstr "$AGY_503")"; printf '{"event":"resu\n')"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$(st '.attempts[0].rule')" "$((x == 1 ? 8 : 9))" "$name: rule"
+    no_earlier 0 first1 "$name"
+done
+
+# The deadline (rule 3) after a result with a response: that response is the
+# first attempt's earlier text, and the resume's answer is published.
+new_case agy-deadline-earlier
+play agy 1 --stdout-early "$(t_agy_failed C "$(jstr "$R_LINES")" "$(jstr "$AGY_503")")" --sleep 5
+play agy 2 --stdout "$(t_agy_answer C LATE)"
+ext run --cli agy --run-dir "$RUN" --limit 1s
+assert_eq "$rc" 0 "agy-deadline-earlier: rc"
+assert_eq "$(stj '[.outcome, .attempts[0].rule, .attempts[0].verdict]')" '["answered_after_resume",3,"limit"]' \
+    "agy-deadline-earlier: the first attempt reached the deadline, the resume answered"
+earlier_is 0 first1 agy-deadline-earlier "$R_LINES"
+no_earlier 1 resume1 agy-deadline-earlier
+assert_eq "$(cat "$RUN/agy.out" 2>/dev/null)" LATE "agy-deadline-earlier: the resume's answer"
+
+# A resume that reports another conversation (rule 2): its response is its
+# own earlier text.
+new_case agy-conflict-earlier
+play agy 1 --stdout "$(t_agy_empty C)"
+play agy 2 --stdout "$(t_agy_failed D "$(jstr 'from another conversation')" "$(jstr "$AGY_503")")"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 17 "agy-conflict-earlier: rc"
+assert_eq "$(st '.attempts[1].rule')" 2 "agy-conflict-earlier: rule 2"
+no_earlier 0 first1 agy-conflict-earlier
+earlier_is 1 resume1 agy-conflict-earlier 'from another conversation'
+
+# A signal while agy holds a complete trace open (rule 1): the response is
+# kept as for any attempt that was not answered.
+new_case agy-cancelled-earlier
+play agy 1 --stdout-early "$(t_agy_failed C "$(jstr "$R_NO_NL")" "$(jstr "$AGY_503")")" --hold
+ext_bg run --cli agy --run-dir "$RUN"
+wait_for "$CALLS/agy.1/started"
+kill -TERM "$BG"
+ext_wait
+assert_eq "$rc" 20 "agy-cancelled-earlier: rc"
+assert_eq "$(st '.attempts[0].rule')" 1 "agy-cancelled-earlier: rule 1"
+earlier_is 0 first1 agy-cancelled-earlier "$R_NO_NL"
+
+# The quota after work (rule 5) with a response: the earlier text of the cut
+# attempt, which the continue leaves as it is while its own attempt, a
+# failure again, keeps its own.
+new_case agy-quota-earlier
+play agy 1 --exit 3 --stderr "$(agy_quota_err 2h5m)" --stdout "$(t_agy_quota_work C1 2h5m |
+    jq -c --arg r "$R_LINES" 'if .event == "result" then .result.response = $r else . end')"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 13 "agy-quota-earlier: rc"
+assert_eq "$(stj '[.outcome, .attempts[0].rule, .fresh_start]')" '["usage_limit",5,false]' "agy-quota-earlier: rule 5 after work"
+assert_eq "$(st .message)" "$(agy_quota_text 2h5m)" "agy-quota-earlier: rule 5's message"
+earlier_is 0 first1 agy-quota-earlier "$R_LINES"
+keep "$RUN/agy.first1.earlier.txt"
+play agy 2 --stdout "$(t_agy_failed C1 "$(jstr "$R_NO_NL")" "$(jstr "$AGY_503")")"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 14 "agy-quota-earlier continue: rc"
+assert_eq "$(stj '[.outcome, .phase, .attempts[1].rule]')" '["cli_failure","continue",7]' "agy-quota-earlier continue: rule 7"
+unchanged "$RUN/agy.first1.earlier.txt" "agy-quota-earlier continue"
+earlier_is 0 first1 agy-quota-earlier-continue "$R_LINES"
+earlier_is 1 continue1 agy-quota-earlier-continue "$R_NO_NL"
+
+# A continue refuses to start when its attempt's earlier text file is
+# already there, so the write never overwrites one; a run refuses a run
+# directory that holds an earlier text file of its prefix.
+new_case agy-continue-earlier-in-the-way
+play agy 1 --exit 3 --stdout "$(t_agy_quota_work C1 2h5m)" --stderr "$(agy_quota_err 2h5m)"
+ext run --cli agy --run-dir "$RUN"
+: > "$RUN/agy.continue1.earlier.txt"
+keep "$RUN/agy.status"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 64 "agy-continue-earlier-in-the-way: rc"
+assert_contains "$ERR" ": agy.continue1.earlier.txt" "agy-continue-earlier-in-the-way: the file named"
+unchanged "$RUN/agy.status" "agy-continue-earlier-in-the-way"
+assert_eq "$(ncalls agy)" 1 "agy-continue-earlier-in-the-way: no call after the run"
+new_case leftovers-agy-earlier
+: > "$RUN/agy.first1.earlier.txt"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 64 "leftovers-agy-earlier: rc"
+assert_contains "$ERR" "already exist in $RUN: agy.first1.earlier.txt" "leftovers-agy-earlier: the file named"
+assert_nofile "$RUN/agy.status" "leftovers-agy-earlier: no status"
+assert_eq "$(ncalls agy)" 0 "leftovers-agy-earlier: no call"
+
+# An earlier text file that cannot be written ends the run as a runner
+# failure, and nothing is published.
+new_case write-fails-agy-earlier
+play agy 1 --hold --stdout "$(t_agy_failed C "$(jstr "$R_LINES")" "$(jstr "$AGY_503")")"
+ext_bg run --cli agy --run-dir "$RUN"
+wait_for "$CALLS/agy.1/started"
+mkdir "$RUN/agy.first1.earlier.txt"
+release agy 1
+ext_wait
+assert_eq "$rc" 21 "write-fails-agy-earlier: rc"
+assert_eq "$(st .outcome)" runner_failure "write-fails-agy-earlier: outcome"
+assert_eq "$(st .message)" "cannot write $RUN/agy.first1.earlier.txt" "write-fails-agy-earlier: the file named"
+assert_lacks "$ERR" "Is a directory" "write-fails-agy-earlier: no unprefixed error line"
+assert_nofile "$RUN/agy.out" "write-fails-agy-earlier: no answer file"
+
 # The before snapshot's notes are recorded in notes and outlive a continue,
 # which repeats them after its own message: a continue cut off again, then
 # one that answers.

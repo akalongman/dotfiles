@@ -132,7 +132,7 @@ RESUME_REASON=''              # the recorded resume_reason, for a continue of th
 RESUME_USED=''                # the recorded resume_used, true or false
 CONT_N=0                      # the number of this invocation's continue attempt
 SIZE=0 SUM=''                 # what byte_size and file_sum found
-EARLIER='' EARLIER_BYTES=null # OpenCode: the last attempt's earlier-text file and its size
+EARLIER='' EARLIER_BYTES=null # the last attempt's earlier-text file and its size (OpenCode; agy when it was not answered)
 RULE='' VERDICT=''
 NOW=0 US=0 TAIL=() LAST='' ONE_LINE=''
 PROGRESS_TTY=0 PROGRESS_SHOWN=0 PROGRESS_T0=0 PROGRESS_LABEL='' PROGRESS_LIMIT=''
@@ -1158,6 +1158,7 @@ def agy_result: map(select(.event == "result")) | last;
 def agy_handles: [.[] | g(.conversation_id), g(.result.conversation_id), g(.step_update.conversation_id)
     | select(type == "string" and . != "")] | distinct | .[];
 def agy_answer: agy_result | g(.result.response) | if type == "string" then . elif . == null then "" else tojson end;
+def agy_earlier: agy_result | g(.result.response) | if type == "string" then . else "" end;
 def agy_denied: agy_result | g(.result.denied_actions) | (if type == "array" then . else [] end)
     | map({tool: (g(.action) | text1), input: tojson, error: ""});
 def agy_tokens: agy_result | if . == null then null else g(.result) as $x
@@ -1195,6 +1196,7 @@ def oc_tokens: [.[] | select(.type == "step_finish") | g(.part)]
 # Each of these takes the events file.
 agy_handles() { jq -r -s "$JQ_TRACE agy_handles" "$1"; }   # the distinct handles, one per line
 agy_answer() { jq -j -s "$JQ_TRACE agy_answer" "$1"; }     # the last result's response
+agy_earlier() { jq -j -s "$JQ_TRACE agy_earlier" "$1"; }   # the same when it is a string, nothing otherwise
 agy_tokens() { jq -c -s "$JQ_TRACE agy_tokens" "$1"; }     # the last result's numbers, null without one
 agy_denied() { jq -c -s "$JQ_TRACE agy_denied" "$1"; }     # the last result's denied actions as [{tool, input, error}]
 agy_reported() { jq -c -s "$JQ_TRACE agy_reported" "$1"; } # {model, effort} of the first event
@@ -1948,7 +1950,11 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
         return
     fi
     if [ "$KIND" = agy ] && [ "$T_DAMAGED" = false ] && [ "$T_RESULT" = true ] && [ "$T_STATUS" != SUCCESS ]; then
-        RULE=7 VERDICT=cli_failure A_REASON="agy's result has status ${T_STATUS:-(none)}"
+        # The result's error text follows the status, made one line of at
+        # most 300 characters, as rule 6's error and rule 8's last line are;
+        # one that is missing, not a string or blank adds nothing.
+        one_line "$T_RESULT_ERROR"
+        RULE=7 VERDICT=cli_failure A_REASON="agy's result has status ${T_STATUS:-(none)}${ONE_LINE:+: $ONE_LINE}"
         return
     fi
     # The exit status decides rule 8. Its reason is the last line of standard
@@ -1990,12 +1996,28 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
     fi
 }
 
-write_earlier() { # phase n: OpenCode's text from the attempt's earlier steps to <p>.<ph><n>.earlier.txt when there is any; sets EARLIER and EARLIER_BYTES
+write_earlier() { # phase n: the attempt's earlier text to <p>.<ph><n>.earlier.txt when there is any; sets EARLIER and EARLIER_BYTES
     local name="$PREFIX.$1$2.earlier.txt" t b
     EARLIER='' EARLIER_BYTES=null
-    t="$(oc_earlier "$T_EVENTS" && printf x)" || end_as runner_failure "cannot read the earlier text in $T_EVENTS"
-    t="${t%x}"
-    [ -n "$t" ] || return 0
+    case "$KIND" in
+        opencode)
+            # The text of the steps before the final one.
+            t="$(oc_earlier "$T_EVENTS" && printf x)" || end_as runner_failure "cannot read the earlier text in $T_EVENTS"
+            t="${t%x}"
+            [ -n "$t" ] || return 0
+            ;;
+        agy)
+            # The last result's response of an attempt that was not answered,
+            # kept as it is and never published: a string that is not blank,
+            # from a trace that is not damaged (rules 4, 6 and 7 do not read
+            # a damaged one either).
+            [ "$VERDICT" != answered ] && [ "$T_DAMAGED" = false ] && [ "$T_RESULT" = true ] || return 0
+            t="$(agy_earlier "$T_EVENTS" && printf x)" || end_as runner_failure "cannot read the earlier text in $T_EVENTS"
+            t="${t%x}"
+            [[ $t == *[![:space:]]* ]] || return 0
+            ;;
+        *) return 0 ;;
+    esac
     { printf '%s' "$t" > "$RUN_DIR/$name"; } 2>/dev/null || end_as runner_failure "cannot write $RUN_DIR/$name"
     b="$(wc -c < "$RUN_DIR/$name" 2>/dev/null)"
     b="${b//[[:space:]]/}"
@@ -2016,7 +2038,10 @@ record_attempt() { # phase n [fresh]: appends the classified attempt to the stat
     if [ "${#HANDLES[@]}" = 1 ]; then A_HANDLE_SEEN="${HANDLES[0]}"; fi
     tok="$(attempt_tokens "$base")" || end_as runner_failure "cannot read the tokens of attempt $1$2"
     case "$KIND" in
-        agy) den="$(agy_denied "$T_EVENTS")" || end_as runner_failure "cannot read the denied actions in $T_EVENTS" ;;
+        agy)
+            den="$(agy_denied "$T_EVENTS")" || end_as runner_failure "cannot read the denied actions in $T_EVENTS"
+            write_earlier "$1" "$2"
+            ;;
         opencode)
             den="$(oc_denied "$T_EVENTS")" || end_as runner_failure "cannot read the denied calls in $T_EVENTS"
             write_earlier "$1" "$2"
