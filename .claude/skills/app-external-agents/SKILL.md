@@ -163,9 +163,19 @@ What stays unequal:
   `skill_search` feature, which is on, was not checked.
 - agy's `--disable-slash-commands` rests on one short run on
   `gemini-3.8-flash-low`, because the default model was over its quota on
-  2026-11-15, and again in the acceptance run of 2026-11-16. A run on the
-  default model with the flag, and a resume with it, were not seen to
-  answer.
+  2026-11-15, and again in the acceptance run of 2026-11-16. On
+  2026-11-21 (agy 1.5.9, the runner of public-dotfiles commit edf8946)
+  one run on the default model with the flag, Gemini 4 Argon (High) as
+  `configured_model` names it, read the four files of its task and wrote
+  a complete answer into its trace, but agy ended it with exit status 0
+  and a result whose status is `ERROR` and whose error is the server's
+  "No capacity available for model gemini-4-argon-high" (code 503),
+  after four error steps in the middle of the run. The runner ended
+  it `cli_failure`, wrote no `agy.out`, and the answer stayed in the
+  trace (`agy.first1.stdout`). That run's trace named no slash command
+  and no skill, which is the evidence of one run. A run on the default
+  model that answers through the runner, and a resume with the flag,
+  were not seen.
 
 ## Steps
 
