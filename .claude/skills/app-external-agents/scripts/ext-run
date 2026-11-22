@@ -1051,14 +1051,16 @@ take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt a
     # failed query; git then writes into it.
     { : > "$txt"; } 2>/dev/null || end_as runner_failure "cannot write $txt"
     # Colour is off and the diff is not limited to the working directory,
-    # whatever the project's configuration says.
+    # whatever the project's configuration says: diff.relative is set off
+    # on the command line, a setting git 2.28 brought and an older git
+    # ignores, as it never limits a diff unasked.
     own_git -o "$txt" "$CWD" -c color.status=false status --short -uall ||
         end_as prerequisite_failed "git status failed with status $GIT_RC in $CWD${GIT_ERR:+ ($GIT_ERR)}, so no before snapshot was taken"
     { : > "$dif"; } 2>/dev/null || end_as runner_failure "cannot write $dif"
     own_git "$CWD" rev-parse --verify --quiet HEAD
     case "$GIT_RC" in
         0)
-            own_git -o "$dif" "$CWD" diff --no-ext-diff --no-textconv --no-color --no-relative HEAD ||
+            own_git -o "$dif" "$CWD" -c diff.relative=false diff --no-ext-diff --no-textconv --no-color HEAD ||
                 end_as prerequisite_failed "git diff failed with status $GIT_RC in $CWD${GIT_ERR:+ ($GIT_ERR)}, so before.diff is incomplete"
             ;;
         1) note "no commit yet: before.diff is empty" ;;
