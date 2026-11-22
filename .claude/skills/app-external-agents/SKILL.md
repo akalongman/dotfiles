@@ -188,10 +188,20 @@ What stays unequal:
   gemini-4-argon-high" (code 503), and whose response is empty, with no
   model step in its trace. The runner ended the run `cli_failure` in the
   resume, its message carrying that error, and wrote no `agy.out` and no
-  earlier text, since neither response held any. The traces of both runs
-  named no slash command and no skill, which is the evidence of two
-  runs. A run on the default model that answers through the runner was
-  not seen, and neither was a resume with the flag that answers.
+  earlier text, since neither response held any. Later on 2026-11-22
+  (agy 1.5.14, the runner of public-dotfiles commit ea4e434, whose runner
+  code is that of 61bee41) one run named its model with
+  `--model gemini-3.8-flash-low`, with the flag that `AGY_EXTRA_ARGS`
+  gives every attempt (the process's arguments were not read), and it
+  answered through the runner on its first attempt, after 12 s: agy's
+  result has status `SUCCESS`, the runner ended the run `answered`, its
+  `agy.out` holds the four first lines and equals the result's response
+  byte for byte, `reported.model` is `gemini-3.8-flash-low`, and no
+  earlier text was written. That is an answer on the model the run
+  named, not on the default model. The traces of these three runs named
+  no slash command and no skill, which is the evidence of three runs. A
+  run on the default model that answers through the runner was not seen,
+  and neither was a resume with the flag that answers.
 
 ## Steps
 
