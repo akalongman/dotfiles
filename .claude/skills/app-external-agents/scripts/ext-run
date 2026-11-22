@@ -566,7 +566,7 @@ stop_active() { # the finalizer's first step: the job, and the group and session
 }
 
 run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner starts a CLI command; sets the C_ variables
-    local limit="$1" out="$2" err="$3" in="$4" gidf="$LOCK/gid" what g t0 t1 end stuck=0 late=''
+    local limit="$1" out="$2" err="$3" in="$4" gidf="$LOCK/gid" what g t0 t1 end stuck=0 late='' ended=0 st
     shift 4
     what="${1##*/}${2:+ $2}"
     C_EXIT='' C_WALL='' C_WALL_US=0 C_END_US=0 C_PGID='' C_SIGNALLED=false C_STUCK=false C_STUCK_MSG=''
@@ -600,7 +600,10 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     ACTIVE_JOB=$!
     # The command records its group before it may become the CLI.
     until read_gid; do
-        job_running "$ACTIVE_JOB" || break
+        if ! job_running "$ACTIVE_JOB"; then
+            ended=1
+            break
+        fi
         now_us
         [ "$NOW" -lt "$end" ] || break
         sleep 0.05
@@ -608,11 +611,17 @@ run_cmd() { # limit stdout stderr stdin program argv...: the one way the runner 
     if ! read_gid; then
         if job_running "$ACTIVE_JOB"; then kill -KILL "$ACTIVE_JOB" 2>/dev/null; fi
         wait "$ACTIVE_JOB" 2>/dev/null
+        st=$?
         sleep "$EXT_RUN_POLL"
         # A group that appeared late is stopped with its session, and a
         # process that outlives the kill is named beside the failed start.
         if read_gid && ! stop_cmd "$GID" term; then late="; could not stop $STOP_WHAT: $STOP_WHY"; fi
         ACTIVE_JOB=''
+        # The start either ended on its own before it recorded a group, or
+        # recorded none while the runner waited and was killed.
+        if [ "$ended" = 1 ]; then
+            end_as runner_failure "could not start $what: the start ended with status $st before a process group was recorded$late"
+        fi
         end_as runner_failure "could not start $what: no process group was recorded within $EXT_RUN_START_WAIT s$late"
     fi
     g="$GID"
@@ -686,8 +695,11 @@ finalize() {
     # file names.
     if [ -n "$ACTIVE_JOB" ]; then stop_active; fi
     if [ -z "$OUTCOME" ]; then
+        # The trap's status is the last one bash saw: an exit's own after a
+        # fault, but after a signal bash dies of, the status of the command
+        # before it, while the exit status is 128 plus the signal's number.
         OUTCOME=runner_failure
-        MESSAGE="unexpected exit (status $code)"
+        MESSAGE="unexpected exit: a fault in the runner, or a signal it does not trap (last status $code)"
         say "$MESSAGE"
     fi
     # A process that outlived that stop makes the run a runner failure; the

@@ -1486,9 +1486,27 @@ EXT_PATH="$CASE/broken:$CASE/bin:$BIN_ROOT/utils"
 ext run --cli codex --run-dir "$RUN"
 assert_eq "$rc" 21 "start-fails: rc"
 assert_eq "$(st .outcome)" runner_failure "start-fails: outcome"
-assert_contains "$(st .message)" "could not start" "start-fails: message"
+assert_eq "$(st .message)" "could not start codex sandbox: the start ended with status 1 before a process group was recorded" \
+    "start-fails: message, the start's own end"
 assert_eq "$(ncalls codex)" 0 "start-fails: no call"
 assert_nofile "$RUN/codex.lock" "start-fails: no lock"
+
+# A start that is still running and has recorded no group when the wait for
+# one ends is killed, and the message names the wait.
+new_case start-times-out
+mk_tool "$CASE/stuck/setsid" <<'EOF'
+exec sleep 30
+EOF
+EXT_PATH="$CASE/stuck:$CASE/bin:$BIN_ROOT/utils"
+EXT_VARS=(EXT_RUN_START_WAIT=1)
+t0="$EPOCHREALTIME"
+ext run --cli codex --run-dir "$RUN"
+took_under "$t0" 10 "start-times-out: the run took less than 10 s"
+assert_eq "$rc" 21 "start-times-out: rc"
+assert_eq "$(st .message)" "could not start codex sandbox: no process group was recorded within 1 s" \
+    "start-times-out: message, the wait"
+assert_eq "$(ncalls codex)" 0 "start-times-out: no call"
+assert_nofile "$RUN/codex.lock" "start-times-out: no lock"
 
 new_case forced-fork
 mk_tool "$CASE/fork/setsid" <<'EOF'
@@ -1668,7 +1686,8 @@ kill -USR1 "$BG"
 ext_wait
 assert_eq "$rc" 138 "unexpected-exit: rc"
 assert_eq "$(st .outcome)" runner_failure "unexpected-exit: outcome"
-assert_contains "$(st .message)" "unexpected exit" "unexpected-exit: message"
+assert_contains "$(st .message)" "unexpected exit: a fault in the runner, or a signal it does not trap (last status " \
+    "unexpected-exit: message, its status named as the last one bash saw"
 assert_begins "$OUT" "codex: runner_failure" "unexpected-exit: summary"
 assert_eq "$(alive "$(callf codex 1 pid)" && echo yes || echo no)" no "unexpected-exit: the CLI is gone"
 assert_eq "$(alive "$(callf codex 1 child)" && echo yes || echo no)" no "unexpected-exit: its child is gone"
