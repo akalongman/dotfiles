@@ -1994,11 +1994,14 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
         return
     fi
     if [ "$KIND" = agy ] && [ "$T_DAMAGED" = false ] && [ "$T_RESULT" = true ] && [ "$T_STATUS" != SUCCESS ]; then
-        # The result's error text follows the status, made one line of at
-        # most 300 characters, as rule 6's error and rule 8's last line are;
-        # one that is missing, not a string or blank adds nothing.
+        # The status, and the result's error text after it, are each made
+        # one line of at most 300 characters, as rule 6's error and rule 8's
+        # last line are; an error text that is missing, not a string or blank
+        # adds nothing.
+        one_line "$T_STATUS"
+        A_REASON="agy's result has status ${ONE_LINE:-(none)}"
         one_line "$T_RESULT_ERROR"
-        RULE=7 VERDICT=cli_failure A_REASON="agy's result has status ${T_STATUS:-(none)}${ONE_LINE:+: $ONE_LINE}"
+        RULE=7 VERDICT=cli_failure A_REASON+="${ONE_LINE:+: $ONE_LINE}"
         return
     fi
     # The exit status decides rule 8. Its reason is the last line of standard
@@ -2224,8 +2227,11 @@ end_with_verdict() { # ends the run under the verdict of the attempt just classi
             ;;
         empty) end_as empty "$KIND ended without an answer" ;;
         usage_limit)
+            # The reset time is read from the whole error; the message is it
+            # made one line of at most 300 characters, as rule 7's is.
             record_cut_off
-            end_as usage_limit "${A_REASON#ERROR: }"
+            one_line "${A_REASON#ERROR: }"
+            end_as usage_limit "$ONE_LINE"
             ;;
         cli_failure)
             # Rule 8 is the exit status; rules 6, 7 and 10 name what the trace said.

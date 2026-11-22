@@ -3158,6 +3158,44 @@ assert_eq "$(st '.attempts[0].rule')" 7 "agy-error-not-quota: rule"
 assert_eq "$(st .reset_at)" null "agy-error-not-quota: reset_at"
 assert_eq "$(st .fresh_start)" false "agy-error-not-quota: fresh_start"
 
+# The usage-limit message is the CLI's error made one line of at most 300
+# characters, as rule 7's is, while the reset time is read from the whole
+# error: here it stands after a line break and 400 characters of padding.
+new_case agy-quota-long
+pad="$(printf 'w%.0s' {1..400})"
+play agy 1 --exit 3 --stdout "$(t_agy_quota_door C1 1h | jq -c --arg p "$pad" \
+    'if .event == "result" then .result.error = ("Individual quota reached.\n" + $p + " Resets in 2h5m.") else . end')"
+s0="$(date +%s)"
+ext run --cli agy --run-dir "$RUN"
+s1="$(date +%s)"
+assert_eq "$rc" 13 "agy-quota-long: rc"
+assert_eq "$(st '.attempts[0].rule')" 5 "agy-quota-long: rule"
+assert_eq "$(st .message)" "Individual quota reached. ${pad:0:274}" "agy-quota-long: the message, one line of 300 characters"
+reset_within agy-quota-long $((2 * 3600 + 5 * 60)) "$s0" "$s1"
+
+# The same for Codex's usage-limit line.
+new_case codex-ul-long
+pad="$(printf 'w%.0s' {1..400})"
+# shellcheck disable=SC1112  # the typographic apostrophe of Codex's message
+play codex 1 --exit 1 --stderr "$(codex_err U1 "ERROR: You’ve hit your usage limit. $pad or try again at 2:40 PM.")"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 13 "codex-ul-long: rc"
+# shellcheck disable=SC1112
+want="You’ve hit your usage limit. $pad"
+assert_eq "$(st .message)" "${want:0:300}" "codex-ul-long: the message, at most 300 characters"
+assert_eq "$(st .reset_at)" "2:40 PM" "codex-ul-long: reset_at, from the whole line"
+
+# Rule 7's status is bounded as its error text is.
+new_case agy-error-long-status
+pad="$(printf 'w%.0s' {1..400})"
+play agy 1 --stdout "$(t_agy_quota_door C1 1h | jq -c --arg p "$pad" \
+    'if .event == "result" then .result.status = ("BAD\nSTATE " + $p) | .result.error = "Internal error." else . end')"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 14 "agy-error-long-status: rc"
+assert_eq "$(st '.attempts[0].rule')" 7 "agy-error-long-status: rule"
+assert_eq "$(st .message)" "agy's result has status BAD STATE ${pad:0:290}: Internal error." \
+    "agy-error-long-status: the status, one line of 300 characters, then the error"
+
 # ---------------------------------------------------------------------------
 # An agy result that did not succeed, in the shape of the trace of
 # 2026-11-21 (agy on its default model, a/agy.first1.stdout): agy exited 0
