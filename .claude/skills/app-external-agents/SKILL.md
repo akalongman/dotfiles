@@ -599,7 +599,14 @@ the session that group leads, which reaches a worker that moved to a
 process group of its own (Codex's `node_repl` and `codex-code-mode` did
 in the acceptance run of 2026-11-16), and records the outcome; the same
 stop, without the signal, follows every command it starts. A worker that
-starts a session of its own escapes both. A signal that
+starts a session of its own escapes both. agy was seen to start such a
+process: in the process listings of the acceptance runs of 2026-11-21
+and 2026-11-22 on its default model, a process named `agy`, a child of
+the attempt's `agy`, led a session of its own (seen from 2.3 to 12.6 s
+after the start in the first run, and 0.5 s after it in the second,
+there with a child of its own, also `agy`); none was seen in the run on
+`gemini-3.8-flash-low`. Neither stop reaches such a process, and
+`ps -s <id>` below does not list it. A signal that
 arrives before or while the CLI runs ends the run as `cancelled`. One
 sent to the runner's process, as above, that arrives after the CLI has
 exited leaves that attempt's verdict standing: a run whose CLI answered
