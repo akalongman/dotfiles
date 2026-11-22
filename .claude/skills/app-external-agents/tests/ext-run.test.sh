@@ -783,12 +783,15 @@ mk_pad_ps() { # dir listing...: a ps there that adds 12,500 lines "0 0 0 S" (100
     } | mk_tool "$1/ps"
 }
 
-nosearch_ok() { # case-name: makes $CASE/nosearch, a TMPDIR that bash takes as writable (its write bit set) and cannot make a file in (its search bit cleared); 1 as root, which needs no search bit, with a line on standard error
+nosearch_ok() { # case-name: makes $CASE/nosearch, a TMPDIR that bash takes as writable (its write bit set) and cannot make a file in (its search bit cleared); 1 as root, which needs no search bit, with a line on standard error; 1 and a failure when the directory cannot be made so
     if [ "$(id -u)" = 0 ]; then
         printf 'ext-run.test: %s skipped in part: as root a directory without its search bit can be searched\n' "$1" >&2
         return 1
     fi
-    mkdir -m 700 "$CASE/nosearch" && chmod 600 "$CASE/nosearch"
+    if ! { mkdir -m 700 "$CASE/nosearch" && chmod 600 "$CASE/nosearch"; }; then
+        _fail "$1: cannot make $CASE/nosearch without its search bit, so the rows that need it did not run"
+        return 1
+    fi
 }
 
 worker_placed() { # key k label: the invocation's worker led a process group of its own inside the invocation's session
