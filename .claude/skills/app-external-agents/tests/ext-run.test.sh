@@ -2769,10 +2769,10 @@ fi
 # holds once the attempt is recorded. The attempt has no session handle, so
 # with a usable TMPDIR the resume is due and ends as no handle. A status
 # object bash cannot read leaves the resume neither used nor unused: the run
-# ends as a runner failure named after the read, and no resume starts. The
-# final status needs the same read of the object, so with a TMPDIR that
-# stays unusable it cannot be written either: the summary names no status
-# file, and the read's own message is on standard error.
+# ends as a runner failure, its message naming the read on standard error,
+# and no resume starts. The final status needs the same read of the object,
+# so with a TMPDIR that stays unusable it cannot be written either: the
+# summary names that write as the failure, and no status file.
 new_case resume-temp-file-fails
 big="$(printf 'x%.0s' {1..70000})"
 mkdir -m 700 "$CASE/tmp"
@@ -2792,8 +2792,8 @@ if nosearch_ok resume-temp-file-fails; then
     l='resume-temp-file-fails'
     assert_eq "$rc" 21 "$l: rc"
     assert_contains "$ERR" "cannot read resume_used from the status object" "$l: the read named"
-    assert_begins "$OUT" "qwen: runner_failure (" "$l: the outcome"
-    assert_ends "$OUT" "status: none" "$l: no status file"
+    assert_eq "$OUT" "qwen: runner_failure (cannot write the status file $RUN/qwen.status); status: none" \
+        "$l: the summary names the status file's write, and no status file"
     chmod 700 "$CASE/nosearch"
     assert_eq "$(ncalls qwen)" 2 "$l: no resume started"
 fi
