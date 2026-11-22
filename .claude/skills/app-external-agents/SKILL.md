@@ -191,7 +191,7 @@ What stays unequal:
   earlier text, since neither response held any. The traces of both runs
   named no slash command and no skill, which is the evidence of two
   runs. A run on the default model that answers through the runner was
-  not seen, and neither was a resume that answers.
+  not seen, and neither was a resume with the flag that answers.
 
 ## Steps
 
