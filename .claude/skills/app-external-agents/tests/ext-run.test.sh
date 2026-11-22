@@ -6060,6 +6060,28 @@ assert_nofile "$RUN/codex.out" "publish-fails: no answer file"
 assert_eq "$(cat "$RUN/codex.first1.stdout" 2>/dev/null)" A "publish-fails: the attempt's output is kept"
 assert_ends "$OUT" "status: $RUN/codex.status" "publish-fails: the status named"
 
+# A continue whose first write of the status file fails owns no status
+# file: its object, in phase continue, is the last line on standard error,
+# and the saved status stays as it was, so the run can be continued again.
+new_case continue-first-write-fails
+ul_first_run
+keep "$RUN/codex.status"
+mkdir "$RUN/codex.status.tmp"
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+rmdir "$RUN/codex.status.tmp"
+assert_eq "$rc" 21 "continue-first-write-fails: rc"
+assert_begins "$OUT" "codex: runner_failure (cannot write the status file $RUN/codex.status" \
+    "continue-first-write-fails: the failed write named"
+assert_ends "$OUT" "status: none" "continue-first-write-fails: no status named"
+assert_eq "$(err_last | jq -c '[.outcome, .phase]' 2>/dev/null)" '["runner_failure","continue"]' \
+    "continue-first-write-fails: the status object on standard error, in phase continue"
+unchanged "$RUN/codex.status" "continue-first-write-fails"
+assert_eq "$(ncalls codex)" 1 "continue-first-write-fails: no continue attempt"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-first-write-fails then: rc"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" DONE "continue-first-write-fails then: the answer"
+
 new_case write-fails-exit
 play codex 1 --hold --stdout A --stderr "$(codex_err U1)"
 ext_bg run --cli codex --run-dir "$RUN"

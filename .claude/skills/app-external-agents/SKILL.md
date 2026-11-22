@@ -789,9 +789,10 @@ writes no status: the saved status file stays byte for byte as it was.
 When such a continue ends `runner_failure` (or `cancelled` in its
 place), its JSON line on standard
 error carries that outcome and phase `preflight`, or phase
-`continue` when the failure came while it prepared its first write of
-the status file, which is not expected in practice; once the
-runner has found the saved record to be a usage limit, the line also
+`continue` when the failure came at its first write of the status file:
+while it prepared that write, which is not expected in practice, or
+when the file could not be written, the saved one staying as it was;
+once the runner has found the saved record to be a usage limit, the line also
 carries the earlier run's fields, while the file on disk still says
 `usage_limit`. That line describes this invocation, not the saved
 record. Whether the run can be continued later depends on where the
@@ -812,9 +813,12 @@ fault the message names lies:
   continue would write already exist; the prompt changed since the
   first attempt, when the continue starts afresh; for OpenCode, a
   recorded outside directory, or the project boundary of the recorded
-  working directory, is now refused. Every retry is refused the same
-  way until that is fixed, for example the directory or the prompt
-  restored or the files moved aside, which the owner decides on.
+  working directory, is now refused; the files of the attempt that
+  created the session cannot be read for its handle (`runner_failure`,
+  the message naming that attempt). Every retry is refused or fails the
+  same way until that is fixed, for example the directory or the prompt
+  restored, the files moved aside or made readable again, which the
+  owner decides on.
 - In the record or the session it names: a status file that cannot be
   read as one JSON object, is incomplete, contradicts itself or does not
   match the CLI's kind or prefix; an outcome other than `usage_limit` (a
