@@ -174,10 +174,24 @@ What stays unequal:
   it `cli_failure`, wrote no `agy.out`, and the answer stayed in the
   trace (`agy.first1.stdout`); the runner now also keeps such a response
   as the attempt's earlier text (`agy.first1.earlier.txt`), unpublished,
-  and its message carries agy's error. That run's trace named no slash
-  command and no skill, which is the evidence of one run. A run on the
-  default model that answers through the runner, and a resume with the
-  flag, were not seen.
+  and its message carries agy's error. On 2026-11-22 (agy 1.5.14, the
+  runner of public-dotfiles commit 285745c, whose runner code is that of
+  61bee41) a second run on the default model, the flag among the
+  arguments `AGY_EXTRA_ARGS` gives every attempt (the processes'
+  arguments were not read), read the four files after a first model turn
+  of 299 s and then showed no further step before the test's limit of
+  10 minutes (the default is 90 minutes); agy's result at the deadline
+  has status `ERROR`, the error "interrupted" and an empty response. The
+  runner's one resume continued that conversation and ended after 155 s
+  with exit status 3 and a result whose status is `ERROR`, whose error
+  is again the server's "No capacity available for model
+  gemini-4-argon-high" (code 503), and whose response is empty, with no
+  model step in its trace. The runner ended the run `cli_failure` in the
+  resume, its message carrying that error, and wrote no `agy.out` and no
+  earlier text, since neither response held any. The traces of both runs
+  named no slash command and no skill, which is the evidence of two
+  runs. A run on the default model that answers through the runner was
+  not seen, and neither was a resume that answers.
 
 ## Steps
 
