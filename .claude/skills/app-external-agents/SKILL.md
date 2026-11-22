@@ -196,7 +196,8 @@ What stays unequal:
   answered through the runner on its first attempt, after 12 s: agy's
   result has status `SUCCESS`, the runner ended the run `answered`, its
   `agy.out` holds the four first lines and equals the result's response
-  byte for byte, `reported.model` is `gemini-3.8-flash-low`, and no
+  byte for byte, since that response ended in one newline (see `<p>.out`
+  under step 7), `reported.model` is `gemini-3.8-flash-low`, and no
   earlier text was written. That is an answer on the model the run
   named, not on the default model. The traces of these three runs named
   no slash command and no skill, which is the evidence of three runs. A
@@ -639,18 +640,25 @@ Files in the run directory, under the prefix `<p>`:
 - `<p>.status`: the status object, one JSON object; `<p>.status.tmp` is
   the temporary name it is written through.
 - `<p>.out`: the final answer, present when an attempt answered;
-  `<p>.out.tmp` is the temporary name it is published through.
+  `<p>.out.tmp` is the temporary name it is published through. It holds
+  the answer with its trailing newlines replaced by one newline, so an
+  answer that ends without a newline gains one and one that ends in
+  several keeps one, and without any NUL byte the answer held, which
+  bash drops with a warning on standard error.
 - `<p>.<phase><n>.stdout`, `.stderr`, `.time` and `.exit`: one attempt's
   raw output (for agy and OpenCode the standard output is the JSON
   trace), wall seconds and exit status. The phase is `first`, `resume`
   or `continue`, and `<n>` counts from 1 within a phase, so `qwen.first1`
   and `qwen.resume1`. No attempt file is overwritten.
 - `<p>.<phase><n>.earlier.txt`: for OpenCode, the text that attempt
-  wrote in steps before its final one; for agy, byte for byte, the
-  response of that attempt's last result when the attempt did not
-  answer, never published as the answer. Absent when there is none: for
-  agy, when the response is missing, not a string or blank, when the
-  attempt answered, or when its trace is damaged.
+  wrote in steps before its final one; for agy, the response of that
+  attempt's last result when the attempt did not answer, never published
+  as the answer. Either is kept byte for byte, its trailing newlines
+  included, except that a NUL byte is dropped, as in `<p>.out`. Absent
+  when there is none: for agy, when the response is missing, not a
+  string or blank, when the attempt answered, or when its trace is
+  damaged; and for any attempt left unclassified because a process
+  outlived the kill (its `verdict` is null).
 - `<p>.<phase><n>.config.json` (OpenCode): the config injected into that
   attempt.
 - `codex.probe.err`: the standard error of the last Codex sandbox probe.

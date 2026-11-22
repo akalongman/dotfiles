@@ -3411,6 +3411,50 @@ assert_eq "$(cat "$RUN/agy.out" 2>/dev/null)" ANSWER "agy-answer-no-earlier: the
 assert_eq "$(st .answer)" "$RUN/agy.out" "agy-answer-no-earlier: answer"
 no_earlier 0 first1 agy-answer-no-earlier
 
+# The answer file holds the answer with its trailing newlines replaced by
+# one newline: the runner reads the answer through a command substitution,
+# which drops them, and writes it with one. A NUL byte in it is dropped, with
+# bash's warning on standard error. The earlier text keeps its trailing
+# newlines and loses a NUL byte the same way.
+x=0
+for r in '"ANSWER"' '"ANSWER\n"' '"ANSWER\n\n\n"' '"AN\u0000SWER\n\n"'; do
+    x=$((x + 1))
+    name="agy-answer-newlines-$x"
+    new_case "$name"
+    play agy 1 --stdout "$(agy_init C; agy_failed_result C SUCCESS "$r" -)"
+    ext run --cli agy --run-dir "$RUN"
+    assert_eq "$rc" 0 "$name ($r): rc"
+    printf 'ANSWER\n' > "$CASE/answer.want"
+    if cmp -s "$CASE/answer.want" "$RUN/agy.out"; then _pass; else _fail "$name ($r): agy.out is not ANSWER and one newline"; fi
+done
+assert_contains "$ERR" "ignored null byte" "agy-answer-newlines-$x: bash's warning on standard error"
+new_case codex-answer-newlines
+printf 'ANSWER\n\n\n' > "$CASE/stdout"
+play codex 1 --stdout-file "$CASE/stdout" --stderr "$(codex_err U1)"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "codex-answer-newlines: rc"
+printf 'ANSWER\n' > "$CASE/answer.want"
+if cmp -s "$CASE/answer.want" "$RUN/codex.out"; then _pass; else _fail "codex-answer-newlines: codex.out is not ANSWER and one newline"; fi
+new_case agy-earlier-nul
+play agy 1 --stdout "$(t_agy_failed C '"E\u0000F\n\n"' "$(jstr "$AGY_503")")"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 14 "agy-earlier-nul: rc"
+earlier_is 0 first1 agy-earlier-nul $'EF\n\n'
+assert_contains "$ERR" "ignored null byte" "agy-earlier-nul: bash's warning on standard error"
+
+# An attempt left unclassified because a process outlived the kill gets no
+# earlier text, although its trace holds a response that would give one.
+new_case survivor-unclassified-earlier
+mk_ghost_ps "$CASE/ghost"
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+play agy 1 --stdout "$(t_agy_failed C "$(jstr "$R_LINES")" "$(jstr "$AGY_503")")"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 21 "survivor-unclassified-earlier: rc"
+assert_contains "$(st .message)" "could not stop" "survivor-unclassified-earlier: message"
+assert_eq "$(st '.attempts | length')" 1 "survivor-unclassified-earlier: the attempt is recorded"
+assert_eq "$(st '.attempts[0].verdict')" null "survivor-unclassified-earlier: not classified"
+no_earlier 0 first1 survivor-unclassified-earlier
+
 # Denied actions (rule 4), with a response before the denial, and with a
 # status ERROR and an error text too: the response is the earlier text, and
 # the message is rule 4's.

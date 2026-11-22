@@ -438,6 +438,8 @@ write_status() { # writes <p>.status through <p>.status.tmp; a failure ends the 
 
 publish_answer() { # the answer to <p>.out through <p>.out.tmp
     local out="$RUN_DIR/$PREFIX.out"
+    # The command substitution that read the answer dropped its trailing
+    # newlines and any NUL byte; it is written with one newline after it.
     if { printf '%s\n' "$ANSWER_TEXT" > "$out.tmp"; } 2>/dev/null &&
         mv -fT -- "$out.tmp" "$out" 2>/dev/null; then
         # shellcheck disable=SC2016  # a jq variable
@@ -2088,9 +2090,10 @@ write_earlier() { # phase n: the attempt's earlier text to <p>.<ph><n>.earlier.t
             ;;
         agy)
             # The last result's response of an attempt that was not answered,
-            # kept as it is and never published: a string that is not blank,
-            # from a trace that is not damaged (rules 4, 6 and 7 do not read
-            # a damaged one either).
+            # kept as it is, its trailing newlines included (bash drops a NUL
+            # byte, as for the answer), and never published: a string that
+            # is not blank, from a trace that is not damaged (rules 4, 6 and
+            # 7 do not read a damaged one either).
             [ "$VERDICT" != answered ] && [ "$T_DAMAGED" = false ] && [ "$T_RESULT" = true ] || return 0
             t="$(agy_earlier "$T_EVENTS" && printf x)" || end_read_failure "cannot read the earlier text in $T_EVENTS"
             t="${t%x}"
