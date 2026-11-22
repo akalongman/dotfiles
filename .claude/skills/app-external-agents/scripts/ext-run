@@ -1533,7 +1533,7 @@ protected_dirs() { # prints the protected directories, each made canonical and e
     done
 }
 
-load_protected() { # sets PROTECTED, HOME_CANON and VAR_TMP_CANON, once per invocation
+load_protected() { # sets PROTECTED, HOME_CANON and VAR_TMP_CANON, once per invocation; the first call also changes CANON (canonical_any), so a caller takes what it needs of CANON before calling it, or restores it after
     [ "$PROTECTED_READ" = 0 ] || return 0
     mapfile -d '' -t PROTECTED < <(protected_dirs)
     wait "$!" || end_as runner_failure "cannot list the protected directories"
