@@ -897,9 +897,10 @@ After the first line, as they apply:
   status does not show that nothing was written: a change to a file that
   was already changed or untracked, to an ignored file, or outside the
   repository does not show in it. When `notes` says there was no git
-  repository (no `.git` above the working directory), or that the work
-  tree ignores the working directory, say that there is no snapshot and
-  why, also after a continue; in an ignored working directory
+  repository (no `.git` above the working directory), that the working
+  directory is in a git repository but not in a work tree, or that the
+  work tree ignores the working directory, say that there is no snapshot
+  and why, also after a continue; in an ignored working directory
   `git status` shows nothing the CLI wrote there, so it is not compared;
 - paths into a bundle, mapped back to the originals.
 
