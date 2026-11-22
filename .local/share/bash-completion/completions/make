@@ -13,6 +13,15 @@
 # a dot are left out, variables are not expanded and include lines are not
 # followed. A file that is not a readable regular file gives no names.
 #
+# Bounds, so that no file can hold the prompt: at most 256 reads of at most
+# 4096 characters each (1 MiB of text), no new line once 50,000 lines and
+# words before a colon have been counted, and a line longer than 4096
+# characters is skipped. A NUL byte also ends a read, since NUL bytes do not
+# count towards the length of a read that stops at newlines. Past a bound the
+# rest of the file is left unread, so some names are missed. The largest
+# makefile found when this was written, CPython's generated one (222 KB, 3,890
+# lines, longest line 2,208 characters), is well inside them.
+#
 # With -f or -C on the line (also -fFILE, -CDIR, and --file, --makefile or
 # --directory, alone or with =VALUE) it offers nothing. Not detected: short
 # options in a cluster (-kf) and abbreviated long options (--dir=x).
@@ -22,8 +31,8 @@
 
 _comp_cmd_make_text()
 {
-    local cur=${2-} file='' name line head i
-    local -a words
+    local cur=${2-} file='' name line head chunk rest='' skip='' eof='' i reads=0 steps=0
+    local -a words parts
     local -A seen=()
     COMPREPLY=()
     for ((i = 1; i < ${COMP_CWORD:-0}; i++)); do
@@ -40,16 +49,40 @@ _comp_cmd_make_text()
         fi
     done
     [[ $file && -f $file && -r $file ]] || return 0
-    while IFS= read -r line || [[ $line ]]; do
-        [[ $line == [!$' \t']*:* ]] || continue
-        head=${line%%:*}
-        case ${line#"$head"} in ':='* | '::='* | ':::='*) continue ;; esac
-        [[ $head == *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./$' \t'-]* ]] && continue
-        IFS=$' \t' read -r -a words <<< "$head"
-        for name in "${words[@]}"; do
-            [[ $name == .* || ${seen[$name]-} ]] && continue
-            seen[$name]=1
-            if [[ $name == "$cur"* ]]; then COMPREPLY+=("$name"); fi
+    # Each read ends at a NUL byte or after 4096 characters; the lines it
+    # completes are split off, and the partial last line waits for the next
+    # read. skip is set while the rest of an over-long line is read past.
+    # steps counts the lines and the words before a colon.
+    while ((reads < 256)) && [[ ! $eof ]]; do
+        reads=$((reads + 1))
+        IFS= read -r -d '' -n 4096 chunk || eof=1
+        mapfile -t parts <<< "$rest$chunk${eof:+$'\n'}"
+        rest=${parts[-1]}
+        unset 'parts[-1]'
+        if [[ $skip ]]; then
+            if ((${#parts[@]} == 0)); then
+                rest=''
+                continue
+            fi
+            unset 'parts[0]'
+            skip=''
+        fi
+        if ((${#rest} > 4096)); then rest='' skip=1; fi
+        for line in "${parts[@]}"; do
+            steps=$((steps + 1))
+            if ((steps > 50000)); then break 2; fi
+            ((${#line} <= 4096)) || continue
+            [[ $line == [!$' \t']*:* ]] || continue
+            head=${line%%:*}
+            case ${line:${#head}} in ':='* | '::='* | ':::='*) continue ;; esac
+            [[ $head == *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./$' \t'-]* ]] && continue
+            IFS=$' \t' read -r -a words <<< "$head"
+            steps=$((steps + ${#words[@]}))
+            for name in "${words[@]}"; do
+                [[ $name == .* || ${seen[$name]-} ]] && continue
+                seen[$name]=1
+                if [[ $name == "$cur"* ]]; then COMPREPLY+=("$name"); fi
+            done
         done
     done 2> /dev/null < "$file"
     return 0
