@@ -3092,7 +3092,9 @@ assert_eq "$(st .reset_at)" null "ul-no-reset-time: no time stated, none recorde
 
 # agy's quota error is its usage limit (rule 5, ahead of rule 7). Refused
 # before the model's first turn, the trace holds only the user_input and
-# error_message steps, so a continue starts afresh with agy-prompt.md.
+# error_message steps (a system_message step may stand among them, see
+# agy-quota-door-system-message), so a continue starts afresh with
+# agy-prompt.md.
 new_case agy-quota-door
 play agy 1 --exit 3 --stdout "$(t_agy_quota_door C1 113h24m55s)" --stderr "$(agy_quota_err 113h24m55s)"
 s0="$(date +%s)"
@@ -3132,6 +3134,43 @@ assert_eq "$rc" 0 "agy-quota-work continue: rc"
 assert_eq "$(argv agy 2)" "$(jq -cn --arg t "$CONTINUE_TEXT" \
     '["--conversation", "C1", "-p", $t, "--output-format", "stream-json", "--agy-x"]')" \
     "agy-quota-work continue: argv, the conversation continued by its handle"
+
+# A system_message step is not a model turn: agy writes one, with no text,
+# no tokens and a duration under a millisecond, right after the user's
+# input of a later attempt of a conversation (agy 1.5.7 and 1.5.14), also
+# in one that ended before any model step. Refused at the door with one in
+# its trace, the attempt still counts as refused before the model's first
+# turn, so a continue starts afresh; with a model turn after it, the
+# conversation is continued by its handle.
+new_case agy-quota-door-system-message
+play agy 1 --exit 3 --stdout "$(jq -cn '{event: "init", conversation_id: "C1", init: {cwd: "/w", permission_mode: "request-review"}}'
+    agy_step C1 0 user_input; agy_step C1 1 system_message; agy_step C1 2 error_message
+    agy_error_result C1 "$(agy_quota_text 1h)")" --stderr "$(agy_quota_err 1h)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 13 "agy-quota-door-system-message: rc"
+assert_eq "$(st '.attempts[0].rule')" 5 "agy-quota-door-system-message: rule"
+assert_eq "$(st .fresh_start)" true "agy-quota-door-system-message: fresh_start"
+play agy 2 --stdout "$(t_agy_answer C2)"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-quota-door-system-message continue: rc"
+assert_eq "$(argv agy 2)" \
+    "$(jq -cn --rawfile p "$RUN/agy-prompt.md" '["-p", $p, "--output-format", "stream-json", "--agy-x"]' 2>/dev/null)" \
+    "agy-quota-door-system-message continue: argv, the first-attempt form with agy-prompt.md"
+assert_eq "$(st '.attempts[1].fresh')" true "agy-quota-door-system-message continue: the attempt started afresh"
+
+new_case agy-quota-work-system-message
+play agy 1 --exit 3 --stdout "$(jq -cn '{event: "init", conversation_id: "C1", init: {cwd: "/w", permission_mode: "request-review"}}'
+    agy_step C1 0 user_input; agy_step C1 1 system_message; agy_step C1 2 agent_response; agy_step C1 3 error_message
+    agy_error_result C1 "$(agy_quota_text 1h)")" --stderr "$(agy_quota_err 1h)"
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 13 "agy-quota-work-system-message: rc"
+assert_eq "$(st .fresh_start)" false "agy-quota-work-system-message: fresh_start"
+play agy 2 --stdout "$(t_agy_answer C1)"
+ext continue --cli agy --run-dir "$RUN"
+assert_eq "$rc" 0 "agy-quota-work-system-message continue: rc"
+assert_eq "$(argv agy 2)" "$(jq -cn --arg t "$CONTINUE_TEXT" \
+    '["--conversation", "C1", "-p", $t, "--output-format", "stream-json", "--agy-x"]')" \
+    "agy-quota-work-system-message continue: argv, the conversation continued by its handle"
 
 # The quota wording on standard error alone is enough; the reset time is read
 # from the line that holds it.

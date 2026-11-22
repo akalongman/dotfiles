@@ -108,7 +108,7 @@ HANDLES=()                    # what read_handles read: the distinct session han
 # An agy or OpenCode trace as read_trace and trace_facts left it, for the attempt TRACE_OF.
 TRACE_OF='' T_EVENTS='' T_SKIPPED=0 T_DAMAGED=false
 T_RESULT=false T_STATUS='' T_DENIED_N=0 T_DENIED_TOOLS=''          # agy
-T_RESULT_ERROR='' T_NO_TURN=false # agy: the last result's error text; true when no step_update is of a type other than user_input or error_message
+T_RESULT_ERROR='' T_NO_TURN=false # agy: the last result's error text; true when no step_update is of a type other than user_input, system_message or error_message
 T_LAST='' T_REASON='' T_ERROR_SEEN=false T_ERROR='' T_ASK_REFUSED=false # OpenCode
 GID=''                        # the group read from the gid file
 CANCEL_SIG=''                 # the signal that set CANCEL: TERM, HUP or INT
@@ -1258,15 +1258,19 @@ trace_facts() { # sets the T_ facts the classification rules read from T_EVENTS
     # empty last fact survives the command substitution.
     case "$KIND" in
         agy)
-            # A step_update of a type other than user_input or error_message
-            # means the model took a turn (agent_response, tool, ...); a quota
-            # error before the first one leaves only those two (rule 5).
+            # A step_update of a type other than user_input, system_message or
+            # error_message means the model took a turn (agent_response,
+            # tool, checkpoint, or a type not seen yet); a quota error before
+            # the first one leaves only those three (rule 5). agy writes a
+            # system_message step after the user's input of a later attempt
+            # of a conversation, with no text, no tokens and a duration under
+            # a millisecond, also in one that ended before any model step.
             # shellcheck disable=SC2016  # jq variables
             out="$(jq -r -s "$JQ_TRACE"' agy_result as $r | ($r != null), ($r | g(.result.status) | text1),
                 (agy_denied | length), (agy_denied | map(.tool) | join(", ") | text1),
                 ($r | g(.result.error) | if type == "string" then . else "" end | text1),
                 all(.[] | select(.event == "step_update") | g(.step_update.step_type);
-                    . == "user_input" or . == "error_message"),
+                    . == "user_input" or . == "system_message" or . == "error_message"),
                 "."' "$T_EVENTS" 2>/dev/null)" &&
                 mapfile -t f <<< "$out" && [ "${#f[@]}" = 7 ] && [ "${f[6]}" = . ] ||
                 end_as runner_failure "cannot read the events in $T_EVENTS"
