@@ -356,8 +356,10 @@ edit-level run has no granted directory, because the runner refuses
 granted directory. Something the owner can write is a target writable by
 the owner, a directory holding something writable by the owner, or a
 missing target whose nearest existing directory above it is writable by
-the owner, because the write tool can create the missing target through
-the link. A link to a file the owner cannot write, such as a
+the owner, because the write tool may create the missing target through
+the link; that was not checked, since the acceptance rerun of 2026-11-18
+created its file inside a linked directory that existed. A link to a
+file the owner cannot write, such as a
 virtualenv's link to the system python, is not such a link. A
 virtualenv's link to an interpreter that uv manages, under
 `~/.local/share/uv/python`, which the owner can write, is such a link.
@@ -383,11 +385,16 @@ done
 It prints nothing for a link whose target lies inside the project or
 holds nothing writable by the owner. Inside a linked directory the
 search stops at the first entry writable by the owner, so a large tree
-the owner cannot write (a link to `/usr`, for example) is searched
-whole. The search does not follow the links it meets inside a linked
-directory: one of them counts only when its own target is writable by
-the owner, so a writable directory below an unwritable directory it
-leads to, or a missing target it names, is missed. A link that cannot be
+that holds nothing the owner can write is searched whole. A link to
+`/usr` does not lead to such a tree on this machine: on 2026-11-23 the
+search stopped at once on `/usr/bin/signal-desktop`, a link to a file of
+mode 0777, and `/usr/lib/systemd/system` holds links to `/dev/null`
+(masked services such as `sudo.service`), which count as writable too,
+so the command prints a link to `/usr`. The search does not follow the
+links it meets inside a linked directory: one of them counts only when
+its own target is writable by the owner, so something writable, a file
+or a directory, below an unwritable directory it leads to, or a missing
+target it names, is missed. A link that cannot be
 resolved, a loop for example, is named by
 `realpath` on standard error and skipped, since nothing can be written
 through it. When the command prints nothing, the run starts without the
