@@ -1005,9 +1005,11 @@ that file. What the sandbox needs:
   documentation describes.
 
 OpenCode needs no sandbox; the runner checks its version instead and
-refuses a major version other than the tested one
-(`unsupported_version`). The two aliases, `deepseek` and `qwen`, need
-one subscription, entered once with `opencode auth login`: the Alibaba
+refuses a major version other than the tested one, and a version
+command that fails, does not answer within the preflight limit or
+prints what is not a version (`unsupported_version`). The two aliases,
+`deepseek` and `qwen`, need one subscription, entered once with
+`opencode auth login`: the Alibaba
 Model Studio Token Plan (provider "Alibaba Token Plan", key
 `ALIBABA_TOKEN_PLAN_API_KEY`). A run without its key ends
 `cli_failure` with OpenCode's own error; report it and point the user to
