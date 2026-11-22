@@ -233,9 +233,8 @@ make_run() { # dir: a run directory as new_case makes it
 
 which_on() { # path name [dir]: prints the file the name resolves to, canonical (a link to it resolved); 1 when none, 2 on a bad PATH
     # A relative element is let through only when it leads from dir, where
-    # the runner starts, to the case's fakes; any other is a bad PATH. A
-    # continue looks the CLI up in its recorded directory, so a case with
-    # such an element starts its continue there.
+    # the runner looks the CLI up (lookup_dir), to the case's fakes; any
+    # other is a bad PATH.
     local IFS=: d c dirs
     read -r -a dirs <<< "$1"
     for d in "${dirs[@]}"; do
@@ -258,13 +257,31 @@ which_on() { # path name [dir]: prints the file the name resolves to, canonical 
     return 1
 }
 
-check_path() { # path: stops the suite when a CLI name resolves outside the fakes and the sentinels, as seen from where the runner starts
+lookup_dir() { # runner args...: sets LOOKUP_DIR to the directory the runner looks the CLI up in: where it starts, or for a continue the working directory its status file records, when that file names one
+    local a prev='' run='' cwd
+    LOOKUP_DIR="${EXT_CWD:-$WORK}"
+    [ "${1:-}" = continue ] || return 0
+    for a in "$@"; do
+        if [ "$prev" = --run-dir ]; then run="$a"; fi
+        prev="$a"
+    done
+    ext_prefix "$@"
+    [ -n "$run" ] && [ -n "$PREFIX" ] || return 0
+    case "$run" in /*) ;; *) run="$LOOKUP_DIR/$run" ;; esac
+    # A status file the suite cannot read names no directory; the runner
+    # cannot read it either and refuses before its lookup.
+    cwd="$(jq -r '.cwd | strings' "$run/$PREFIX.status" 2>/dev/null)"
+    case "$cwd" in /*) LOOKUP_DIR="$cwd" ;; esac
+}
+
+check_path() { # path [runner args...]: stops the suite when a CLI name resolves outside the fakes and the sentinels, as seen from where the runner looks it up
     local n p r
     case "$1" in
         '' | *:) printf 'ext-run.test: PATH %s has an empty element\n' "$1" >&2; exit 2 ;;
     esac
+    lookup_dir "${@:2}"
     for n in codex agy opencode; do
-        p="$(which_on "$1" "$n" "${EXT_CWD:-$WORK}")"
+        p="$(which_on "$1" "$n" "$LOOKUP_DIR")"
         r=$?
         [ "$r" != 2 ] || exit 2
         [ "$r" = 0 ] || continue
@@ -405,7 +422,7 @@ ext_env() { # path: the runner's environment, exported in the current (sub)shell
 
 ext() { # args...: runs the case's runner (EXT_RUNNER, as a path from EXT_CWD, when set) in the foreground; sets rc, OUT, ERR and PREFIX
     local path="${EXT_PATH:-$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels}"
-    check_path "$path"
+    check_path "$path" "$@"
     ext_prefix "$@"
     OUT="$({ cd "${EXT_CWD:-$WORK}" && ext_env "$path" &&
         exec "$BIN_ROOT/utils/timeout" -k 2s 60s "${EXT_RUNNER:-$CASE/skill/scripts/ext-run}" "$@"; } \
@@ -417,7 +434,7 @@ ext() { # args...: runs the case's runner (EXT_RUNNER, as a path from EXT_CWD, w
 
 ext_bg() { # args...: the runner in the background, its pid the job's; sets BG, BGN and PREFIX
     local path="${EXT_PATH:-$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels}"
-    check_path "$path"
+    check_path "$path" "$@"
     ext_prefix "$@"
     BGN=$((BGN + 1))
     (
@@ -465,7 +482,7 @@ ext_wait() { # [n]: waits at most 60 s for job n (the last by default); sets rc,
 
 ext_tty() { # args...: ext with standard error on a terminal; sets rc and OUT (all the terminal got)
     local path="${EXT_PATH:-$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels}" cmd q a
-    check_path "$path"
+    check_path "$path" "$@"
     ext_prefix "$@"
     printf -v cmd '%q' "$CASE/skill/scripts/ext-run"
     for a in "$@"; do
@@ -3782,6 +3799,17 @@ assert_eq "$rc" 0 "relative-path-element continue: rc"
 assert_eq "$(st .outcome)" answered "relative-path-element continue: outcome"
 assert_contains "$(callf codex 2 parent)" " -k 1s 90m $WORK/../bin/codex exec " \
     "relative-path-element continue: the recorded directory in front of the lookup's answer"
+# A continue started in another directory still looks the CLI up in the
+# recorded one, and the guard resolves a relative element from there: ./bin
+# leads to the fakes from the case's directory and nowhere from the recorded
+# one, ./../bin the other way round. The record says answered, so a continue
+# the guard lets through is refused before its lookup.
+out="$( (EXT_CWD="$CASE" EXT_PATH="./bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels" ext continue --cli codex --run-dir "$RUN") 2>&1 > /dev/null)"
+assert_eq "$?" 2 "relative-path-element continue elsewhere: the guard refuses what leads elsewhere from the recorded directory"
+assert_contains "$out" "has an empty or relative element" "relative-path-element continue elsewhere: refused as a relative element"
+(EXT_CWD="$CASE" EXT_PATH="./../bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels" ext continue --cli codex --run-dir "$RUN"; exit "$rc") > /dev/null 2>&1
+assert_eq "$?" 64 "relative-path-element continue elsewhere: the guard lets through what leads to the fakes from the recorded directory"
+assert_eq "$(ncalls codex)" 2 "relative-path-element: no call after the continue"
 
 new_case continue-foreign-prefix
 ul_first_run
