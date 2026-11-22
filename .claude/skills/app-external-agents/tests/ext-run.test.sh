@@ -4367,15 +4367,16 @@ fi
 exec "$BIN_ROOT/utils/git" "$@"
 EOF
 play qwen 2 --stdout "$(t_oc_only S)"
-for g in nogit oddgit; do
+for g in nogit:'git cannot be run: git rev-parse --local-env-vars ended with status 127' \
+    oddgit:'git rev-parse --local-env-vars (status 0) printed what is not a variable name: not a name'; do
+    msg="${g#*:}" g="${g%%:*}"
     EXT_PATH="$CASE/$g:$CASE/bin:$BIN_ROOT/utils"
     ext continue --cli qwen --run-dir "$RUN"
     assert_eq "$rc" 18 "continue-git-broken $g: rc"
     assert_ends "$OUT" "status: none" "continue-git-broken $g: no status named"
-    assert_contains "$ERR" "git" "continue-git-broken $g: git named"
+    assert_contains "$ERR" "$msg" "continue-git-broken $g: git and its fault named"
     unchanged "$RUN/qwen.status" "continue-git-broken $g"
 done
-assert_contains "$ERR" "not a name" "continue-git-broken oddgit: what it printed"
 assert_eq "$(ncalls qwen)" 1 "continue-git-broken: no call after the first"
 unset EXT_PATH
 ext continue --cli qwen --run-dir "$RUN"
@@ -4403,6 +4404,28 @@ assert_eq "$(ncalls qwen)" 1 "continue-git-no-git-dir: no call after the first"
 unset EXT_PATH
 ext continue --cli qwen --run-dir "$RUN"
 assert_eq "$rc" 0 "continue-git-no-git-dir: the run can still be continued"
+
+# A git that runs and fails while an OpenCode continue checks the project
+# boundary of the recorded directory is a usage error, as in a run
+# (boundary-git-fails), with git's reason: the continue owns no status file
+# yet, so the saved status stays as it was.
+new_case continue-oc-git-vars-fails
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+fake_ul qwen
+keep "$RUN/qwen.status"
+mk_tool "$CASE/failgit/git" <<< "echo 'fatal: VARS-REASON' >&2; exit 1"
+play qwen 2 --stdout "$(t_oc_only S)"
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-oc-git-vars-fails: rc"
+assert_eq "$OUT" "qwen: usage_error (git rev-parse --local-env-vars failed with status 1 (fatal: VARS-REASON)); status: none" \
+    "continue-oc-git-vars-fails: the query and git's reason named, no status"
+unchanged "$RUN/qwen.status" "continue-oc-git-vars-fails"
+assert_eq "$(ncalls qwen)" 1 "continue-oc-git-vars-fails: no call after the first"
+unset EXT_PATH
+ext continue --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-oc-git-vars-fails: the run can still be continued"
 
 # git fails although a .git lies above the directory (here a .git file git
 # cannot read): the boundary is unknown, and the directory is not taken for it.
@@ -4932,6 +4955,22 @@ assert_eq "$rc" 18 "snap-git-vars-fail: rc, not a usage error"
 assert_eq "$(st .outcome)" prerequisite_failed "snap-git-vars-fail: outcome"
 assert_contains "$(st .message)" "--local-env-vars" "snap-git-vars-fail: the query named"
 assert_eq "$(ncalls codex)" 0 "snap-git-vars-fail: no call"
+
+# The same for agy, which takes its snapshot at the read level too: the run
+# owns its status file by then, so the failed call is recorded as a missing
+# prerequisite, not refused as a usage error.
+new_case snap-git-vars-fail-agy
+mk_tool "$CASE/failgit/git" <<< "echo 'fatal: VARS-REASON' >&2; exit 1"
+EXT_PATH="$CASE/failgit:$CASE/bin:$BIN_ROOT/utils"
+answering agy 1
+ext run --cli agy --run-dir "$RUN"
+assert_eq "$rc" 18 "snap-git-vars-fail-agy: rc, not a usage error"
+assert_eq "$(st .outcome)" prerequisite_failed "snap-git-vars-fail-agy: outcome"
+assert_eq "$(st .message)" "git rev-parse --local-env-vars failed with status 1 (fatal: VARS-REASON)" \
+    "snap-git-vars-fail-agy: the query and git's reason named"
+assert_ends "$OUT" "status: $RUN/agy.status" "snap-git-vars-fail-agy: the status named"
+assert_nofile "$RUN/before.txt" "snap-git-vars-fail-agy: no before.txt"
+assert_eq "$(ncalls agy)" 0 "snap-git-vars-fail-agy: no call"
 
 # An answer that does not name GIT_DIR, met first in the snapshot for Codex:
 # the run ends there, recorded, before the CLI starts.
