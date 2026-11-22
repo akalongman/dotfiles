@@ -63,9 +63,9 @@ observed.
 agy has no read-only setting. Its allow-rules gate shell commands, not
 its file-writing tool, and `--mode plan` is not a boundary, so it is not
 used. At the read level the prompt's read-level line (step 5 of
-"Steps") is all that stops a write. In a git repository the runner
-therefore takes the before snapshot for every agy run, unless the
-repository ignores the working directory (see step 7), and the report
+"Steps") is all that stops a write. In a git work tree the runner
+therefore takes the before snapshot for every agy run, unless the work
+tree ignores the working directory (see step 7), and the report
 compares the working tree with it.
 
 OpenCode has no sandbox flag: its permissions are per-agent config, so
@@ -650,7 +650,12 @@ Files in the run directory, under the prefix `<p>`:
 - `before.txt` and `before.diff`: the before snapshot, written by an
   edit-level run and by every agy run, in a git work tree. Outside one
   (no `.git` on the way up from the working directory) the run writes
-  neither and notes it; where a `.git` lies above and git fails there (a
+  neither and notes it, and so it does where git finds a repository but
+  no work tree that holds the working directory (a work tree's `.git`
+  directory, a bare repository, a repository whose work tree is
+  elsewhere), with the note
+  `the working directory is in a git repository but not in a work tree: no before snapshot`;
+  where a `.git` lies above and git fails there (a
   `.git` file it cannot read, a repository it refuses to trust), the run
   ends `prerequisite_failed` before the CLI starts. In a working
   directory that its work tree ignores the run also writes neither and
@@ -846,7 +851,7 @@ otherwise left out.
 | handle | `handle` | the same | the same |
 | version | none | none | `versions.preflight`, followed by "untested" when `version_untested` is true |
 | outside directories (after the first line) | `allow_dirs` is `[]`: Codex is given none and reads anywhere | `allow_dirs`: exactly the directories its prompt copy names to be read with shell commands, by their real paths; one inside the working directory or under a file-reading directory is not named and not listed | `allow_dirs`: the directories it was granted, by their canonical paths |
-| snapshot notes (after the first line) | `notes`: the before snapshot's notes, `not a git repository: no before snapshot`, `the working directory is ignored by its git work tree: no before snapshot` or `no commit yet: before.diff is empty`, also joined after the message; a continue keeps them and repeats them after its own message; empty when there are none | the same | the same |
+| snapshot notes (after the first line) | `notes`: the before snapshot's notes, `not a git repository: no before snapshot`, `the working directory is in a git repository but not in a work tree: no before snapshot`, `the working directory is ignored by its git work tree: no before snapshot` or `no commit yet: before.diff is empty`, also joined after the message; a continue keeps them and repeats them after its own message; empty when there are none | the same | the same |
 
 After the first line, as they apply:
 
@@ -868,7 +873,7 @@ After the first line, as they apply:
 - skipped trace lines (`attempts[].skipped_lines` above 0): lines of the
   trace that did not begin with `{`, such as a warning, which the runner
   skipped;
-- for agy and for edit-level runs, in a git repository: show
+- for agy and for edit-level runs, in a git work tree: show
   `git status --short -uall` and compare it with that run's
   `<run>/before.txt`. Mark which entries are new, flag every path present
   in both as possibly touched by the agent and mixed with earlier

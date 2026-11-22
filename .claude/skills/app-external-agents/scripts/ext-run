@@ -1027,8 +1027,12 @@ take_snapshot() { # step 7 of a run, at the edit level and for agy: before.txt a
         note "not a git repository: no before snapshot"
         return 0
     fi
+    # Any other answer with status 0 is "false": git found a repository but
+    # no work tree that holds the directory, as in a work tree's .git
+    # directory, a bare repository, or a repository whose work tree lies
+    # elsewhere (core.worktree). There is nothing to take a snapshot of.
     if [ "${GIT_OUT%$'\n'}" != true ]; then
-        note "not a git repository: no before snapshot"
+        note "the working directory is in a git repository but not in a work tree: no before snapshot"
         return 0
     fi
     # git status shows nothing of what a CLI writes in a directory the work

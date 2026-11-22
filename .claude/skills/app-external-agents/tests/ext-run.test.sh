@@ -4834,6 +4834,51 @@ assert_nofile "$RUN/before.txt" "snap-no-git: no before.txt"
 assert_nofile "$RUN/before.diff" "snap-no-git: no before.diff"
 assert_contains "$(st .message)" "not a git repository" "snap-no-git: message"
 
+# Started where git finds a repository and answers that the directory is in no
+# work tree (its status 0, its answer false): a work tree's .git directory, a
+# bare repository, a directory below either, and the top of a repository
+# whose work tree lies elsewhere. There is no work tree to take a snapshot
+# of, so the note says that, and the run goes on with the outcome and exit
+# status of any other run. OpenCode is refused in the .git directory before
+# any of that, as a project boundary it cannot tell.
+new_case snap-not-in-work-tree
+git init -q --bare --template="$ROOT/tpl" "$CASE/bare.git"
+fixture_repo "$CASE/moved"
+mkdir "$CASE/moved-tree"
+git -C "$CASE/moved" config core.worktree "$CASE/moved-tree"
+note='the working directory is in a git repository but not in a work tree: no before snapshot'
+k=0 nc=0 na=0
+for row in codex:work/.git agy:work/.git codex:work/.git/refs codex:bare.git agy:bare.git agy:bare.git/refs codex:moved; do
+    k=$((k + 1))
+    cli="${row%%:*}" WORK="$CASE/${row#*:}" RUN="$CASE/run$k" l="snap-not-in-work-tree $row"
+    make_run "$RUN"
+    if [ "$cli" = codex ]; then
+        nc=$((nc + 1))
+        play codex "$nc" --stdout A --stderr "$(codex_err "U$nc")"
+        ext run --cli codex --run-dir "$RUN" --level edit
+    else
+        na=$((na + 1))
+        play agy "$na" --stdout "$(t_agy_answer C ANSWER)"
+        ext run --cli agy --run-dir "$RUN"
+    fi
+    assert_eq "$rc" 0 "$l: rc"
+    assert_eq "$(st .outcome)" answered "$l: outcome"
+    assert_eq "$(stj .notes)" "[\"$note\"]" "$l: the note"
+    assert_eq "$(st .message)" "$note" "$l: the message is the note"
+    assert_eq "$OUT" "$cli: answered ($note); status: $RUN/$cli.status" "$l: the summary"
+    assert_nofile "$RUN/before.txt" "$l: no before.txt"
+    assert_nofile "$RUN/before.diff" "$l: no before.diff"
+done
+WORK="$CASE/work/.git" RUN="$CASE/run-oc"
+make_run "$RUN"
+answering qwen 1
+ext run --cli qwen --run-dir "$RUN"
+assert_eq "$rc" 64 "snap-not-in-work-tree qwen: rc"
+assert_eq "$OUT" "qwen: usage_error (cannot tell the project boundary of $WORK: git rev-parse --show-toplevel exited with status 128 there (fatal: this operation must be run in a work tree), and $WORK exists); status: none" \
+    "snap-not-in-work-tree qwen: OpenCode refused, the boundary unknown"
+assert_eq "$(ncalls qwen)" 0 "snap-not-in-work-tree qwen: no call"
+assert_nofile "$RUN/qwen.status" "snap-not-in-work-tree qwen: no status"
+
 # The snapshot leaves the project's index alone, also when it is stale (a file
 # touched without a change): git status and git diff would otherwise refresh
 # and rewrite it.
