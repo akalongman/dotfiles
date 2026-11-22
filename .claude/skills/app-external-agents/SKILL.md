@@ -899,14 +899,21 @@ After the first line, as they apply:
 - skipped trace lines (`attempts[].skipped_lines` above 0): lines of the
   trace that did not begin with `{`, such as a warning, which the runner
   skipped;
-- for agy and for edit-level runs, in a git work tree: show
-  `git status --short -uall` and compare it with that run's
-  `<run>/before.txt`. Mark which entries are new, flag every path present
-  in both as possibly touched by the agent and mixed with earlier
-  changes (for tracked paths the earlier diff is in `<run>/before.diff`;
-  untracked paths have no saved content, and in a repository without a
-  commit `before.diff` stays empty), and summarize the diff. An unchanged
-  status does not show that nothing was written: a change to a file that
+- for agy and for edit-level runs, in a git work tree: show the status
+  in the form the snapshot took it, from the run's working directory
+  (`cwd` in the status file, `<cwd>` below),
+  `git -C <cwd> -c color.status=false status --short -uall`, and compare
+  it with that run's `<run>/before.txt`. Mark which entries are new, flag
+  every path present in both as possibly touched by the agent and mixed
+  with earlier changes (for tracked paths the earlier diff is in
+  `<run>/before.diff`; untracked paths have no saved content, and in a
+  repository without a commit `before.diff` stays empty), and summarize
+  the diff, taken in the form of `before.diff`:
+  `git -C <cwd> -c diff.relative=false diff --no-ext-diff --no-textconv --no-color HEAD`.
+  A plain `git status` or `git diff` can differ from the snapshot where
+  the project's configuration forces colour or sets `diff.relative`.
+  An unchanged status does not show that nothing was written: a change
+  to a file that
   was already changed or untracked, to an ignored file, or outside the
   repository does not show in it. When `notes` says there was no git
   repository (no `.git` above the working directory), that the working
