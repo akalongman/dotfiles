@@ -2382,20 +2382,24 @@ assert_nofile "$RUN/codex.out" "handles-unreadable-resume: no answer"
 # fail the same way: a read that fails is never taken for an empty answer,
 # no header, no tokens or no usage limit. Codex's standard output, made
 # unreadable while the attempt runs, would otherwise be an empty answer and
-# a resume.
+# a resume. As root a file without its read bits can still be read.
 new_case codex-answer-unreadable
-play codex 1 --stdout A --stderr "$(codex_err U1)" --hold
-ext_bg run --cli codex --run-dir "$RUN"
-wait_for "$CALLS/codex.1/started"
-chmod 000 "$RUN/codex.first1.stdout"
-release codex 1
-ext_wait
-assert_eq "$rc" 21 "codex-answer-unreadable: rc"
-assert_eq "$(st .outcome)" runner_failure "codex-answer-unreadable: outcome"
-assert_eq "$(st .message)" "cannot read the answer in $RUN/codex.first1.stdout" "codex-answer-unreadable: message"
-assert_nofile "$RUN/codex.out" "codex-answer-unreadable: no answer"
-assert_eq "$(ncalls codex)" 1 "codex-answer-unreadable: no resume"
-chmod 600 "$RUN/codex.first1.stdout"
+if [ "$(id -u)" = 0 ]; then
+    printf 'ext-run.test: codex-answer-unreadable skipped: as root a file without its read bits can be read\n' >&2
+else
+    play codex 1 --stdout A --stderr "$(codex_err U1)" --hold
+    ext_bg run --cli codex --run-dir "$RUN"
+    wait_for "$CALLS/codex.1/started"
+    chmod 000 "$RUN/codex.first1.stdout"
+    release codex 1
+    ext_wait
+    assert_eq "$rc" 21 "codex-answer-unreadable: rc"
+    assert_eq "$(st .outcome)" runner_failure "codex-answer-unreadable: outcome"
+    assert_eq "$(st .message)" "cannot read the answer in $RUN/codex.first1.stdout" "codex-answer-unreadable: message"
+    assert_nofile "$RUN/codex.out" "codex-answer-unreadable: no answer"
+    assert_eq "$(ncalls codex)" 1 "codex-answer-unreadable: no resume"
+    chmod 600 "$RUN/codex.first1.stdout"
+fi
 
 # The header's model and effort: an awk that cannot read the first
 # attempt's standard error when it looks for that key there.
@@ -3917,18 +3921,23 @@ unchanged "$RUN/codex.status" "continue-longer-prefix-other"
 
 # A continue's read of the session handle that fails leaves the saved status
 # as it was, so the run can be continued once the file can be read again.
+# As root a file without its read bits can still be read.
 new_case handles-unreadable-continue
-ul_first_run
-chmod 000 "$RUN/codex.first1.stderr"
-keep "$RUN/codex.status"
-ext continue --cli codex --run-dir "$RUN"
-assert_eq "$rc" 21 "handles-unreadable-continue: rc"
-assert_contains "$OUT" "runner_failure (cannot read the session handles of attempt first1)" \
-    "handles-unreadable-continue: outcome and message"
-assert_ends "$OUT" "status: none" "handles-unreadable-continue: no status named"
-unchanged "$RUN/codex.status" "handles-unreadable-continue"
-assert_eq "$(ncalls codex)" 1 "handles-unreadable-continue: no call after the run"
-chmod 600 "$RUN/codex.first1.stderr"
+if [ "$(id -u)" = 0 ]; then
+    printf 'ext-run.test: handles-unreadable-continue skipped: as root a file without its read bits can be read\n' >&2
+else
+    ul_first_run
+    chmod 000 "$RUN/codex.first1.stderr"
+    keep "$RUN/codex.status"
+    ext continue --cli codex --run-dir "$RUN"
+    assert_eq "$rc" 21 "handles-unreadable-continue: rc"
+    assert_contains "$OUT" "runner_failure (cannot read the session handles of attempt first1)" \
+        "handles-unreadable-continue: outcome and message"
+    assert_ends "$OUT" "status: none" "handles-unreadable-continue: no status named"
+    unchanged "$RUN/codex.status" "handles-unreadable-continue"
+    assert_eq "$(ncalls codex)" 1 "handles-unreadable-continue: no call after the run"
+    chmod 600 "$RUN/codex.first1.stderr"
+fi
 
 new_case fresh-prompt-changed
 play codex 1 --exit 1 --stderr "$(ul_door U1 '6:58 PM')"
