@@ -3787,6 +3787,29 @@ assert_contains "$ERR" ": codex.resume1.stdout" "continue-resume-file-in-the-way
 unchanged "$RUN/codex.status" "continue-resume-file-in-the-way"
 assert_eq "$(ncalls codex)" 1 "continue-resume-file-in-the-way: no call after the run"
 
+# The files of a longer prefix whose name begins with this continue's
+# attempt or the resume and a dot (codex.continue1.x-y, from the model id
+# codex.continue1.x/y; codex.resume1.x-y likewise) are not in the way, as in
+# leftovers-longer-prefix; any other such file still is.
+new_case continue-longer-prefix-files
+ul_first_run
+for f in codex.continue1.x-y.status codex.continue1.x-y.first1.stdout codex.resume1.x-y.status codex.resume1.x-y.out; do
+    : > "$RUN/$f"
+done
+play codex 2 --stdout DONE --stderr "$(codex_err U1)"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 0 "continue-longer-prefix-files: rc"
+assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" DONE "continue-longer-prefix-files: the answer"
+
+new_case continue-longer-prefix-other
+ul_first_run
+: > "$RUN/codex.continue1.x-y.notes"
+keep "$RUN/codex.status"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "continue-longer-prefix-other: rc"
+assert_contains "$ERR" "already exist in $RUN: codex.continue1.x-y.notes" "continue-longer-prefix-other: that file named"
+unchanged "$RUN/codex.status" "continue-longer-prefix-other"
+
 # A continue's read of the session handle that fails leaves the saved status
 # as it was, so the run can be continued once the file can be read again.
 new_case handles-unreadable-continue

@@ -974,18 +974,17 @@ takes_snapshot() { # this run takes the before snapshot in step 7: the edit leve
     [ "$LEVEL" = edit ] || [ "$KIND" = agy ]
 }
 
+longer_prefix_file() { # name: a file name that begins with this prefix and a dot is a file a longer prefix writes (qwen.x-y, from the model id qwen.x/y, beside qwen), not this prefix's
+    local rest="${1#"$PREFIX".}"
+    [[ $rest =~ ^.+\.(lock|status|status\.tmp|out|out\.tmp|probe\.err|(first|resume|continue)[1-9][0-9]*\.(stdout|stderr|time|exit|earlier\.txt|config\.json))$ ]]
+}
+
 check_leftovers() { # step 5, under the claim: files of the prefix, and a before snapshot when this run takes one
-    local f rest found=()
+    local f found=()
     shopt -s nullglob
     for f in "$RUN_DIR/$PREFIX".*; do
         [ "$f" != "$LOCK" ] || continue
-        # A file that a longer prefix writes, one that begins with this prefix
-        # and a dot (qwen.x-y, from the model id qwen.x/y, beside qwen), is
-        # not this prefix's.
-        rest="${f##*/}"
-        rest="${rest#"$PREFIX".}"
-        [[ $rest =~ ^.+\.(lock|status|status\.tmp|out|out\.tmp|probe\.err|(first|resume|continue)[1-9][0-9]*\.(stdout|stderr|time|exit|earlier\.txt|config\.json))$ ]] &&
-            continue
+        longer_prefix_file "${f##*/}" && continue
         found+=("${f##*/}")
     done
     shopt -u nullglob
@@ -2356,7 +2355,7 @@ check_prompt_kept() { # sha256: the prompt a continue that starts afresh gives i
 }
 
 load_record() { # step 5 of a continue: reads, validates and adopts the saved status; a fault leaves the file as it was
-    local sf="$RUN_DIR/$PREFIX.status" rec fault dirs v=() found=()
+    local sf="$RUN_DIR/$PREFIX.status" rec fault dirs f v=() found=()
     STATUS_FILE="$sf"
     if [ ! -e "$sf" ] && [ ! -L "$sf" ]; then end_as usage_error "there is no status file to continue: $sf"; fi
     if [ ! -f "$sf" ] || [ ! -r "$sf" ]; then end_as usage_error "the status file is not a readable file: $sf"; fi
@@ -2390,10 +2389,17 @@ load_record() { # step 5 of a continue: reads, validates and adopts the saved st
     [ -e "$CWD" ] || end_as usage_error "the recorded working directory does not exist: $CWD"
     [ -d "$CWD" ] || end_as usage_error "the recorded working directory is not a directory: $CWD"
     # No attempt file is ever overwritten: this continue's attempt, and the
-    # one resume while it is still unused.
+    # one resume while it is still unused. A longer prefix's file is not one
+    # of them (qwen.continue1.x-y.status, from the model id qwen.continue1.x/y).
     shopt -s nullglob
-    found=("$RUN_DIR/$PREFIX.continue$CONT_N".*)
-    if [ "$RESUME_USED" = false ]; then found+=("$RUN_DIR/$PREFIX.resume1".*); fi
+    for f in "$RUN_DIR/$PREFIX.continue$CONT_N".*; do
+        longer_prefix_file "${f##*/}" || found+=("$f")
+    done
+    if [ "$RESUME_USED" = false ]; then
+        for f in "$RUN_DIR/$PREFIX.resume1".*; do
+            longer_prefix_file "${f##*/}" || found+=("$f")
+        done
+    fi
     shopt -u nullglob
     if [ "${#found[@]}" -gt 0 ]; then
         end_as usage_error "files of the attempts this continue would write already exist in $RUN_DIR: ${found[*]##*/}" \
