@@ -156,8 +156,9 @@ What stays unequal:
 - Codex's skills are kept out by a configuration override that one probe
   showed working. Asked for its tools in the acceptance run of
   2026-11-16, Codex under the override listed 79 names, none of them
-  mentioning skills, among them 51 of its apps (`mcp__codex_apps__`) and
-  3 of `node_repl`: the tools of its apps and plugins seem to be still
+  mentioning skills, among them 51 tools of six of its apps (names that
+  begin `mcp__codex_apps__`) and 3 tools of `node_repl`: the tools of its
+  apps and plugins seem to be still
   offered, which rests on the model's own list, not on a resolved tool
   set. Whether skills can still be found on demand through its
   `skill_search` feature, which is on, was not checked.
@@ -165,8 +166,10 @@ What stays unequal:
   `gemini-3.8-flash-low`, because the default model was over its quota on
   2026-11-15, and again in the acceptance run of 2026-11-16. On
   2026-11-21 (agy 1.5.9, the runner of public-dotfiles commit edf8946)
-  one run on the default model with the flag, Gemini 4 Argon (High) as
-  `configured_model` names it, read the four files of its task and wrote
+  one run on the default model, Gemini 4 Argon (High) as
+  `configured_model` names it, with the flag that `AGY_EXTRA_ARGS` gives
+  every attempt (the process's arguments were not read), read the four
+  files of its task and wrote
   a complete answer into its trace, but agy ended it with exit status 0
   and a result whose status is `ERROR` and whose error is the server's
   "No capacity available for model gemini-4-argon-high" (code 503),
@@ -176,9 +179,9 @@ What stays unequal:
   as the attempt's earlier text (`agy.first1.earlier.txt`), unpublished,
   and its message carries agy's error. On 2026-11-22 (agy 1.5.14, the
   runner of public-dotfiles commit 285745c, whose runner code is that of
-  61bee41) a second run on the default model, the flag among the
-  arguments `AGY_EXTRA_ARGS` gives every attempt (the processes'
-  arguments were not read), read the four files after a first model turn
+  61bee41) a second run on the default model, with the flag that
+  `AGY_EXTRA_ARGS` gives every attempt (the processes' arguments were not
+  read), read the four files after a first model turn
   of 299 s and then showed no further step before the test's limit of
   10 minutes (the default is 90 minutes); agy's result at the deadline
   has status `ERROR`, the error "interrupted" and an empty response. The
