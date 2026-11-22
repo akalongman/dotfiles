@@ -115,7 +115,7 @@ CANCEL_SIG=''                 # the signal that set CANCEL: TERM, HUP or INT
 C_EXIT='' C_WALL='' C_WALL_US=0 C_END_US=0 C_PGID='' C_SIGNALLED=false # the last command run_cmd ran; C_END_US is when it ended
 C_STUCK=false C_STUCK_MSG=''  # a process of its group or session outlived the kill, and the message that says so
 STOP_WHAT='' SESSION_PIDS=()  # where stop_cmd found a survivor; the live processes session_alive found
-STOP_WHY='' PS_FAILED=0       # why that stop failed; 1 once ps could not list the processes, or its table could not be read, during it
+STOP_WHY='' PS_FAILED=0       # why that stop failed; 1 when the last look at the process table failed: ps could not list the processes, or its table could not be read
 STOP_FAILED=''                # the finalizer's first step: the message of a stop that failed
 A_BASE='' A_CREATES=0         # the running attempt's file base; 1 when it creates the session (first1, or a continue that starts afresh)
 LIVE_HANDLE=''                # the handle the running attempt's files showed; only a running status carries it
@@ -277,7 +277,7 @@ alias_model() { # alias: prints the OpenCode model id it stands for
     esac
 }
 
-pid_alive() { # pid: the process exists and is not a zombie; a ps that cannot list the processes, or a table that cannot be read, counts it as alive
+pid_alive() { # pid: the process exists and is not a zombie; a ps that cannot list the processes, or a table that cannot be read, counts it as alive (PS_FAILED)
     local out p s
     case "${1:-}" in '' | *[!0-9]* | 0) return 1 ;; esac
     # ps -p fails alike for a pid that is gone and for a ps that cannot list
@@ -285,13 +285,20 @@ pid_alive() { # pid: the process exists and is not a zombie; a ps that cannot li
     # nothing gone. A table longer than a pipe holds goes through a temporary
     # file (see tail_lines); when that cannot be made or written, the loop
     # does not run, and its redirection fails.
-    if ! out="$(ps -A -o pid=,stat= 2>/dev/null)" || [ -z "$out" ]; then return 0; fi
+    if ! out="$(ps -A -o pid=,stat= 2>/dev/null)" || [ -z "$out" ]; then
+        PS_FAILED=1
+        return 0
+    fi
+    PS_FAILED=0
     while read -r p s; do
         if [ "$p" = "$1" ]; then
             [ "${s#Z}" = "$s" ]
             return
         fi
-    done <<< "$out" || return 0
+    done <<< "$out" || {
+        PS_FAILED=1
+        return 0
+    }
     return 1
 }
 
@@ -430,11 +437,14 @@ group_alive() { # pgid: ps shows a process of that group whose state does not be
         PS_FAILED=1
         return 0
     fi
+    PS_FAILED=0
     # The redirection fails when a table longer than a pipe holds cannot go
-    # through a temporary file (see tail_lines).
+    # through a temporary file (see tail_lines). bash's warning about it
+    # would come at every look of a stop, so it is kept off standard error;
+    # the stop's message names ps.
     while read -r g s; do
         if [ "$g" = "$1" ] && [ "${s#Z}" = "$s" ]; then return 0; fi
-    done <<< "$out" || {
+    done 2>/dev/null <<< "$out" || {
         PS_FAILED=1
         return 0
     }
@@ -472,11 +482,13 @@ session_alive() { # sid: ps shows a process of that session whose state does not
         PS_FAILED=1
         return 0
     fi
+    PS_FAILED=0
     # The redirection fails when a table longer than a pipe holds cannot go
-    # through a temporary file (see tail_lines).
+    # through a temporary file (see tail_lines); its warning is kept off
+    # standard error as in group_alive.
     while read -r p s st; do
         if [ "$s" = "$1" ] && [ "${st#Z}" = "$st" ]; then SESSION_PIDS+=("$p"); fi
-    done <<< "$out" || {
+    done 2>/dev/null <<< "$out" || {
         PS_FAILED=1
         return 0
     }
@@ -507,11 +519,22 @@ stop_session() { # sid [term]: its live processes, as stop_group does a group: T
 }
 
 stop_cmd() { # pgid [term]: a started command's group, then the session it leads; 1 when a process outlived the kill or ps could not show it gone, with STOP_WHAT naming where and STOP_WHY why
+    local seen=0
     STOP_WHAT='' PS_FAILED=0
-    stop_group "$@" || STOP_WHAT="process group $1"
-    stop_session "$@" || STOP_WHAT="${STOP_WHAT:+$STOP_WHAT and }session $1"
+    # A stop that failed ended on a look at the table that counted the group
+    # or the session alive: one that showed a live process names a survivor,
+    # one that could not read the table names ps, whatever earlier looks
+    # found.
+    if ! stop_group "$@"; then
+        STOP_WHAT="process group $1"
+        if [ "$PS_FAILED" = 0 ]; then seen=1; fi
+    fi
+    if ! stop_session "$@"; then
+        STOP_WHAT="${STOP_WHAT:+$STOP_WHAT and }session $1"
+        if [ "$PS_FAILED" = 0 ]; then seen=1; fi
+    fi
     STOP_WHY='a process outlived the kill'
-    if [ "$PS_FAILED" = 1 ]; then STOP_WHY='ps could not list the processes'; fi
+    if [ -n "$STOP_WHAT" ] && [ "$seen" = 0 ]; then STOP_WHY='ps could not list the processes'; fi
     [ -z "$STOP_WHAT" ]
 }
 
@@ -923,6 +946,11 @@ claim() { # step 4: the lock directory of the prefix, then the pid in it
             ;;
     esac
     if pid_alive "$pid"; then
+        # A table that could not be read shows nothing gone, and the owner is
+        # taken to be running; the message says so.
+        if [ "$PS_FAILED" = 1 ]; then
+            end_as usage_error "prefix $PREFIX is claimed in $RUN_DIR: pid $pid may be running (ps could not list the processes)"
+        fi
         end_as usage_error "prefix $PREFIX is claimed in $RUN_DIR: pid $pid is running"
     fi
     end_as usage_error "prefix $PREFIX is claimed in $RUN_DIR: pid $pid is not running" \

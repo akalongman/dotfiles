@@ -1215,8 +1215,9 @@ assert_file "$RUN/codex.lock" "claimed: the lock stays"
 assert_nofile "$RUN/codex.status" "claimed: no status"
 
 # A ps that cannot list the processes cannot show the claim's owner gone, so
-# the refusal takes it to be running and offers no removal command. The
-# stand-in lets step 2's listing through, so the claim's look is what fails.
+# the refusal takes it to be running, says that it may be and why, and
+# offers no removal command. The stand-in lets step 2's listing through, so
+# the claim's look is what fails.
 new_case claimed-ps-fails
 mkdir "$RUN/codex.lock"
 d="$(dead_pid)"
@@ -1229,7 +1230,8 @@ EOF
 EXT_PATH="$CASE/badps:$CASE/bin:$BIN_ROOT/utils"
 ext run --cli codex --run-dir "$RUN"
 assert_eq "$rc" 64 "claimed-ps-fails: rc"
-assert_contains "$ERR" "pid $d is running" "claimed-ps-fails: the owner taken to be running"
+assert_contains "$ERR" "pid $d may be running (ps could not list the processes)" \
+    "claimed-ps-fails: the owner taken to be running, and ps named"
 assert_lacks "$ERR" "rm -r" "claimed-ps-fails: no removal command"
 assert_file "$RUN/codex.lock" "claimed-ps-fails: the lock stays"
 
@@ -1565,6 +1567,28 @@ assert_contains "$(st .message)" "could not stop process group" "ps-fails: the g
 assert_contains "$(st .message)" "ps could not list the processes" "ps-fails: the cause named"
 assert_eq "$(ncalls codex)" 0 "ps-fails: no model attempt after the probe"
 assert_eq "$(alive "$(cat "$CALLS/sandbox.pid" 2>/dev/null)" && echo yes || echo no)" no "ps-fails: the probe is gone"
+
+# A stop names what its last look at the table found: a ps that fails at the
+# first look of a stop and then shows a process of the group that outlives
+# the kill (as mk_ghost_ps does) names the survivor, not ps.
+new_case ps-fails-once
+mk_ghost_ps "$CASE/ghost"
+mv "$CASE/ghost/ps" "$CASE/ghost/ps.ghost"
+mk_tool "$CASE/ghost/ps" <<'EOF'
+if [ "$*" = '-A -o pgid= -o stat=' ] && [ ! -e "$CASE/ps-failed" ]; then
+    : > "$CASE/ps-failed"
+    printf 'ps: cannot list the processes\n' >&2
+    exit 1
+fi
+exec "$CASE/ghost/ps.ghost" "$@"
+EOF
+EXT_PATH="$CASE/ghost:$CASE/bin:$BIN_ROOT/utils"
+ext run --cli codex --run-dir "$RUN"
+assert_eq "$rc" 21 "ps-fails-once: rc"
+assert_file "$CASE/ps-failed" "ps-fails-once: ps failed once"
+assert_contains "$(st .message)" "could not stop process group" "ps-fails-once: the group named"
+assert_contains "$(st .message)" "a process outlived the kill" "ps-fails-once: the survivor named"
+assert_lacks "$(st .message)" "ps could not list the processes" "ps-fails-once: not ps"
 
 # A worker that leads a process group of its own inside the CLI's session (as
 # Codex's node_repl was seen on 2026-11-16) is stopped with the session.
@@ -2538,10 +2562,11 @@ fi
 # already counts a failure of that read: the process table as a ps that
 # cannot list the processes (a claim's owner running, a stop's group or
 # session alive), and the session handles and the status object as a runner
-# failure named after the read. The reason in a git message is taken from a
-# text short enough for a pipe of the default size, in any locale this
-# machine has. Each case first reads the same long text under a usable
-# TMPDIR.
+# failure named after the read. A stop looks at the table at every poll,
+# and bash's warning about the temporary file is kept off standard error
+# there. The reason in a git message is taken from a text short enough for
+# a pipe of the default size, in any locale this machine has. Each case
+# first reads the same long text under a usable TMPDIR.
 #
 # Step 2's look at the process table already refuses one it cannot read, as
 # it refuses a ps that fails (ps-cannot-list).
@@ -2571,7 +2596,8 @@ if nosearch_ok ps-probe-temp-file-fails; then
 fi
 
 # A claim's owner that is running, behind a table bash cannot read, is taken
-# to be running, with no removal command (as in claimed-ps-fails).
+# to be running, with ps named and no removal command (as in
+# claimed-ps-fails).
 new_case claimed-temp-file-fails
 mkdir -m 700 "$CASE/tmp"
 mk_pad_ps "$CASE/padps" '-A -o pid=,stat='
@@ -2587,7 +2613,7 @@ if nosearch_ok claimed-temp-file-fails; then
     ext run --cli codex --run-dir "$RUN"
     l='claimed-temp-file-fails'
     assert_eq "$rc" 64 "$l: rc"
-    assert_contains "$ERR" "pid $$ is running" "$l: the owner taken to be running"
+    assert_contains "$ERR" "pid $$ may be running (ps could not list the processes)" "$l: the owner taken to be running, and ps named"
     assert_lacks "$ERR" "rm -r" "$l: no removal command"
     assert_contains "$ERR" 'cannot create temp file for here-document' "$l: the table could not be read"
     assert_file "$RUN/codex.lock/pid" "$l: the claim stays"
@@ -2624,6 +2650,7 @@ if nosearch_ok group-temp-file-fails; then
         assert_eq "$(st .outcome)" runner_failure "$l: outcome"
         assert_contains "$(st .message)" "could not stop process group" "$l: the group named"
         assert_contains "$(st .message)" "ps could not list the processes" "$l: the cause named"
+        assert_lacks "$ERR" 'cannot create temp file' "$l: no warning at each look"
         assert_eq "$(st '.attempts[0].verdict')" null "$l: the attempt is not classified"
         assert_nofile "$RUN/agy.out" "$l: no answer published"
         assert_eq "$(alive "$(callf agy "$n" child)" && echo yes || echo no)" no "$l: the child is gone"
@@ -2657,6 +2684,7 @@ if nosearch_ok session-temp-file-fails; then
     assert_eq "$(st .outcome)" runner_failure "$l: outcome"
     assert_contains "$(st .message)" "could not stop session" "$l: the session named"
     assert_contains "$(st .message)" "ps could not list the processes" "$l: the cause named"
+    assert_lacks "$ERR" 'cannot create temp file' "$l: no warning at each look"
     assert_eq "$(st '.attempts[0].verdict')" null "$l: the attempt is not classified"
     assert_nofile "$RUN/agy.out" "$l: no answer published"
     w="$(callf agy 2 worker)"
