@@ -245,15 +245,16 @@ last_line() { # file: sets LAST to its last line that is not blank, made fit for
 }
 
 one_line() { # text: sets ONE_LINE to the words of its first 10000 characters joined by single spaces, at most 300 characters, fit for a one-line message
-    local w=() t="${1:0:10000}"
-    # No locale on this machine counts more than 6 bytes as one character
-    # (UTF-8, where bash takes a five- or six-byte form for one), so 10000
-    # characters are at most 60000 bytes, and a space in place of each
-    # control character makes them no longer. A pipe of the default 65536
-    # bytes holds that; bash writes a longer here-string to a temporary file
-    # (see tail_lines), and when that cannot be made or written nothing is
-    # read.
-    read -r -d '' -a w <<< "${t//[[:cntrl:]]/ }"
+    local - IFS=$' \t\n' w=() t="${1:0:10000}"
+    # The shell splits the words itself, with pathname expansion off for the
+    # split, so no here-string is read: bash writes one to a temporary file
+    # when it is longer than a pipe holds, 65536 bytes by default but two
+    # pages once the user's pipes have reached pipe-user-pages-soft, and a
+    # temporary file that cannot be made or written would leave the words
+    # unread. Each control character becomes a space first.
+    set -f
+    # shellcheck disable=SC2206  # the split is the point
+    w=(${t//[[:cntrl:]]/ })
     ONE_LINE="${w[*]}"
     ONE_LINE="${ONE_LINE:0:300}"
 }
@@ -1182,7 +1183,11 @@ read_trace() { # file: sets T_EVENTS (a file of the parsed events, one per line)
         end_as runner_failure "cannot read the trace $1 into $T_EVENTS"
     counts="$(jq -rn '[inputs | strings] | "\(map(select(. == "skipped")) | length) \(any(.[]; . == "damaged"))"' \
         "$lines" 2>/dev/null)" || end_as runner_failure "cannot count the lines of the trace $1"
-    read -r T_SKIPPED T_DAMAGED <<< "$counts"
+    # Taken apart by a pattern, not read from a here-string, which bash 5.0,
+    # or a BASH_COMPAT of 50 or lower, writes to a temporary file whatever
+    # its size.
+    [[ $counts =~ ^([0-9]+)\ (true|false)$ ]] || end_as runner_failure "cannot count the lines of the trace $1"
+    T_SKIPPED="${BASH_REMATCH[1]}" T_DAMAGED="${BASH_REMATCH[2]}"
 }
 
 # jq definitions the trace readers share; each works on the slurped events.

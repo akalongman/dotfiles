@@ -2523,15 +2523,17 @@ assert_eq "$(st .message)" "opencode --version failed with status 1; its standar
 assert_eq "$(ncalls qwen)" 0 "version-stderr-unreadable: no call"
 
 # The last lines of a standard error are split from a here-string. bash
-# writes one longer than a pipe holds (about 64 KiB) to a temporary file in
-# TMPDIR, else /tmp; when that file cannot be made or written (a full or
-# unusable temporary directory), the lines are not read, and the read fails
-# as one that cannot open the file does. Here the last lines hold a line of
-# 100,000 bytes, and TMPDIR names a directory that bash takes as writable,
-# its write bit set, and cannot make a file in, its search bit cleared. With
-# a usable TMPDIR the same lines are read whole. Each of the three readers
-# of those lines fails as it does for a file it cannot open: Codex's
-# usage-limit error, Codex's tokens used lines and rule 8's reason.
+# writes one longer than a pipe holds (65,536 bytes by default, two pages
+# once the user's pipes have reached pipe-user-pages-soft) to a temporary
+# file in TMPDIR, else /tmp; when that file cannot be made or written (a
+# full or unusable temporary directory), the lines are not read, and the
+# read fails as one that cannot open the file does. Here the last lines
+# hold a line of 100,000 bytes, and TMPDIR names a directory that bash
+# takes as writable, its write bit set, and cannot make a file in, its
+# search bit cleared. With a usable TMPDIR the same lines are read whole.
+# Each of the three readers of those lines fails as it does for a file it
+# cannot open: Codex's usage-limit error, Codex's tokens used lines and
+# rule 8's reason.
 new_case tail-temp-file-fails
 printf -v long '%*s' 100000 ''
 long="${long// /x}"
@@ -2583,9 +2585,9 @@ fi
 # session alive), and the session handles and the status object as a runner
 # failure named after the read. A stop looks at the table at every poll,
 # and bash's warning about the temporary file is kept off standard error
-# there. The reason in a git message is taken from a text short enough for
-# a pipe of the default size, in any locale this machine has. Each case
-# first reads the same long text under a usable TMPDIR.
+# there. The reason in a git message is split into words by the shell
+# itself, with no here-string. Each case first reads the same long text
+# under a usable TMPDIR.
 #
 # Step 2's look at the process table already refuses one it cannot read, as
 # it refuses a ps that fails (ps-cannot-list).
@@ -2772,12 +2774,10 @@ if nosearch_ok resume-temp-file-fails; then
     assert_eq "$(ncalls qwen)" 2 "$l: no resume started"
 fi
 
-# git's standard error reaches a message as its words on one line, taken
-# from a here-string. Only its first 10,000 characters are read, at most
-# 60,000 bytes in any locale this machine has (none counts more than six
-# bytes as one character), which a pipe of the default 65,536 bytes holds,
-# so a long one still gives git's reason where bash could not make a
-# temporary file.
+# git's standard error reaches a message as its words on one line, the
+# first 10,000 characters split into words by the shell itself, with no
+# here-string, so a long one still gives git's reason where bash could not
+# make a temporary file, whatever size a pipe has.
 new_case git-reason-temp-file-fails
 mk_tool "$CASE/failgit/git" <<'EOF'
 printf 'fatal: VARS-REASON\n' >&2
@@ -2802,9 +2802,9 @@ fi
 assert_eq "$(ncalls qwen)" 0 "git-reason-temp-file-fails: no call"
 
 # The same in a UTF-8 locale, where bash counts a six-byte form as one
-# character: git's reason followed by 16,000 such forms. Its first 10,000
-# characters are about 60,000 bytes; 16,000 would be about 96,000, more than
-# a pipe holds.
+# character: git's reason followed by 16,000 such forms, about 96,000
+# bytes, more than a pipe holds; its first 10,000 characters are about
+# 60,000 bytes.
 new_case git-reason-six-byte-temp-file-fails
 mk_tool "$CASE/failgit/git" <<'EOF'
 printf 'fatal: SIX-REASON\n' >&2
