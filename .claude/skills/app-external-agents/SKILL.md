@@ -593,13 +593,21 @@ in the acceptance run of 2026-11-16), and records the outcome; the same
 stop, without the signal, follows every command it starts. A worker that
 starts a session of its own escapes both. A signal that
 arrives before or while the CLI runs ends the run as `cancelled`. One
-that arrives after the CLI has exited leaves that attempt's verdict
-standing: a run whose CLI answered ends under that answer, `answered`,
-or `answered_after_resume` when the answer came from the resume or a
-continue of it, and keeps it, and a run whose attempt failed ends under
-that failure; a resume that would have followed is not started, and the
-run then ends `cancelled`. A kill signal (KILL) or a power loss cannot
-be caught: the status file then still says `running`, and the report
+sent to the runner's process, as above, that arrives after the CLI has
+exited leaves that attempt's verdict standing: a run whose CLI answered
+ends under that answer, `answered`, or `answered_after_resume` when the
+answer came from the resume or a continue of it, and keeps it, and a run
+whose attempt failed ends under that failure; a resume that would have
+followed is not started, and the run then ends `cancelled`. The answer
+is kept only when the signal reaches the runner's own process. A signal
+sent to its whole process group (a terminal's interrupt or hang-up, a
+tool that stops a process tree) also stops the program the runner is
+reading the attempt's files or writing the status with at that moment,
+and the run can then end `cancelled`, its message naming the signal and
+then the read or write that failed, with the answer unpublished and
+left in the attempt's files (the trace, for agy and OpenCode): report it
+as unpublished text unless `<p>.out` holds it. A kill signal (KILL) or
+a power loss cannot be caught: the status file then still says `running`, and the report
 says that the run did not finish. After a KILL the CLI, in a session of
 its own, runs on until its time limit ends it, at the edit level
 possibly still writing, and the claim stays, so a later run or continue
@@ -718,8 +726,10 @@ below names each);
 version other than the tested one, or a version command that failed,
 did not answer or printed no version); `cancelled`,
 a signal stopped the runner before or
-while the CLI ran, or before a resume; `runner_failure`, the runner could
-not write or read one of its own files or could not confirm that the CLI's
+while the CLI ran, or before a resume, or a read or the status write of
+the runner failed once a signal had arrived; `runner_failure`, the runner could
+not write or read one of its own files (with no signal behind a failed
+read or status write) or could not confirm that the CLI's
 processes had ended, or exited in a way nobody planned; `usage_error`,
 bad input (an argument, a refused outside directory or project boundary,
 a claimed prefix, files of the prefix that already exist, a before
@@ -756,17 +766,21 @@ with `outcomes`:
 | `missing_cli` | 127 | which CLI is not on PATH |
 
 A summary line that ends `status: none`. A `runner_failure` that no
-status file records, and every outcome of an invocation that ended
-before it owned a status file, end that way: then the report comes from
-the summary line and standard error, and no status file on disk is this
-invocation's record. Such a `runner_failure` puts the status object, as
-far as it is known, on the last line of standard error as one line of
-JSON; a status file of this prefix that still says `running` was left by
-this invocation and is not its record either. A `continue` that ended in
+status file records, or the `cancelled` that takes the place of one when
+its failed read or status write came after a stop signal (see "Stopping
+a run"), and every outcome of an invocation that ended before it owned
+a status file, end that way: then the report comes from the summary
+line and standard error, and no status file on disk is this
+invocation's record. Such a `runner_failure`, or such a `cancelled`,
+puts the status object, as far as it is known, on the last line of
+standard error as one line of JSON; a status file of this prefix that
+still says `running` was left by this invocation and is not its record
+either. A `continue` that ended in
 its checks of the saved record or in its preflight, before its attempt,
 writes no status: the saved status file stays byte for byte as it was.
-When such a continue ends `runner_failure`, its JSON line on standard
-error carries outcome `runner_failure` and phase `preflight`, or phase
+When such a continue ends `runner_failure` (or `cancelled` in its
+place), its JSON line on standard
+error carries that outcome and phase `preflight`, or phase
 `continue` when the failure came while it prepared its first write of
 the status file, which is not expected in practice; once the
 runner has found the saved record to be a usage limit, the line also

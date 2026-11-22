@@ -432,7 +432,7 @@ ext() { # args...: runs the case's runner (EXT_RUNNER, as a path from EXT_CWD, w
     case "$rc" in 124 | 137) _fail "the runner did not end within 60 s: ext $*" ;; esac
 }
 
-ext_bg() { # args...: the runner in the background, its pid the job's; sets BG, BGN and PREFIX
+ext_bg() { # args...: the runner in the background, its pid the job's (with EXT_SETSID set, setsid in front of it: see ext_bg_group); sets BG, BGN and PREFIX
     local path="${EXT_PATH:-$CASE/bin:$BIN_ROOT/utils:$BIN_ROOT/sentinels}"
     check_path "$path" "$@"
     ext_prefix "$@"
@@ -440,7 +440,7 @@ ext_bg() { # args...: the runner in the background, its pid the job's; sets BG, 
     (
         cd "${EXT_CWD:-$WORK}" || exit 125
         ext_env "$path"
-        exec "$CASE/skill/scripts/ext-run" "$@"
+        exec ${EXT_SETSID:+"$BIN_ROOT/utils/setsid"} "$CASE/skill/scripts/ext-run" "$@"
     ) < /dev/null > "$CASE/bg.$BGN.out" 2> "$CASE/bg.$BGN.err" &
     BG=$!
     BG_PID[BGN]="$BG"
@@ -5568,6 +5568,117 @@ ext_wait
 assert_eq "$rc" 14 "term-in-tail-rule8: rc"
 assert_eq "$(st '.attempts[0].rule')" 8 "term-in-tail-rule8: rule"
 assert_eq "$(st .message)" "agy exited with status 3: agy: boom" "term-in-tail-rule8: the reason, read whole"
+
+# A signal can also go to the runner's whole process group, as a terminal's
+# interrupt or hang-up or a tool that stops a process tree sends it, and then
+# reaches the program the runner reads or writes with at that moment.
+# ext_bg_group starts the runner with setsid in front of it: the suite's
+# background subshell leads no process group, so setsid makes the group and
+# its session without forking, and the job's pid is the runner's and the
+# group's id.
+ext_bg_group() { # args...: ext_bg with the runner the leader of a process group of its own
+    # shellcheck disable=SC2034  # read by ext_bg
+    local EXT_SETSID=1
+    ext_bg "$@"
+}
+
+signal_own_group() { # signal: sends it to the process group of the last background runner, only when ps shows that group's id to be the runner's pid and not the suite's own group; a failure, and nothing sent, otherwise
+    local pg own
+    pg="$(ps -o pgid= -p "$BG" 2>/dev/null)"
+    pg="${pg//[[:space:]]/}"
+    own="$(ps -o pgid= -p "$$" 2>/dev/null)"
+    own="${own//[[:space:]]/}"
+    if [ -z "$pg" ] || [ "$pg" != "$BG" ] || [ -z "$own" ] || [ "$pg" = "$own" ]; then
+        _fail "signal_own_group: the runner $BG leads no process group of its own (its group ${pg:-unknown}, the suite's ${own:-unknown}); nothing sent"
+        return 1
+    fi
+    kill -"$1" -- "-$pg"
+}
+
+# The signal goes to the group while the runner reads the trace of an attempt
+# that answered (a jq stand-in holds that read): the jq is stopped too, the
+# read fails, and the signal decides: the run ends cancelled, its message
+# naming the read, the answer unpublished and still in the trace. Sent to
+# the runner alone, the read is whole and the run ends answered; the same
+# read failing with no signal ends as a runner failure named after it.
+new_case group-signal-trace-read
+mk_tool "$CASE/failjq/jq" <<'EOF'
+for a in "$@"; do
+    if [[ $a == *'catch "damaged"'* ]]; then exit 5; fi
+done
+exec "$BIN_ROOT/utils/jq" "$@"
+EOF
+mk_jq_hold '*catch "damaged"*'
+n=0
+for row in TERM HUP pid none; do
+    n=$((n + 1))
+    RUN="$CASE/run-$row" l="group-signal-trace-read $row"
+    make_run "$RUN"
+    rm -f "$CASE/jq-entered" "$CASE/jq-go"
+    EXT_PATH="$CASE/slowjq:$CASE/bin:$BIN_ROOT/utils"
+    if [ "$row" = none ]; then EXT_PATH="$CASE/failjq:$CASE/bin:$BIN_ROOT/utils"; fi
+    play qwen "$n" --stdout "$(t_oc_only S GROUP-ANSWER)"
+    trace="$RUN/qwen.first1.stdout" read="cannot read the trace $RUN/qwen.first1.stdout into $RUN/qwen.lock/trace.events"
+    case "$row" in
+        TERM | HUP)
+            ext_bg_group run --cli qwen --run-dir "$RUN"
+            wait_for "$CASE/jq-entered"
+            signal_own_group "$row"
+            ext_wait
+            assert_eq "$rc" 20 "$l: rc"
+            assert_eq "$(st .outcome)" cancelled "$l: outcome"
+            assert_eq "$(st .message)" "the runner received SIG$row; $read" "$l: the signal, then the read that failed"
+            assert_eq "$OUT" "qwen: cancelled (the runner received SIG$row; $read); status: $RUN/qwen.status" "$l: summary"
+            assert_eq "$(st .answer)" null "$l: no answer recorded"
+            assert_nofile "$RUN/qwen.out" "$l: no answer published"
+            assert_contains "$(cat "$trace" 2>/dev/null)" GROUP-ANSWER "$l: the answer is still in the trace"
+            ;;
+        pid)
+            ext_bg_group run --cli qwen --run-dir "$RUN"
+            wait_for "$CASE/jq-entered"
+            kill -TERM "$BG"
+            : > "$CASE/jq-go"
+            ext_wait
+            assert_eq "$rc" 0 "$l: rc"
+            assert_eq "$(st .outcome)" answered "$l: outcome"
+            assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" GROUP-ANSWER "$l: the answer is published"
+            ;;
+        none)
+            ext run --cli qwen --run-dir "$RUN"
+            assert_eq "$rc" 21 "$l: rc"
+            assert_eq "$(st .outcome)" runner_failure "$l: outcome"
+            assert_eq "$OUT" "qwen: runner_failure ($read); status: $RUN/qwen.status" "$l: summary"
+            assert_nofile "$RUN/qwen.out" "$l: no answer published"
+            ;;
+    esac
+    assert_nofile "$RUN/qwen.lock" "$l: no lock"
+done
+assert_eq "$(ncalls qwen)" 4 "group-signal-trace-read: one call per run"
+
+# The status write that shows the handle while the attempt still runs (a jq
+# stand-in holds the build of that status): a signal to the runner's whole
+# process group stops the jq, the write fails, and the run ends cancelled,
+# not as a runner failure. The CLI, in a session of its own, is stopped. No
+# status file is this invocation's record, so the summary names none, and
+# the status object, with outcome cancelled, is the last line on standard
+# error, as for a runner failure that no status file records.
+new_case group-signal-live-write
+mk_jq_hold U1
+EXT_PATH="$CASE/slowjq:$CASE/bin:$BIN_ROOT/utils"
+play codex 1 --hold --child 30 --stdout A --stderr "$(codex_err U1)"
+ext_bg_group run --cli codex --run-dir "$RUN"
+wait_for "$CASE/jq-entered"
+signal_own_group TERM
+ext_wait
+assert_eq "$rc" 20 "group-signal-live-write: rc"
+assert_eq "$OUT" "codex: cancelled (the runner received SIGTERM; cannot write the status file $RUN/codex.status); status: none" \
+    "group-signal-live-write: summary"
+assert_eq "$(err_last | jq -c '[.outcome, .phase, (.attempts | length)]' 2>/dev/null)" '["cancelled","first",0]' \
+    "group-signal-live-write: the status object on standard error"
+assert_eq "$(st .outcome)" running "group-signal-live-write: the status file left on disk is not this record"
+assert_eq "$(alive_yn "$(callf codex 1 pid)")" no "group-signal-live-write: the CLI was stopped"
+assert_eq "$(alive_yn "$(callf codex 1 child)")" no "group-signal-live-write: its child too"
+assert_nofile "$RUN/codex.lock" "group-signal-live-write: no lock"
 
 new_case term-in-preflight
 : > "$SCN/codex.sandbox.hold"
