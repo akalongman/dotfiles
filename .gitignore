@@ -128,9 +128,10 @@ __pycache__/
 !.gemini/settings.json
 
 # ~/.local tree: only the gtksourceview-5 styles, the nautilus-python
-# extension and the Ptyxis palettes are tracked. Everything else under
-# .local is app state; yadm's own bare repo lives at .local/share/yadm and
-# must never be tracked.
+# extension, the Ptyxis palettes and the make completion (bash-completion's
+# user completions folder) are tracked. Everything else under .local is app
+# state; yadm's own bare repo lives at .local/share/yadm and must never be
+# tracked.
 .local/*
 !.local/share
 .local/share/*
@@ -145,6 +146,9 @@ __pycache__/
 !.local/share/org.gnome.Ptyxis
 .local/share/org.gnome.Ptyxis/*
 !.local/share/org.gnome.Ptyxis/palettes
+!.local/share/bash-completion
+.local/share/bash-completion/*
+!.local/share/bash-completion/completions
 
 # ~/.config tree: most subdirs are app state, not config. Allowlist
 # specific subdirs and explicitly exclude known secret-bearing files.

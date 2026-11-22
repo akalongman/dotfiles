@@ -1,0 +1,57 @@
+# shellcheck shell=bash
+# Completion of make targets from the text of the folder's makefile.
+#
+# Reads the first of GNUmakefile, makefile and Makefile that exists in the
+# current folder, as text, and offers the names on its target lines. It never
+# runs make or anything else the folder supplies: the packaged completion runs
+# "make -npq", which expands the makefile's $(shell ...) calls.
+#
+# A target line starts in the first column and has words before its first
+# colon, and that colon does not begin an assignment (:=, ::= or :::=). Its
+# words are offered only when every one of them is made of A-Z, a-z, 0-9, _,
+# ., / and - alone; otherwise the whole line is skipped. Names that start with
+# a dot are left out, variables are not expanded and include lines are not
+# followed. A file that is not a readable regular file gives no names.
+#
+# With -f or -C on the line (also -fFILE, -CDIR, and --file, --makefile or
+# --directory, alone or with =VALUE) it offers nothing. Not detected: short
+# options in a cluster (-kf) and abbreviated long options (--dir=x).
+#
+# The loader looks a completion up by the command's own name, so gmake,
+# gnumake, pmake, colormake and bmake are links to this file.
+
+_comp_cmd_make_text()
+{
+    local cur=${2-} file='' name line head i
+    local -a words
+    local -A seen=()
+    COMPREPLY=()
+    for ((i = 1; i < ${COMP_CWORD:-0}; i++)); do
+        case ${COMP_WORDS[i]-} in
+            -[fC]* | --file | --file=* | --makefile | --makefile=* | --directory | --directory=*)
+                return 0
+                ;;
+        esac
+    done
+    for name in GNUmakefile makefile Makefile; do
+        if [[ -e $name ]]; then
+            file=$name
+            break
+        fi
+    done
+    [[ $file && -f $file && -r $file ]] || return 0
+    while IFS= read -r line || [[ $line ]]; do
+        [[ $line == [!$' \t']*:* ]] || continue
+        head=${line%%:*}
+        case ${line#"$head"} in ':='* | '::='* | ':::='*) continue ;; esac
+        [[ $head == *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./$' \t'-]* ]] && continue
+        IFS=$' \t' read -r -a words <<< "$head"
+        for name in "${words[@]}"; do
+            [[ $name == .* || ${seen[$name]-} ]] && continue
+            seen[$name]=1
+            if [[ $name == "$cur"* ]]; then COMPREPLY+=("$name"); fi
+        done
+    done 2> /dev/null < "$file"
+    return 0
+}
+complete -F _comp_cmd_make_text make gmake gnumake pmake colormake bmake
