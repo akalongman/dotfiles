@@ -4403,6 +4403,59 @@ assert_contains "$ERR" "status 127" "git-cannot-run: the status named"
 assert_eq "$(ncalls qwen)" 0 "git-cannot-run: no call"
 assert_nofile "$RUN/qwen.status" "git-cannot-run: no status"
 
+# A git that does not answer is named with the preflight limit it was given,
+# at the --local-env-vars call and at a query after it.
+new_case git-hangs-names-limit
+mk_tool "$CASE/slowgit/git" <<'EOF'
+if [ -e "$CASE/vars-answer" ] && [ "$*" = 'rev-parse --local-env-vars' ]; then exec "$BIN_ROOT/utils/git" "$@"; fi
+exec sleep 30
+EOF
+EXT_PATH="$CASE/slowgit:$CASE/bin:$BIN_ROOT/utils"
+PRE_LIMIT=1s
+k=0
+for row in vars query; do
+    k=$((k + 1))
+    RUN="$CASE/run$k" l="git-hangs-names-limit $row"
+    make_run "$RUN"
+    q='git rev-parse --local-env-vars'
+    if [ "$row" = query ]; then
+        : > "$CASE/vars-answer"
+        q="git rev-parse --show-toplevel in $WORK"
+    fi
+    ext run --cli qwen --run-dir "$RUN"
+    assert_eq "$rc" 18 "$l: rc"
+    assert_eq "$OUT" "qwen: prerequisite_failed (git did not answer within 1s ($q)); status: none" "$l: the limit named"
+done
+
+# Neither git message, that git did not answer or that it cannot be run,
+# carries what git wrote on standard error, at either place.
+new_case git-messages-no-stderr
+mk_tool "$CASE/stdgit/git" <<'EOF'
+printf 'GIT-STDERR-TEXT\n' >&2
+if [ -e "$CASE/vars-answer" ] && [ "$*" = 'rev-parse --local-env-vars' ]; then exec "$BIN_ROOT/utils/git" "$@"; fi
+if [ -e "$CASE/no-run" ]; then exit 127; fi
+exec sleep 30
+EOF
+EXT_PATH="$CASE/stdgit:$CASE/bin:$BIN_ROOT/utils"
+PRE_LIMIT=1s
+k=0
+for row in hangs-vars hangs-query no-run-vars no-run-query; do
+    k=$((k + 1))
+    RUN="$CASE/run$k" l="git-messages-no-stderr $row"
+    make_run "$RUN"
+    rm -f "$CASE/vars-answer" "$CASE/no-run"
+    case "$row" in *-query) : > "$CASE/vars-answer" ;; esac
+    case "$row" in no-run-*) : > "$CASE/no-run" ;; esac
+    ext run --cli qwen --run-dir "$RUN"
+    assert_eq "$rc" 18 "$l: rc"
+    case "$row" in
+        hangs-*) assert_contains "$OUT" "git did not answer" "$l: the message" ;;
+        *) assert_contains "$OUT" "git cannot be run" "$l: the message" ;;
+    esac
+    assert_lacks "$OUT" GIT-STDERR-TEXT "$l: the summary leaves git's standard error out"
+    assert_lacks "$ERR" GIT-STDERR-TEXT "$l: standard error leaves it out too"
+done
+
 new_case git-vars-not-names
 mk_tool "$CASE/oddgit/git" <<'EOF'
 if [ "$*" = 'rev-parse --local-env-vars' ]; then
