@@ -694,8 +694,10 @@ Files in the run directory, under the prefix `<p>`:
 - `<p>.<phase><n>.earlier.txt`: for OpenCode, the text that attempt
   wrote in steps before its final one; for agy, the response of that
   attempt's last result when the attempt did not answer, never published
-  as the answer. Either is kept byte for byte, its trailing newlines
-  included, except that a NUL byte is dropped, as in `<p>.out`. Absent
+  as the answer. agy's response is kept as written, and so are
+  OpenCode's text parts, joined by a newline with empty ones left out;
+  either keeps its trailing newlines, except that a NUL byte is dropped,
+  as in `<p>.out`. Absent
   when there is none: for agy, when the response is missing, not a
   string or blank, when the attempt answered, or when its trace is
   damaged; and for any attempt left unclassified because a process
