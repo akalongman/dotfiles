@@ -44,6 +44,20 @@ export ANDROID_HOME="/opt/google/android/sdk"
 # NVM (sourcing of nvm.sh stays in .bashrc; only the dir var lives here)
 export NVM_DIR="$HOME/.nvm"
 
+# Package managers: a dependency's install script runs only when approved.
+# npm stops an install that has an unapproved script (the approved list is
+# allow-scripts in ~/.npmrc, written by the machine playbook, tag node), a
+# project file cannot switch the check off, and a fresh resolution skips
+# releases younger than three days. yarn 2 and later run no dependency
+# build scripts; yarn 1 is set in ~/.yarnrc, because its variable makes
+# yarn 4 exit with an error. One install with scripts: the flag npm's error
+# names; YARN_ENABLE_SCRIPTS=true yarn install (yarn 4);
+# YARN_IGNORE_SCRIPTS=false yarn install (yarn 1).
+export npm_config_strict_allow_scripts=true
+export npm_config_dangerously_allow_all_scripts=false
+export npm_config_min_release_age=3
+export YARN_ENABLE_SCRIPTS=false
+
 # AWS CLI: keep `aws login` session tokens (refresh token included) in a local
 # cache rather than under ~/.aws, which is synced across machines
 export AWS_LOGIN_CACHE_DIRECTORY="$HOME/.cache/aws/login"
