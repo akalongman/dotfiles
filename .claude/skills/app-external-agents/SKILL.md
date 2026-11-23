@@ -202,10 +202,21 @@ What stays unequal:
   byte for byte, since that response ended in one newline (see `<p>.out`
   under step 7), `reported.model` is `gemini-3.8-flash-low`, and no
   earlier text was written. That is an answer on the model the run
-  named, not on the default model. The traces of these three runs named
-  no slash command and no skill, which is the evidence of three runs. A
-  run on the default model that answers through the runner was not seen,
-  and neither was a resume with the flag that answers.
+  named, not on the default model. On 2026-11-23 (agy 1.5.14, the runner
+  of public-dotfiles commit a1fb612, whose runner code is that of
+  7e828a8) one run on the default model, Gemini 4 Argon (High) as
+  `configured_model` names it, under the skill's default limits (90
+  minutes, resume 30 minutes), with the flag that `AGY_EXTRA_ARGS` gives
+  every attempt (the process's arguments were not read), answered
+  through the runner on its first attempt, after 66 s: agy's result has
+  status `SUCCESS`, the runner ended the run `answered`, its `agy.out`
+  holds the four first lines and equals the result's response byte for
+  byte, since that response, too, ended in one newline, `reported.model`
+  is null, as no `--model` was passed, and no earlier text was written.
+  So one run on the default model has answered through the runner. The
+  traces of these four runs named no slash command and no skill, which
+  is the evidence of four runs. A resume with the flag that answers was
+  not seen.
 
 ## Steps
 
@@ -602,13 +613,14 @@ process group of its own (Codex's `node_repl` and `codex-code-mode` did
 in the acceptance run of 2026-11-16), and records the outcome; the same
 stop, without the signal, follows every command it starts. A worker that
 starts a session of its own escapes both. agy was seen to start such a
-process: in the process listings of the acceptance runs of 2026-11-21
-and 2026-11-22 on its default model, a process named `agy`, a child of
-the attempt's `agy`, led a session of its own (seen from 2.3 to 12.6 s
-after the start in the first run, and 0.5 s after it in the second,
-there with a child of its own, also `agy`); none was seen in the run on
-`gemini-3.8-flash-low`. Neither stop reaches such a process, and
-`ps -s <id>` below does not list it. A signal that
+process: in the process listings of the acceptance runs of 2026-11-21,
+2026-11-22 and 2026-11-23 on its default model, a process named `agy`,
+a child of the attempt's `agy`, led a session of its own (seen from 2.3
+to 12.6 s after the start in the first run, 0.5 s after it in the
+second, there with a child of its own, also `agy`, and 0.9 s after it
+in the third); none was seen in the run on `gemini-3.8-flash-low`.
+Neither stop reaches such a process, and `ps -s <id>` below does not
+list it. A signal that
 arrives before or while the CLI runs ends the run as `cancelled`. One
 sent to the runner's process, as above, that arrives after the CLI has
 exited leaves that attempt's verdict standing: a run whose CLI answered
