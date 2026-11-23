@@ -104,7 +104,16 @@
       "Bash(longibot calendar *update*)",
       "Bash(longibot calendar *delete*)",
       "Bash(longibot calendar *move*)",
-      "Bash(longibot calendar *quickAdd*)"
+      "Bash(longibot calendar *quickAdd*)",
+      "Bash(*--dangerously-allow-all-scripts*)",
+      "Bash(*npm_config_dangerously_allow_all_scripts=true*)",
+      "Bash(*YARN_ENABLE_SCRIPTS=true*)",
+      "Bash(*YARN_IGNORE_SCRIPTS=false*)",
+      "Bash(*--ignore-scripts=false*)",
+      "Bash(npm approve-scripts*)",
+      "Bash(npm install-scripts approve*)",
+      "Bash(npm config set *allow-scripts*)",
+      "Bash(*NPM_CONFIG_DANGEROUSLY_ALLOW_ALL_SCRIPTS=true*)"
     ],
     "defaultMode": "auto",
     "additionalDirectories": [
