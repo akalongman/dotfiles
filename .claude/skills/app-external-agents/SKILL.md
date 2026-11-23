@@ -621,7 +621,8 @@ second, there with a child of its own, also `agy`, and 0.9 s after it
 in the third); none was seen in the run on `gemini-3.8-flash-low`.
 Neither stop reaches such a process, and `ps -s <id>` below does not
 list it. A signal that
-arrives before or while the CLI runs ends the run as `cancelled`. One
+arrives before or while the CLI runs ends the run as `cancelled`, unless
+a failure that keeps its own outcome (below) ends it first. One
 sent to the runner's process, as above, that arrives after the CLI has
 exited leaves that attempt's verdict standing: a run whose CLI answered
 ends under that answer, `answered`, or `answered_after_resume` when the
@@ -631,19 +632,46 @@ followed is not started, and the run then ends `cancelled`. The answer
 is kept only when the signal reaches the runner's own process. A signal
 sent to its whole process group (a terminal's interrupt or hang-up, a
 tool that stops a process tree) also stops any program the runner runs
-at that moment, to read the attempt's files, write the status, publish
-the answer or make any other check of its own, and the run then ends
-`cancelled`, its message naming the signal and then what failed,
-whatever that failure would have ended the run as without the signal (a
-`usage_error`, a `prerequisite_failed`, a `runner_failure`). An answer
+at that moment, or a shell it forks, to read the attempt's files, write
+the status, publish the answer or make any other check of its own, and
+that step fails. A step of the runner that runs a program or forks a
+shell, and whose failure decides the outcome, ends the run `cancelled`
+when it fails once a stop signal has arrived, at that moment or later
+and whatever made it fail, its message naming the signal and then what
+failed, whatever that failure would have ended the run as without the
+signal (a `usage_error`, a `prerequisite_failed`, a `missing_cli`, a
+`runner_failure`). An answer
 is then unpublished (`answer` null) and left in the attempt's files (the
 trace, for agy and OpenCode): report it as unpublished text unless
 `<p>.out` holds it, as it does, complete, when the signal stopped the
-publication after the answer file was renamed into place. Two things
-stay as they are: a process that outlived the kill still ends the run
-as a `runner_failure`, and a failure that the CLI's own exit status
-decided keeps its outcome, its message saying that the reason could not
-be read (see "Outcomes"). A kill signal (KILL) or
+publication after the answer file was renamed into place. For example,
+a TERM to the group while `jq` reads the trace of an attempt that
+answered ends the run `cancelled`
+(`the runner received SIGTERM; cannot read the trace ...`); and after a
+TERM to the runner's own process has left that answer standing, an
+answer file that then cannot be written (a full disk) ends it
+`cancelled` too, not `runner_failure`. So does a claim refused because
+the prefix is already claimed, when a signal reached the runner before
+the claim. Four kinds of failure keep their own outcome after a
+signal. A write that the
+runner's own shell makes through its redirection, with no program (an
+attempt's `.stdout`, `.stderr`, `.time` or `.exit`, the output files of
+the sandbox probe and the version command, OpenCode's config, agy's
+prompt copy, the before snapshot's files, the earlier text), ends the
+run `runner_failure`: an attempt's `.exit` that cannot be written after
+a TERM ends it so. A check that refuses what it was given, made in the
+runner's own shell or from the answer of a program that was not
+stopped, keeps its outcome: a run directory with no `prompt.md`, or an
+agy or OpenCode `prompt.md` of 131072 bytes or more, is a `usage_error`
+also after a signal. A failure that a command's exit status decided
+(rule 8's CLI failure, a failed Codex sandbox probe, a failed
+`opencode --version`) keeps its outcome when the signal stops only the
+read of its reason, its message saying that the reason could not be
+read (see "Outcomes"). And a stop that cannot confirm the CLI's
+processes gone, because a process outlived the kill or the signal
+stopped its last look at the process table
+(`could not stop ...: ps could not list the processes`), ends the run
+`runner_failure`. A kill signal (KILL) or
 a power loss cannot be caught: the status file then still says `running`, and the report
 says that the run did not finish. After a KILL the CLI, in a session of
 its own, runs on until its time limit ends it, at the edit level
@@ -683,9 +711,12 @@ Files in the run directory, under the prefix `<p>`:
   bash drops with a warning on standard error. When it cannot be
   published, `answer` stays null, the temporary file is removed and the
   answer stays in the attempt's files: a `runner_failure`, or
-  `cancelled` when a signal to the runner's process group stopped the
-  `mv` that renames it, which leaves no `<p>.out` when it was stopped
-  before the rename and a complete one when it was stopped after it.
+  `cancelled` once a stop signal has arrived (see "Stopping a run"). A
+  signal to the runner's process group can stop the `mv` that renames
+  it, which leaves no `<p>.out` when it was stopped before the rename
+  and a complete one when it was stopped after it, or the update of the
+  status that then records the answer, which leaves a complete
+  `<p>.out` too.
 - `<p>.<phase><n>.stdout`, `.stderr`, `.time` and `.exit`: one attempt's
   raw output (for agy and OpenCode the standard output is the JSON
   trace), wall seconds and exit status. The phase is `first`, `resume`
@@ -777,13 +808,18 @@ below names each);
 version other than the tested one, or a version command that failed,
 did not answer or printed no version); `cancelled`,
 a signal stopped the runner before or
-while the CLI ran, or before a resume, or a step of the runner failed
-once a signal had arrived (a program it runs, a read or write of its
-files), whatever that failure would have ended the run as otherwise;
-`runner_failure`, the runner could
-not write or read one of its own files (with no signal behind the
-failure) or could not confirm that the CLI's
-processes had ended, or exited in a way nobody planned; `usage_error`,
+while the CLI ran, or before a resume, or a step of the runner that
+runs a program or forks a shell failed once a signal had arrived (a
+read of its files, a write of the status or the answer, the claim, a
+helper such as `realpath`), whatever that failure would have ended the run as
+otherwise (see "Stopping a run");
+`runner_failure`, the runner could not read or write one of its own
+files, claim the prefix or start a command, with no signal behind the
+failure, or could not write a file that its own shell writes with no
+program (an attempt's files, OpenCode's config, agy's prompt copy, the
+before snapshot, the earlier text), signal or not; or it could not
+confirm that the CLI's processes had ended, or exited in a way nobody
+planned; `usage_error`,
 bad input (an argument, a refused outside directory or project boundary,
 a claimed prefix, files of the prefix that already exist, a before
 snapshot already in the run directory of a run that takes one, a saved record
@@ -820,8 +856,8 @@ with `outcomes`:
 
 A summary line that ends `status: none`. A `runner_failure` that no
 status file records, or the `cancelled` that takes the place of one when
-the failure behind it came after a stop signal (see "Stopping
-a run"), and every outcome of an invocation that ended before it owned
+the failure behind it came after a stop signal and is one the signal
+decides (see "Stopping a run"), and every outcome of an invocation that ended before it owned
 a status file, end that way: then the report comes from the summary
 line and standard error, and no status file on disk is this
 invocation's record. Such a `runner_failure`, or such a `cancelled`,
