@@ -630,12 +630,20 @@ whose attempt failed ends under that failure; a resume that would have
 followed is not started, and the run then ends `cancelled`. The answer
 is kept only when the signal reaches the runner's own process. A signal
 sent to its whole process group (a terminal's interrupt or hang-up, a
-tool that stops a process tree) also stops the program the runner is
-reading the attempt's files or writing the status with at that moment,
-and the run can then end `cancelled`, its message naming the signal and
-then the read or write that failed, with the answer unpublished and
-left in the attempt's files (the trace, for agy and OpenCode): report it
-as unpublished text unless `<p>.out` holds it. A kill signal (KILL) or
+tool that stops a process tree) also stops any program the runner runs
+at that moment, to read the attempt's files, write the status, publish
+the answer or make any other check of its own, and the run then ends
+`cancelled`, its message naming the signal and then what failed,
+whatever that failure would have ended the run as without the signal (a
+`usage_error`, a `prerequisite_failed`, a `runner_failure`). An answer
+is then unpublished (`answer` null) and left in the attempt's files (the
+trace, for agy and OpenCode): report it as unpublished text unless
+`<p>.out` holds it, as it does, complete, when the signal stopped the
+publication after the answer file was renamed into place. Two things
+stay as they are: a process that outlived the kill still ends the run
+as a `runner_failure`, and a failure that the CLI's own exit status
+decided keeps its outcome, its message saying that the reason could not
+be read (see "Outcomes"). A kill signal (KILL) or
 a power loss cannot be caught: the status file then still says `running`, and the report
 says that the run did not finish. After a KILL the CLI, in a session of
 its own, runs on until its time limit ends it, at the edit level
@@ -672,7 +680,12 @@ Files in the run directory, under the prefix `<p>`:
   the answer with its trailing newlines replaced by one newline, so an
   answer that ends without a newline gains one and one that ends in
   several keeps one, and without any NUL byte the answer held, which
-  bash drops with a warning on standard error.
+  bash drops with a warning on standard error. When it cannot be
+  published, `answer` stays null, the temporary file is removed and the
+  answer stays in the attempt's files: a `runner_failure`, or
+  `cancelled` when a signal to the runner's process group stopped the
+  `mv` that renames it, which leaves no `<p>.out` when it was stopped
+  before the rename and a complete one when it was stopped after it.
 - `<p>.<phase><n>.stdout`, `.stderr`, `.time` and `.exit`: one attempt's
   raw output (for agy and OpenCode the standard output is the JSON
   trace), wall seconds and exit status. The phase is `first`, `resume`
@@ -762,10 +775,12 @@ below names each);
 version other than the tested one, or a version command that failed,
 did not answer or printed no version); `cancelled`,
 a signal stopped the runner before or
-while the CLI ran, or before a resume, or a read or the status write of
-the runner failed once a signal had arrived; `runner_failure`, the runner could
-not write or read one of its own files (with no signal behind a failed
-read or status write) or could not confirm that the CLI's
+while the CLI ran, or before a resume, or a step of the runner failed
+once a signal had arrived (a program it runs, a read or write of its
+files), whatever that failure would have ended the run as otherwise;
+`runner_failure`, the runner could
+not write or read one of its own files (with no signal behind the
+failure) or could not confirm that the CLI's
 processes had ended, or exited in a way nobody planned; `usage_error`,
 bad input (an argument, a refused outside directory or project boundary,
 a claimed prefix, files of the prefix that already exist, a before
@@ -796,14 +811,14 @@ with `outcomes`:
 | `handle_conflict` | 17 | the handles the message names; nothing further is resumed. Any earlier text, as unpublished text of a failed attempt, which may be cut off, never as the answer |
 | `prerequisite_failed` | 18 | what the message names, one of these: bash older than 5; a missing helper program; a jq older than 1.7 (one that does not take `--raw-output0`); a `ps` that does not list the processes (its `ps -A -o pid=,pgid=,sid=,stat=` fails or does not show the runner's own process, checked once before anything starts, in a run and a continue alike, because every stop of a started command reads that table); the settings file `scripts/ext-run.conf` missing or unreadable (or the runner's own directory, where it is looked for, not found), and for OpenCode an empty `OC_SKILL_DENY_KEY` or an `OC_TESTED_VERSION` in it that is not a version, or a `HOME` that is not an absolute path; a test setting of the runner (`EXT_RUN_GRACE`, `EXT_RUN_KILL_WAIT`, `EXT_RUN_PREFLIGHT_LIMIT`, `EXT_RUN_POLL`, `EXT_RUN_START_WAIT`) set in the environment to a value it refuses, or an `awk` that cannot convert one; the follow-up texts (`prompts/followup.md` missing, or one of its four sections missing or empty, found before any CLI starts, in a run and a continue alike); agy's settings file that cannot be read or is not one JSON object (an agy run, refused before it writes anything); the OpenCode agent files, when the config to inject cannot be built from them; git that did not answer or cannot be run, or whose `git rev-parse --local-env-vars` answered (status 0) with what is not a list of variable names or without `GIT_DIR`; git that failed in the before snapshot where a `.git` lies above the working directory, and, for Codex and agy, which ask git only there, a `git rev-parse --local-env-vars` call that failed, whether or not a `.git` lies above the working directory (git's reason is in the message, and the CLI was not started; for OpenCode, which asks git first for the project boundary, such a call that failed is a `usage_error`); or the Codex sandbox probe (then "Prerequisite", quoting `<run>/codex.probe.err`) |
 | `unsupported_version` | 19 | the OpenCode version found and the tested one; when `opencode --version` failed, did not answer within the preflight limit or printed what is not a version, the message says so instead, and when it failed and its standard error could not be read, the message says that too and names the file |
-| `cancelled` | 20 | that the run was stopped, and what the attempt files hold |
-| `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below |
+| `cancelled` | 20 | that the run was stopped, and what the attempt files hold: an attempt's trace (agy, OpenCode) or standard output (Codex) may still hold a complete answer that was not published (`answer` null), reported as unpublished text unless `<p>.out` holds it. When the message names a failure after the signal, that step of the runner failed once the signal had arrived, which is why the run ends `cancelled` and not under the failure's own outcome |
+| `runner_failure` | 21 | the message and standard error. When the summary line names a status file, that file records the failure; when it ends `status: none`, see below. When the answer could not be published (`cannot write the answer file`), `answer` is null and the answer is still in the attempt's trace or standard output, reported as unpublished text |
 | `usage_error` | 64 | the fault the message names. A refused outside directory or project boundary needs a bundle; a git that ran and failed while OpenCode's project boundary was checked (its `git rev-parse --local-env-vars` call, or the boundary query where a `.git` lies above the directory) is reported with git's own reason, which the message quotes, rather than with a bundle as the remedy, and the repair, of git or of that repository, is the owner's; a before snapshot already in the run directory needs a new run directory; a claimed prefix comes with the runner's verdict on the claim's owner and, when that owner is not running or unknown, the command that removes the claim, which the owner decides on |
 | `missing_cli` | 127 | which CLI is not on PATH |
 
 A summary line that ends `status: none`. A `runner_failure` that no
 status file records, or the `cancelled` that takes the place of one when
-its failed read or status write came after a stop signal (see "Stopping
+the failure behind it came after a stop signal (see "Stopping
 a run"), and every outcome of an invocation that ended before it owned
 a status file, end that way: then the report comes from the summary
 line and standard error, and no status file on disk is this
@@ -811,7 +826,10 @@ invocation's record. Such a `runner_failure`, or such a `cancelled`,
 puts the status object, as far as it is known, on the last line of
 standard error as one line of JSON; a status file of this prefix that
 still says `running` was left by this invocation and is not its record
-either. A `continue` that ended in
+either, nor is one that a signal to the runner's process group left
+holding another outcome, by stopping the status write just after the
+file was renamed into place (it holds what that write carried, the
+final outcome when it was the run's last write). A `continue` that ended in
 its checks of the saved record or in its preflight, before its attempt,
 writes no status: the saved status file stays byte for byte as it was.
 When such a continue ends `runner_failure` (or `cancelled` in its
@@ -819,7 +837,10 @@ place), its JSON line on standard
 error carries that outcome and phase `preflight`, or phase
 `continue` when the failure came at its first write of the status file:
 while it prepared that write, which is not expected in practice, or
-when the file could not be written, the saved one staying as it was;
+when the file could not be written, the saved one staying as it was
+(unless a signal to the process group stopped that write after the
+rename: the file then holds this invocation's `running` object, and the
+run can no longer be continued);
 once the runner has found the saved record to be a usage limit, the line also
 carries the earlier run's fields, while the file on disk still says
 `usage_limit`. That line describes this invocation, not the saved
@@ -834,7 +855,9 @@ fault the message names lies:
   takes), for OpenCode a `git rev-parse --local-env-vars` call that
   failed (a `usage_error`), an OpenCode
   version the guard refused, a process group or session that outlived
-  the kill, or a signal. A record that could be continued before still can be: once
+  the kill, or a signal (a `cancelled` whose message names, after the
+  signal, a check of the record or the prompt that failed with it is
+  this case too). A record that could be continued before still can be: once
   the fault is cleared, the same continue command is checked afresh.
 - In the files and directories around the record: the recorded working
   directory is gone or not a directory; files of the attempts the

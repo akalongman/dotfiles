@@ -5498,9 +5498,11 @@ assert_eq "$(st '.attempts | length')" 2 "term-in-resume: two attempts"
 assert_eq "$(st '.attempts[1].signalled')" true "term-in-resume: the resume was signalled"
 assert_eq "$(alive_yn "$(callf codex 2 pid)")" no "term-in-resume: the CLI is gone"
 
-# A signal after the CLI has exited, while the runner reads the attempt (a
-# jq stand-in holds the look at resume_used): the attempt's verdict stands,
-# and the resume that would have followed is not started.
+# A signal sent to the runner's own process after the CLI has exited, while
+# the runner reads the attempt (a jq stand-in holds the look at
+# resume_used): the attempt's verdict stands, and the resume that would have
+# followed is not started. One sent to the runner's whole process group
+# also stops that jq: see group-signal-trace-read.
 new_case term-before-resume
 mk_jq_hold .resume_used
 EXT_PATH="$CASE/slowjq:$CASE/bin:$BIN_ROOT/utils"
@@ -5520,8 +5522,9 @@ assert_eq "$(st .resume_used)" false "term-before-resume: the resume was not use
 assert_eq "$(ncalls codex)" 1 "term-before-resume: no resume call"
 assert_nofile "$RUN/codex.lock" "term-before-resume: no lock"
 
-# The same when the attempt answered (the stand-in holds the attempt's
-# record): the run ends answered and publishes the answer.
+# The same signal to the runner's own process when the attempt answered (the
+# stand-in holds the attempt's record): the run ends answered and publishes
+# the answer.
 new_case term-after-answer
 # shellcheck disable=SC2016  # the runner's jq filter, as written
 mk_jq_hold '*rule: $rule, verdict: $verdict*'
@@ -5563,10 +5566,11 @@ EOF
         printf '%s\n' "$2" > "$1/tail.hold"
 }
 
-# The same when the signal arrives while the runner takes the status of a
-# read of the ended attempt's files: the read is whole, not a failed one, so
-# the verdict stands. For an answer that read is the tokens used lines,
-# taken in a command substitution of its own.
+# The same when the signal, sent to the runner's own process, arrives while
+# the runner takes the status of a read of the ended attempt's files: the
+# read is whole, not a failed one, so the verdict stands (one sent to the
+# whole process group would stop the tail as well). For an answer that read
+# is the tokens used lines, taken in a command substitution of its own.
 new_case term-in-tail-answer
 mk_hold_tail "$CASE/holdtail" '*/codex.first1.stderr'
 EXT_PATH="$CASE/holdtail:$CASE/bin:$BIN_ROOT/utils"
@@ -5723,6 +5727,375 @@ assert_eq "$(st .outcome)" running "group-signal-live-write: the status file lef
 assert_eq "$(alive_yn "$(callf codex 1 pid)")" no "group-signal-live-write: the CLI was stopped"
 assert_eq "$(alive_yn "$(callf codex 1 child)")" no "group-signal-live-write: its child too"
 assert_nofile "$RUN/codex.lock" "group-signal-live-write: no lock"
+
+# A signal to the runner's whole process group also stops a helper the
+# runner runs at that moment: a program it runs directly, or the shell it
+# forks to start a command. Whatever that helper's failure would decide, a
+# usage error, a missing prerequisite or a runner failure, the run then ends
+# cancelled (exit 20), its message the signal and then the failure's own
+# message; the same failure with no signal keeps its outcome. An invocation
+# that owns no status file yet (a run before step 6, a continue before step
+# 7) writes none, and a continue leaves the saved record as it was.
+#
+# mk_hold puts a stand-in for one program in $CASE/hold: the nth call (the
+# first by default) whose arguments, joined by spaces, match the glob creates
+# $CASE/hold-entered and waits (at most 10 s) for $CASE/hold-go before it
+# runs the real program; with -a it runs the real program first and holds
+# after it, keeping its status. While $CASE/hold-fail exists that call fails
+# with status 5 instead, after the real program with -a. Every other call
+# runs the real program. It runs no other program before that call but
+# sleep, so it can stand in for any program the runner runs.
+mk_hold() { # [-a] name glob [n]
+    local after=0
+    if [ "$1" = -a ]; then
+        after=1
+        shift
+    fi
+    mkdir -p "$CASE/hold" || exit 2
+    printf '%s\n%s\n%s\n' "$2" "${3:-1}" "$after" > "$CASE/hold/$1.how" || exit 2
+    mk_tool "$CASE/hold/$1" <<'EOF' || exit 2
+name="${0##*/}"
+{ read -r glob; read -r nth; read -r after; } < "$CASE/hold/$name.how"
+# shellcheck disable=SC2053  # the glob is a pattern
+if [[ "$*" == $glob ]]; then
+    printf 'x\n' >> "$CASE/hold/$name.seen"
+    mapfile -t seen < "$CASE/hold/$name.seen"
+    if [ "${#seen[@]}" = "$nth" ]; then
+        st=0
+        if [ "$after" = 1 ]; then
+            "$BIN_ROOT/utils/$name" "$@"
+            st=$?
+        fi
+        if [ -e "$CASE/hold-fail" ]; then exit 5; fi
+        : > "$CASE/hold-entered"
+        n=0
+        until [ -e "$CASE/hold-go" ] || [ "$n" -ge 100 ]; do
+            sleep 0.1
+            n=$((n + 1))
+        done
+        if [ "$after" = 1 ]; then exit "$st"; fi
+    fi
+fi
+exec "$BIN_ROOT/utils/$name" "$@"
+EOF
+}
+
+hold_row() { # signal runner-args...: the runner with the hold armed; TERM or HUP goes to its whole process group once the stand-in holds, and none makes the held call fail instead, with no signal; sets rc, OUT, ERR and PREFIX
+    local sig="$1"
+    shift
+    rm -f "$CASE"/hold/*.seen "$CASE/hold-entered" "$CASE/hold-go" "$CASE/hold-fail"
+    if [ "$sig" = none ]; then
+        : > "$CASE/hold-fail"
+        ext "$@"
+        return
+    fi
+    ext_bg_group "$@"
+    if wait_for "$CASE/hold-entered"; then signal_own_group "$sig"; fi
+    ext_wait
+}
+
+expect_held() { # signal outcome rc message shown label: after hold_row, with no signal the outcome, its rc and the failure's message; after a signal cancelled, the signal named before that message; shown is the status file the summary names, or none
+    if [ "$1" = none ]; then
+        assert_eq "$rc" "$3" "$6: rc"
+        assert_eq "$OUT" "$PREFIX: $2 ($4); status: $5" "$6: summary"
+    else
+        assert_eq "$rc" 20 "$6: rc"
+        assert_eq "$OUT" "$PREFIX: cancelled (the runner received SIG$1; $4); status: $5" "$6: summary"
+    fi
+}
+
+# Step 2, the ground, in a run (a continue checks it the same way): the jq
+# and ps probes, the conversion of a knob, a follow-up section.
+new_case group-signal-ground
+EXT_PATH="$CASE/hold:$CASE/bin:$BIN_ROOT/utils"
+k=0
+for label in jq-probe ps-probe knob followup; do
+    for sig in TERM HUP none; do
+        k=$((k + 1))
+        RUN="$CASE/run$k" l="group-signal-ground $label $sig"
+        make_run "$RUN"
+        case "$label" in
+            jq-probe) prog=jq glob='-n --raw-output0 empty' msg="jq 1.7 or later is needed: $CASE/hold/jq does not take --raw-output0" ;;
+            ps-probe) prog=ps glob="$PS_PROBE" msg="a ps that lists the processes is needed: $CASE/hold/ps $PS_PROBE does not show the runner's own process" ;;
+            knob) prog=awk glob='*sprintf*' msg='cannot convert EXT_RUN_GRACE with awk' ;;
+            followup) prog=awk glob='*## limit*' msg="the follow-up text for limit is missing or empty in $CASE/skill/scripts/../prompts/followup.md" ;;
+        esac
+        rm -rf "$CASE/hold"
+        mk_hold "$prog" "$glob"
+        hold_row "$sig" run --cli codex --run-dir "$RUN"
+        expect_held "$sig" prerequisite_failed 18 "$msg" none "$l"
+        assert_begins "$(err_last)" "ext-run: " "$l: no status object on standard error, as for the outcome it replaces"
+        assert_nofile "$RUN/codex.status" "$l: no status"
+        assert_nofile "$RUN/codex.lock" "$l: no lock"
+    done
+done
+assert_eq "$(ncalls codex)" 0 "group-signal-ground: no call"
+
+# Steps 3 and 4 of a run: the run directory, the prompt's size, agy's
+# settings and prompt copy, OpenCode's outside directory and project
+# boundary, and the claim's mkdir, stopped before it made the directory and
+# after. A claim that could not be made is a runner failure, whose status
+# object goes to standard error; the cancellation in its place does the same.
+# A lock directory the stopped mkdir made stays, as one a stale claim leaves,
+# with the command that removes it.
+new_case group-signal-validate
+mkdir "$CASE/outside" "$CASE/plain" || exit 2
+EXT_PATH="$CASE/hold:$CASE/bin:$BIN_ROOT/utils"
+k=0
+for label in run-dir prompt-size agy-settings agy-copy allow-dir boundary-top boundary-dir claim claim-made; do
+    for sig in TERM HUP none; do
+        k=$((k + 1))
+        RUN="$CASE/run$k" l="group-signal-validate $label $sig"
+        make_run "$RUN"
+        cli=codex more=() opt=() cwd="$WORK" outcome=usage_error rc0=64
+        case "$label" in
+            run-dir) prog=realpath glob="-e -- $RUN" msg="cannot resolve the run directory: $RUN" ;;
+            prompt-size) cli=qwen prog=wc glob=-c msg="cannot read the size of prompt.md: $RUN/prompt.md" ;;
+            agy-settings)
+                cli=agy prog=jq glob='*/settings.json' outcome=prerequisite_failed rc0=18
+                msg="cannot read agy's settings file $HOME/.gemini/antigravity-cli/settings.json"
+                ;;
+            agy-copy) cli=agy prog=cat glob="-- $RUN/prompt.md" msg="prompt.md is not readable: $RUN/prompt.md" ;;
+            allow-dir)
+                cli=qwen more=(--allow-dir "$CASE/outside") prog=realpath glob="-e -- $CASE/outside"
+                msg="the outside directory $CASE/outside cannot be resolved"
+                ;;
+            boundary-top) cli=qwen prog=realpath glob="-e -- $WORK" msg="cannot resolve the top of the git work tree that holds $WORK: $WORK " ;;
+            boundary-dir) cli=qwen cwd="$CASE/plain" prog=realpath glob="-e -- $CASE/plain" msg="cannot resolve the directory $CASE/plain" ;;
+            claim) prog=mkdir glob="-- $RUN/codex.lock" outcome=runner_failure rc0=21 msg="cannot claim prefix codex: mkdir $RUN/codex.lock failed" ;;
+            claim-made) opt=(-a) prog=mkdir glob="-- $RUN/codex.lock" msg="prefix codex is claimed in $RUN: owner unknown (no pid recorded)" ;;
+        esac
+        rm -rf "$CASE/hold"
+        mk_hold "${opt[@]}" "$prog" "$glob"
+        EXT_CWD="$cwd"
+        hold_row "$sig" run --cli "$cli" --run-dir "$RUN" "${more[@]}"
+        expect_held "$sig" "$outcome" "$rc0" "$msg" none "$l"
+        case "$label" in
+            claim)
+                o=runner_failure
+                if [ "$sig" != none ]; then o=cancelled; fi
+                assert_eq "$(err_last | jq -r .outcome 2>/dev/null)" "$o" "$l: the status object on standard error"
+                assert_nofile "$RUN/codex.lock" "$l: no lock"
+                ;;
+            claim-made)
+                assert_eq "$(err_last)" "  rm -r -- $RUN/codex.lock" "$l: the command that removes the claim"
+                assert_eq "$([ -d "$RUN/codex.lock" ] && [ ! -e "$RUN/codex.lock/pid" ] && echo yes)" yes \
+                    "$l: the lock directory the mkdir made stays, with no pid"
+                ;;
+            *)
+                assert_begins "$(err_last)" "ext-run: " "$l: no status object on standard error"
+                assert_nofile "$RUN/$PREFIX.lock" "$l: no lock"
+                ;;
+        esac
+        assert_nofile "$RUN/$PREFIX.status" "$l: no status"
+    done
+done
+assert_eq "$(ncalls codex)/$(ncalls agy)/$(ncalls qwen)" 0/0/0 "group-signal-validate: no call"
+
+# Step 7 and the start of the first attempt, where the run owns its status
+# file: the OpenCode config build, the removal of the previous command's gid
+# file before the attempt starts (the sandbox probe left one), and the shell
+# the runner forks to start the probe, stopped before it left the runner's
+# process group. The status file records the outcome.
+new_case group-signal-preflight
+EXT_PATH="$CASE/hold:$CASE/bin:$BIN_ROOT/utils"
+k=0
+for label in oc-config gid-file start; do
+    for sig in TERM HUP none; do
+        k=$((k + 1))
+        RUN="$CASE/run$k" l="group-signal-preflight $label $sig"
+        make_run "$RUN"
+        cli=codex n=1 outcome=runner_failure rc0=21 phase=preflight
+        case "$label" in
+            oc-config)
+                cli=qwen prog=jq glob='*/read-agent.json --args*' outcome=prerequisite_failed rc0=18
+                msg="cannot build the OpenCode config of ext-read from the agent files in $CASE/skill/scripts/../opencode"
+                ;;
+            gid-file)
+                prog=rm glob="-f -- $RUN/codex.lock/gid $RUN/codex.lock/gid.go" n=2 phase=first
+                msg="cannot clear $RUN/codex.lock/gid before starting codex exec"
+                ;;
+            start)
+                case "$sig" in TERM) st=143 ;; HUP) st=129 ;; none) st=5 ;; esac
+                prog=setsid glob='-w *'
+                msg="could not start codex sandbox: the start ended with status $st before a process group was recorded"
+                ;;
+        esac
+        rm -rf "$CASE/hold"
+        mk_hold "$prog" "$glob" "$n"
+        hold_row "$sig" run --cli "$cli" --run-dir "$RUN"
+        expect_held "$sig" "$outcome" "$rc0" "$msg" "$RUN/$PREFIX.status" "$l"
+        o="$outcome"
+        if [ "$sig" != none ]; then o=cancelled; fi
+        assert_eq "$(stj '[.outcome, .phase, (.attempts | length)]')" "[\"$o\",\"$phase\",0]" "$l: the status file"
+        assert_nofile "$RUN/$PREFIX.lock" "$l: no lock"
+    done
+done
+assert_eq "$(ncalls codex)/$(ncalls qwen)" 0/0 "group-signal-preflight: no attempt"
+
+# The answer's rename into place, stopped before it renamed and after: the
+# run ends cancelled with the answer unpublished (answer null) and still in
+# the trace. Stopped before, no answer file is left, nor the temporary one;
+# stopped after the rename, the complete answer file stays and the status
+# records no answer. Sent to the runner alone, the rename is whole and the
+# run ends answered.
+new_case group-signal-publish
+EXT_PATH="$CASE/hold:$CASE/bin:$BIN_ROOT/utils"
+k=0
+for row in before:TERM before:HUP before:none before:pid after:TERM after:HUP after:none; do
+    k=$((k + 1))
+    shape="${row%%:*}" sig="${row#*:}"
+    RUN="$CASE/run$k" l="group-signal-publish $row"
+    make_run "$RUN"
+    play qwen "$k" --stdout "$(t_oc_only S PUB-ANSWER)"
+    rm -rf "$CASE/hold"
+    if [ "$shape" = after ]; then
+        mk_hold -a mv "-fT -- $RUN/qwen.out.tmp $RUN/qwen.out"
+    else
+        mk_hold mv "-fT -- $RUN/qwen.out.tmp $RUN/qwen.out"
+    fi
+    if [ "$sig" = pid ]; then
+        rm -f "$CASE/hold-entered" "$CASE/hold-go" "$CASE/hold-fail"
+        ext_bg_group run --cli qwen --run-dir "$RUN"
+        wait_for "$CASE/hold-entered"
+        kill -TERM "$BG"
+        : > "$CASE/hold-go"
+        ext_wait
+        assert_eq "$OUT" "qwen: answered; status: $RUN/qwen.status" "$l: summary"
+        assert_eq "$(st .answer)" "$RUN/qwen.out" "$l: the answer recorded"
+        assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" PUB-ANSWER "$l: the answer published"
+        continue
+    fi
+    hold_row "$sig" run --cli qwen --run-dir "$RUN"
+    expect_held "$sig" runner_failure 21 "cannot write the answer file $RUN/qwen.out" "$RUN/qwen.status" "$l"
+    assert_eq "$(st .answer)" null "$l: no answer recorded"
+    assert_nofile "$RUN/qwen.out.tmp" "$l: no temporary answer file"
+    if [ "$shape" = after ]; then
+        assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" PUB-ANSWER "$l: the renamed answer file stays, complete"
+    else
+        assert_nofile "$RUN/qwen.out" "$l: no answer file"
+    fi
+    assert_contains "$(cat "$RUN/qwen.first1.stdout" 2>/dev/null)" PUB-ANSWER "$l: the answer is in the trace"
+    assert_nofile "$RUN/qwen.lock" "$l: no lock"
+done
+
+# A continue, before its step 7: the parse of the saved record, and the
+# checks of a prompt that a continue starting afresh gives again (its size,
+# for agy, and its checksum). Nothing is written: each record stays byte for
+# byte as it was and can be continued once the signal has passed.
+new_case group-signal-continue
+ul_first_run
+r1="$RUN" r2="$CASE/run-door" r3="$CASE/run-agy"
+cp -p "$r1/codex.status" "$CASE/kept/r1.status"
+make_run "$r2"
+RUN="$r2"
+play codex 2 --exit 1 --stderr "$(ul_door U2 '6:58 PM')"
+ext run --cli codex --run-dir "$r2"
+assert_eq "$rc/$(st .fresh_start)" 13/true "group-signal-continue: the codex record starts afresh"
+cp -p "$r2/codex.status" "$CASE/kept/r2.status"
+make_run "$r3"
+RUN="$r3"
+play agy 1 --exit 3 --stdout "$(t_agy_quota_door C1 45m)" --stderr "$(agy_quota_err 45m)"
+ext run --cli agy --run-dir "$r3"
+assert_eq "$rc/$(st .fresh_start)" 13/true "group-signal-continue: the agy record starts afresh"
+cp -p "$r3/agy.status" "$CASE/kept/r3.status"
+EXT_PATH="$CASE/hold:$CASE/bin:$BIN_ROOT/utils"
+for label in parse checksum size; do
+    case "$label" in
+        parse)
+            cli=codex RUN="$r1" kept=r1 prog=jq glob="-c -s *not one object* $r1/codex.status"
+            msg="the status file does not parse as one JSON object: $r1/codex.status"
+            ;;
+        checksum) cli=codex RUN="$r2" kept=r2 prog=sha256sum glob='' msg="$r2/prompt.md changed since the run started: its checksum cannot be taken" ;;
+        size) cli=agy RUN="$r3" kept=r3 prog=wc glob=-c msg="$r3/agy-prompt.md changed since the run started: its size cannot be read" ;;
+    esac
+    rm -rf "$CASE/hold"
+    mk_hold "$prog" "$glob"
+    for sig in TERM HUP none; do
+        l="group-signal-continue $label $sig"
+        hold_row "$sig" continue --cli "$cli" --run-dir "$RUN"
+        expect_held "$sig" usage_error 64 "$msg" none "$l"
+        assert_eq "$(cmp -s "$RUN/$PREFIX.status" "$CASE/kept/$kept.status" && echo same)" same "$l: the saved record is byte for byte as it was"
+        assert_nofile "$RUN/$PREFIX.lock" "$l: no lock"
+    done
+done
+assert_eq "$(ncalls codex)/$(ncalls agy)" 2/1 "group-signal-continue: no continue attempt"
+EXT_PATH="$CASE/bin:$BIN_ROOT/utils"
+play codex 3 --stdout DONE1 --stderr "$(codex_err U1)"
+play codex 4 --stdout DONE2 --stderr "$(codex_err U3)"
+play agy 2 --stdout "$(t_agy_answer C2 DONE3)"
+k=0
+for r in "$r1:codex" "$r2:codex" "$r3:agy"; do
+    k=$((k + 1))
+    RUN="${r%:*}"
+    ext continue --cli "${r##*:}" --run-dir "$RUN"
+    assert_eq "$rc" 0 "group-signal-continue then $k: the record was still continuable"
+    assert_eq "$(cat "$RUN/$PREFIX.out" 2>/dev/null)" "DONE$k" "group-signal-continue then $k: the answer"
+done
+
+# A continue's first write of the status file, at its step 7: stopped before
+# the rename, the saved record stays as it was and can be continued; stopped
+# after the rename, the file left in place holds that write's running
+# object, which is not this invocation's record, and the run can no longer be
+# continued. Either way the summary names no status file and the status
+# object, with outcome cancelled, is the last line on standard error.
+new_case group-signal-continue-write
+ul_first_run
+keep "$RUN/codex.status"
+EXT_PATH="$CASE/hold:$CASE/bin:$BIN_ROOT/utils"
+for shape in before after; do
+    l="group-signal-continue-write $shape"
+    rm -rf "$CASE/hold"
+    if [ "$shape" = after ]; then
+        mk_hold -a mv "-fT -- $RUN/codex.status.tmp $RUN/codex.status"
+    else
+        mk_hold mv "-fT -- $RUN/codex.status.tmp $RUN/codex.status"
+    fi
+    hold_row TERM continue --cli codex --run-dir "$RUN"
+    assert_eq "$rc" 20 "$l: rc"
+    assert_eq "$OUT" "codex: cancelled (the runner received SIGTERM; cannot write the status file $RUN/codex.status); status: none" "$l: summary"
+    assert_eq "$(err_last | jq -c '[.outcome, .phase]' 2>/dev/null)" '["cancelled","continue"]' "$l: the status object on standard error"
+    assert_nofile "$RUN/codex.status.tmp" "$l: no temporary status file"
+    assert_nofile "$RUN/codex.lock" "$l: no lock"
+    if [ "$shape" = before ]; then unchanged "$RUN/codex.status" "$l"; fi
+done
+assert_eq "$(stj '[.outcome, .phase]')" '["running","continue"]' "group-signal-continue-write after: the file left holds that write's object"
+assert_eq "$(ncalls codex)" 1 "group-signal-continue-write: no continue attempt"
+EXT_PATH="$CASE/bin:$BIN_ROOT/utils"
+ext continue --cli codex --run-dir "$RUN"
+assert_eq "$rc" 64 "group-signal-continue-write after: the run can no longer be continued"
+
+# The final write of a run's status: stopped before the rename, the status
+# file left still says running; stopped after it, the file holds the final
+# object written (here answered, with the published answer), while the
+# summary, naming no status file, and the status object on standard error
+# say cancelled. The attempt shows no handle, so the writes are the one of
+# step 6, the attempt's, and the final one.
+new_case group-signal-final-write
+EXT_PATH="$CASE/hold:$CASE/bin:$BIN_ROOT/utils"
+k=0
+for shape in before after; do
+    k=$((k + 1))
+    RUN="$CASE/run$k" l="group-signal-final-write $shape"
+    make_run "$RUN"
+    play codex "$k" --stdout ANSWER
+    rm -rf "$CASE/hold"
+    if [ "$shape" = after ]; then
+        mk_hold -a mv "-fT -- $RUN/codex.status.tmp $RUN/codex.status" 3
+    else
+        mk_hold mv "-fT -- $RUN/codex.status.tmp $RUN/codex.status" 3
+    fi
+    hold_row TERM run --cli codex --run-dir "$RUN"
+    assert_eq "$rc" 20 "$l: rc"
+    assert_eq "$OUT" "codex: cancelled (the runner received SIGTERM; cannot write the status file $RUN/codex.status); status: none" "$l: summary"
+    assert_eq "$(err_last | jq -r .outcome 2>/dev/null)" cancelled "$l: the status object on standard error"
+    assert_eq "$(cat "$RUN/codex.out" 2>/dev/null)" ANSWER "$l: the answer was published before the write"
+    if [ "$shape" = after ]; then
+        assert_eq "$(stj '[.outcome, .answer]')" "[\"answered\",\"$RUN/codex.out\"]" "$l: the file holds the final object written"
+    else
+        assert_eq "$(st .outcome)" running "$l: the file left still says running"
+    fi
+done
 
 new_case term-in-preflight
 : > "$SCN/codex.sandbox.hold"
