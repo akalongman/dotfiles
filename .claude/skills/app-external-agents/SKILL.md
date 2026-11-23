@@ -389,11 +389,10 @@ It prints nothing for a link whose target lies inside the project or
 holds nothing writable by the owner. Inside a linked directory the
 search stops at the first entry writable by the owner, so a large tree
 that holds nothing the owner can write is searched whole. A link to
-`/usr` does not lead to such a tree on this machine: on 2026-11-23 the
-search stopped at once on `/usr/bin/signal-desktop`, a link to a file of
-mode 0777, and `/usr/lib/systemd/system` holds links to `/dev/null`
-(masked services such as `sudo.service`), which count as writable too,
-so the command prints a link to `/usr`. The search does not follow the
+`/usr` does not lead to such a tree on this machine:
+`/usr/lib/systemd/system` holds links to `/dev/null` (masked services
+such as `sudo.service`), which count as writable, so the command prints
+a link to `/usr`. The search does not follow the
 links it meets inside a linked directory: one of them counts only when
 its own target is writable by the owner, so something writable, a file
 or a directory, below an unwritable directory it leads to, or a missing
