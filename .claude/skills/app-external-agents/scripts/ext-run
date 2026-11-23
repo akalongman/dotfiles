@@ -2039,11 +2039,17 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
     if [ "$KIND" != codex ]; then load_trace "$base"; fi
     # A later attempt is passed the handle and must not report another; one
     # that starts afresh is passed none, and no handle in its files is no conflict.
+    # Like every text a rule's message takes from the CLI's files (rules 4,
+    # 5, 6, 7, 8 and 10 as well), each handle is made one line of at most
+    # 300 characters; the files keep them whole.
     if [ "$1" != first ] && [ -n "$HANDLE" ]; then
         read_handles "$base" "$1$2"
         for h in "${HANDLES[@]}"; do
             if [ "$h" != "$HANDLE" ]; then
-                RULE=2 VERDICT=handle_conflict A_REASON="the attempt reported handle $h, not $HANDLE"
+                one_line "$h"
+                RULE=2 VERDICT=handle_conflict A_REASON="the attempt reported handle $ONE_LINE, not "
+                one_line "$HANDLE"
+                A_REASON+="$ONE_LINE"
                 return
             fi
         done
@@ -2054,7 +2060,9 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
     fi
     # Rules 4, 6 and 7 read the trace, so a damaged one leaves them to rule 8 or 9.
     if [ "$KIND" = agy ] && [ "$T_DAMAGED" = false ] && [ "$T_DENIED_N" -gt 0 ]; then
-        RULE=4 VERDICT=denied A_REASON="agy ended on denied actions: $T_DENIED_TOOLS"
+        # The tools, one line of at most 300 characters; denied lists them all.
+        one_line "$T_DENIED_TOOLS"
+        RULE=4 VERDICT=denied A_REASON="agy ended on denied actions: $ONE_LINE"
         return
     fi
     if [ "$A_EXIT" != 0 ] && usage_limit_seen "$base"; then
@@ -2100,7 +2108,8 @@ classify() { # phase n: sets RULE and VERDICT by the first of the twelve rules t
     # A permission asked and refused ends OpenCode's run after a tool-calling
     # step; that is no failure, the answer is merely missing (rules 11 and 12).
     if [ "$KIND" = opencode ] && [ "$T_REASON" != stop ] && [ "$T_ASK_REFUSED" = false ]; then
-        RULE=10 VERDICT=cli_failure A_REASON="opencode's last step ended with reason ${T_REASON:-(none)}"
+        one_line "$T_REASON"
+        RULE=10 VERDICT=cli_failure A_REASON="opencode's last step ended with reason ${ONE_LINE:-(none)}"
         return
     fi
     # A failed read is not an empty answer: the command substitution keeps its status.
@@ -2221,8 +2230,10 @@ require_handle() { # sets HANDLE from the files of the attempt handle_source nam
         0) end_as no_handle "the files of attempt $src hold no session handle" ;;
         1) HANDLE="${HANDLES[0]}" ;;
         *)
+            # The handles, one line of at most 300 characters, as in rule 2.
             printf -v all '%s, ' "${HANDLES[@]}"
-            end_as handle_conflict "the files of attempt $src hold more than one session handle: ${all%, }"
+            one_line "${all%, }"
+            end_as handle_conflict "the files of attempt $src hold more than one session handle: $ONE_LINE"
             ;;
     esac
 }

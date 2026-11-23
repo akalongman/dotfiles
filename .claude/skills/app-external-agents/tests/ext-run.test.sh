@@ -2869,6 +2869,56 @@ assert_eq "$(st .outcome)" handle_conflict "wrong-handle: outcome"
 assert_eq "$(st '.attempts[1].rule')" 2 "wrong-handle: rule 2, before the deadline"
 assert_eq "$(st .handle)" U1 "wrong-handle: the handle is still the first attempt's"
 
+# What a rule's message takes from the CLI's files is made one line of at
+# most 300 characters, as for rules 5 to 8: the handle of rule 2 and the one
+# it was passed, agy's denied tools of rule 4, OpenCode's step reason of
+# rule 10, and the handles of an attempt that holds more than one. The full
+# text stays in the attempt's files, and rule 4's tools in denied.
+new_case long-trace-text
+long="$(printf 'L%.0s' {1..400})"
+k=0
+for row in rule2 rule4 rule10 handles; do
+    k=$((k + 1))
+    RUN="$CASE/run$k" l="long-trace-text $row"
+    make_run "$RUN"
+    case "$row" in
+        rule2)
+            play codex 1 --stdout '' --stderr "$(codex_err U1)"
+            play codex 2 --stdout '' --stderr "$(codex_err "H$long")"
+            ext run --cli codex --run-dir "$RUN"
+            t="H$long"
+            assert_eq "$(st .message)" "the attempt reported handle ${t:0:300}, not U1" "$l: the handle, cut to 300 characters"
+            assert_contains "$(cat "$RUN/codex.resume1.stderr" 2>/dev/null)" "session id: H$long" "$l: the whole handle is in the attempt's files"
+            ;;
+        rule4)
+            dj="$(jq -cn '[range(1; 41) | {action: "tool_number_\(.)", display_name: "Tool"}]')"
+            play agy 1 --stdout "$(agy_init C; agy_result C SUCCESS '' "$dj")"
+            ext run --cli agy --run-dir "$RUN"
+            t="$(jq -rn '[range(1; 41) | "tool_number_\(.)"] | join(", ")')"
+            assert_eq "$(st '.attempts[0].rule')" 4 "$l: rule"
+            assert_eq "$(st .message)" "agy ended on denied actions: ${t:0:300}" "$l: the tools, cut to 300 characters"
+            assert_eq "$(st '.denied | length')" 40 "$l: every denied action is in denied"
+            ;;
+        rule10)
+            play qwen 1 --stdout "$(oc_start S; oc_text S CUT; oc_finish S "R$long")"
+            ext run --cli qwen --run-dir "$RUN"
+            t="R$long"
+            assert_eq "$(st '.attempts[0].rule')" 10 "$l: rule"
+            assert_eq "$(st .message)" "opencode's last step ended with reason ${t:0:300}" "$l: the reason, cut to 300 characters"
+            assert_contains "$(cat "$RUN/qwen.first1.stdout" 2>/dev/null)" "R$long" "$l: the whole reason is in the trace"
+            ;;
+        handles)
+            play agy 2 --stdout "$(agy_init C; agy_cmd "D$long" ls; agy_result C SUCCESS '')"
+            ext run --cli agy --run-dir "$RUN"
+            t="C, D$long"
+            assert_eq "$rc" 17 "$l: rc"
+            assert_eq "$(st .message)" "the files of attempt first1 hold more than one session handle: ${t:0:300}" \
+                "$l: the handles, cut to 300 characters"
+            ;;
+    esac
+    assert_eq "$OUT" "$PREFIX: $(st .outcome) ($(st .message)); status: $RUN/$PREFIX.status" "$l: the summary carries the same message"
+done
+
 new_case wrong-handle-ul
 play codex 1 --stdout '' --stderr "$(codex_err U1)"
 # shellcheck disable=SC1112  # the typographic apostrophe of Codex's message
