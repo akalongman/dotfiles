@@ -49,6 +49,13 @@ plausible story.
   different code.
 - Verify claimed shared state instead of recalling it; per-worktree or per-job
   database cloning may already isolate what a note says is shared.
+- Run a suite in the foreground, or from a shell with job control
+  (`set -m`). A background job (`&`) of a non-interactive shell starts with
+  SIGINT ignored, every child inherits that across `exec`, and a shell cannot
+  trap a signal ignored on entry, so a test that interrupts a child sees it
+  end on the escalation instead (exit -15, not 130). A parallel harness
+  checks the `SigIgn` mask in `/proc/self/status` before its first step
+  (2026-11-23, four stop tests failed only in a parallel local CI run).
 
 ## Designing a regression test
 
