@@ -6146,6 +6146,47 @@ for row in before:TERM before:HUP before:none before:pid after:TERM after:HUP af
     assert_nofile "$RUN/qwen.lock" "$l: no lock"
 done
 
+# The update of the status that records the published answer, which comes
+# after the answer's rename into place (a jq stand-in holds that update, the
+# one call whose arguments are exactly that update's): a signal to the
+# runner's whole process group stops the jq, the update fails, and the run
+# ends cancelled with the complete answer file in place and the status
+# recording no answer; the same update failing with no signal is a runner
+# failure. Sent to the runner alone, the update is whole and the run ends
+# answered.
+new_case group-signal-answer-record
+EXT_PATH="$CASE/hold:$CASE/bin:$BIN_ROOT/utils"
+k=0
+for sig in TERM HUP none pid; do
+    k=$((k + 1))
+    RUN="$CASE/run$k" l="group-signal-answer-record $sig"
+    make_run "$RUN"
+    play qwen "$k" --stdout "$(t_oc_only S REC-ANSWER)"
+    rm -rf "$CASE/hold"
+    mk_hold jq "-c --arg a $RUN/qwen.out .answer = \$a"
+    if [ "$sig" = pid ]; then
+        rm -f "$CASE/hold-entered" "$CASE/hold-go" "$CASE/hold-fail"
+        ext_bg_group run --cli qwen --run-dir "$RUN"
+        wait_for "$CASE/hold-entered"
+        kill -TERM "$BG"
+        : > "$CASE/hold-go"
+        ext_wait
+        assert_eq "$OUT" "qwen: answered; status: $RUN/qwen.status" "$l: summary"
+        assert_eq "$(st .answer)" "$RUN/qwen.out" "$l: the answer recorded"
+    else
+        hold_row "$sig" run --cli qwen --run-dir "$RUN"
+        expect_held "$sig" runner_failure 21 "cannot update the status object" "$RUN/qwen.status" "$l"
+        o=runner_failure
+        if [ "$sig" != none ]; then o=cancelled; fi
+        assert_eq "$(stj '[.outcome, .answer]')" "[\"$o\",null]" "$l: the status file records no answer"
+    fi
+    assert_eq "$(cat "$CASE/hold/jq.seen" 2>/dev/null)" x "$l: the held call was the update that records the answer"
+    assert_eq "$(cat "$RUN/qwen.out" 2>/dev/null)" REC-ANSWER "$l: the answer file is in place, complete"
+    assert_nofile "$RUN/qwen.out.tmp" "$l: no temporary answer file"
+    assert_nofile "$RUN/qwen.lock" "$l: no lock"
+done
+assert_eq "$(ncalls qwen)" 4 "group-signal-answer-record: one call per run"
+
 # A continue, before its step 7: the parse of the saved record, and the
 # checks of a prompt that a continue starting afresh gives again (its size,
 # for agy, and its checksum). Nothing is written: each record stays byte for
