@@ -310,10 +310,13 @@ outcome_code() { # outcome: sets CODE to its exit status
     CODE=21
 }
 
-alias_model() { # alias: prints the OpenCode model id it stands for
+alias_model() { # alias: sets OC_MODEL to the OpenCode model id it stands for
+    # Set in the runner's own shell, not printed for a command substitution:
+    # a forked shell is stopped by a signal to the runner's whole process
+    # group, and its status would then report the name as unknown.
     case "$1" in
-        deepseek) printf '%s\n' alibaba-token-plan/deepseek-v4-pro-0813 ;;
-        qwen) printf '%s\n' alibaba-token-plan/qwen3.8-max ;;
+        deepseek) OC_MODEL=alibaba-token-plan/deepseek-v4-pro-0813 ;;
+        qwen) OC_MODEL=alibaba-token-plan/qwen3.8-max ;;
         *) return 1 ;;
     esac
 }
@@ -372,7 +375,7 @@ derive_name() { # name: sets KIND, PREFIX and OC_MODEL when it is a valid --cli 
             ;;
         deepseek | qwen)
             KIND=opencode PREFIX="$1"
-            OC_MODEL="$(alias_model "$1")"
+            alias_model "$1"
             ;;
         *)
             valid_model_id "$1" || return 1

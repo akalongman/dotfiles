@@ -5907,6 +5907,70 @@ expect_held() { # signal outcome rc message shown label: after hold_row, with no
     fi
 }
 
+# Step 1, the arguments: the model id an alias stands for is set in the
+# runner's own shell, with no program and no forked shell that a signal to
+# the whole process group could stop. The signal reaches only the trap, the
+# name is not reported unknown, and the run ends cancelled where it next
+# looks, with no status file. A file bash reads as it starts (BASH_ENV) sets
+# a trap that runs before every command, inside functions and subshells too
+# (set -T); before the lookup's command that names the model id, it runs a
+# stand-in that holds the second lookup, the one whose result decides
+# whether the name is known, until $CASE/hold-go appears. The trap sets no
+# variable, since it runs in the scope of the runner's function. With no
+# signal the hold lets the run through at once, and the run answers with
+# the alias's model id.
+new_case group-signal-alias
+mk_tool "$CASE/hold-alias" <<'EOF' || exit 2
+printf 'x\n' >> "$CASE/alias.seen"
+mapfile -t seen < "$CASE/alias.seen"
+if [ "${#seen[@]}" = 2 ]; then
+    : > "$CASE/hold-entered"
+    n=0
+    until [ -e "$CASE/hold-go" ] || [ "$n" -ge 100 ]; do
+        sleep 0.1
+        n=$((n + 1))
+    done
+fi
+EOF
+cat > "$CASE/bash-env" <<'EOF' || exit 2
+set -T
+trap 'if [ "${FUNCNAME[0]:-}" = alias_model ]; then case "$BASH_COMMAND" in *alibaba-token-plan/*) "$CASE/hold-alias" ;; esac; fi' DEBUG
+EOF
+EXT_VARS=("BASH_ENV=$CASE/bash-env")
+k=0
+for cli in qwen deepseek; do
+    case "$cli" in
+        qwen) id=alibaba-token-plan/qwen3.8-max ;;
+        deepseek) id=alibaba-token-plan/deepseek-v4-pro-0813 ;;
+    esac
+    for sig in TERM HUP none; do
+        k=$((k + 1))
+        RUN="$CASE/run$k" l="group-signal-alias $cli $sig"
+        make_run "$RUN"
+        rm -f "$CASE/alias.seen" "$CASE/hold-entered" "$CASE/hold-go"
+        if [ "$sig" = none ]; then
+            : > "$CASE/hold-go"
+            play "$cli" 1 --stdout "$(t_oc_only S)"
+            ext run --cli "$cli" --run-dir "$RUN"
+            assert_eq "$rc" 0 "$l: rc"
+            assert_contains "$(argv "$cli" 1)" "\"--model\",\"$id\"" "$l: the alias's model id"
+            assert_eq "$(st .oc_model)" "$id" "$l: oc_model"
+        else
+            ext_bg_group run --cli "$cli" --run-dir "$RUN"
+            if wait_for "$CASE/hold-entered"; then signal_own_group "$sig"; fi
+            ext_wait
+            assert_eq "$rc" 20 "$l: rc"
+            assert_begins "$OUT" "$cli: cancelled (the runner received SIG$sig" "$l: summary"
+            assert_ends "$OUT" "; status: none" "$l: no status file named"
+            assert_lacks "$ERR" "unknown cli" "$l: the name is not reported unknown"
+            assert_nofile "$RUN/$cli.status" "$l: no status"
+            assert_nofile "$RUN/$cli.lock" "$l: no lock"
+        fi
+        assert_eq "$(cat "$CASE/alias.seen" 2>/dev/null)" $'x\nx' "$l: both lookups ran the trap"
+    done
+done
+assert_eq "$(ncalls qwen)/$(ncalls deepseek)" 1/1 "group-signal-alias: only the runs with no signal started the CLI"
+
 # Step 2, the ground, in a run (a continue checks it the same way): the jq
 # and ps probes, the conversion of a knob, a follow-up section.
 new_case group-signal-ground
